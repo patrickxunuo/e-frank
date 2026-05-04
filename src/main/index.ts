@@ -20,10 +20,11 @@ function createWindow(): void {
     backgroundColor: '#0e0f13',
     title: 'e-frank',
     webPreferences: {
-      // electron-vite emits the preload as `.mjs` because package.json has
-      // `"type": "module"`. The path must match the built artifact exactly —
-      // Electron does not auto-resolve a different extension.
-      preload: join(__dirname, '../preload/index.mjs'),
+      // The preload is emitted as CommonJS (`out/preload/index.cjs`) — see
+      // electron.vite.config.ts. With `sandbox: true`, Electron requires
+      // CJS preloads; ESM preloads silently fail to load. The path must
+      // match the built artifact exactly.
+      preload: join(__dirname, '../preload/index.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,

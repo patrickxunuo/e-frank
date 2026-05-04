@@ -67,5 +67,7 @@ e-frank/
 
 ## Known Pitfalls
 
-### Preload extension mismatch with `"type": "module"`
-With `package.json` `"type": "module"`, electron-vite emits the preload bundle as `out/preload/index.mjs`, NOT `index.js`. The main process must reference the exact filename (`'../preload/index.mjs'`) — Electron does not auto-resolve a different extension, and a wrong path causes `window.api` to be silently undefined in the renderer. Guarded by `tests/unit/preload-path.test.ts`.
+### Sandbox + ESM preload incompatibility
+Electron's `sandbox: true` requires the preload script to be **CommonJS** — ESM (`.mjs`) preloads silently fail to load, leaving `window.api` undefined in the renderer ("IPC bridge unavailable"). We deliberately emit the preload as `out/preload/index.cjs` via electron-vite's `formats: ['cjs']` so we can keep `sandbox: true` for defense-in-depth alongside `contextIsolation: true`. The main process path (`'../preload/index.cjs'`), the electron-vite build format, and the `sandbox: true` flag are all guarded by `tests/unit/preload-path.test.ts` — flipping any one of them in isolation will break the IPC bridge.
+
+If you ever need to use ESM in the preload (e.g. for top-level await), you must also set `sandbox: false`. That's a real security trade-off — `contextIsolation: true` still provides the bigger isolation guarantee, but sandbox adds defense-in-depth against preload bugs that accidentally leak Node APIs.

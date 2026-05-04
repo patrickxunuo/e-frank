@@ -3,50 +3,74 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 /**
- * Guard test: prevent a regression where `src/main/index.ts` references
- * the preload bundle with the wrong file extension.
+ * Guard test: prevent regressions in the preload bundle format / path.
  *
- * Background: with `package.json` `"type": "module"`, electron-vite emits
- * the preload as `out/preload/index.mjs` (NOT `index.js`). The main process
- * must reference the exact built filename — Electron does not auto-resolve
- * a different extension, and the IPC bridge silently fails to load if the
- * path is wrong. This was a real bug caught in the first /ef-review pass on
- * issue #1; this test exists to keep it from coming back.
+ * Background: `BrowserWindow` is created with `sandbox: true`. Electron
+ * rejects ESM preloads (`.mjs`) when the renderer is sandboxed — a sandboxed
+ * preload MUST be CommonJS. We therefore configure electron-vite to emit
+ * the preload as `out/preload/index.cjs` (see electron.vite.config.ts), and
+ * the main process path must match exactly — Electron does not auto-resolve
+ * a different extension. A wrong path or wrong format silently breaks
+ * `window.api` in the renderer ("IPC bridge unavailable"). This was a real
+ * bug caught during /ef-feature on issue #1; this test exists to keep it
+ * from coming back.
  *
  * If this test fails:
  *   - check `out/preload/` after running `npm run build`
- *   - if electron-vite is now emitting `.js` (e.g. `package.json` removed
- *     `"type": "module"`), update both this test and the path in main
- *   - otherwise, fix the preload path in `src/main/index.ts`
+ *   - if you intentionally switched to ESM preload, also flip
+ *     `sandbox: false` in `src/main/index.ts` and update this test
+ *   - otherwise, fix the preload path in `src/main/index.ts` and/or the
+ *     `formats` config in `electron.vite.config.ts`
  */
 describe('preload path consistency', () => {
-  it('main process references preload as index.mjs (matches electron-vite ESM output)', () => {
+  it('main process references preload as index.cjs (matches electron-vite CJS output)', () => {
     const mainSrc = readFileSync(
       resolve(process.cwd(), 'src/main/index.ts'),
       'utf8',
     );
 
-    // The path must include `preload/index.mjs` somewhere — match either
-    // forward or back slashes for cross-platform safety.
+    // The path must include `preload/index.cjs` — match either forward or
+    // back slashes for cross-platform safety.
+    const referencesCjs = /preload[/\\]index\.cjs/.test(mainSrc);
     const referencesMjs = /preload[/\\]index\.mjs/.test(mainSrc);
-    const referencesJs = /preload[/\\]index\.js(?!\w)/.test(mainSrc);
+    const referencesPlainJs = /preload[/\\]index\.js(?!\w)/.test(mainSrc);
 
     expect(
-      referencesMjs,
-      'src/main/index.ts must reference preload/index.mjs (electron-vite ESM build output)',
+      referencesCjs,
+      'src/main/index.ts must reference preload/index.cjs (CJS preload required by sandbox: true)',
     ).toBe(true);
     expect(
-      referencesJs,
+      referencesMjs,
+      'src/main/index.ts must NOT reference preload/index.mjs — Electron rejects ESM preloads under sandbox: true',
+    ).toBe(false);
+    expect(
+      referencesPlainJs,
       'src/main/index.ts must NOT reference preload/index.js — that file is never emitted',
     ).toBe(false);
   });
 
-  it('package.json type is "module" (the precondition for the .mjs preload extension)', () => {
-    const pkg = JSON.parse(
-      readFileSync(resolve(process.cwd(), 'package.json'), 'utf8'),
-    ) as { type?: string };
-    // If this ever flips to "commonjs", electron-vite will emit index.js
-    // and the preload path in main must be updated to match.
-    expect(pkg.type).toBe('module');
+  it('electron-vite preload build is configured to emit CJS', () => {
+    const cfg = readFileSync(
+      resolve(process.cwd(), 'electron.vite.config.ts'),
+      'utf8',
+    );
+    // The preload section must declare formats: ['cjs'] so the bundle
+    // matches the path referenced by main.
+    expect(
+      /formats:\s*\[\s*['"]cjs['"]\s*\]/.test(cfg),
+      'electron.vite.config.ts preload.lib must set formats: ["cjs"]',
+    ).toBe(true);
+  });
+
+  it('main process keeps sandbox: true (the reason the preload must be CJS)', () => {
+    const mainSrc = readFileSync(
+      resolve(process.cwd(), 'src/main/index.ts'),
+      'utf8',
+    );
+    // If sandbox is ever flipped back to false, the preload could be ESM
+    // again — but that's a security trade-off and should be a deliberate
+    // change, not an accident.
+    expect(/sandbox:\s*true/.test(mainSrc)).toBe(true);
+    expect(/sandbox:\s*false/.test(mainSrc)).toBe(false);
   });
 });
