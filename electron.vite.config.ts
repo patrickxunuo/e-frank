@@ -23,6 +23,10 @@ export default defineConfig({
       outDir: 'out/preload',
       lib: {
         entry: resolve(__dirname, 'src/preload/index.ts'),
+        // Emit as CommonJS so the preload can run with `sandbox: true`.
+        // Electron rejects ESM preloads (.mjs) when the renderer is sandboxed.
+        formats: ['cjs'],
+        fileName: () => 'index.cjs',
       },
     },
     resolve: {
