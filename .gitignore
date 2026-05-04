@@ -1,0 +1,32 @@
+# Local Claude Code config & per-developer state
+.claude/settings.local.json
+memory-bank/activeTask.md
+
+# IDE
+.idea/
+.vscode/
+
+# Node / Electron
+node_modules/
+dist/
+out/
+build/
+release/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+coverage/
+playwright-report/
+test-results/
