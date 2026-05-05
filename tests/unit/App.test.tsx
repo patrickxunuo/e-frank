@@ -11,17 +11,18 @@ import type {
 } from '../../src/shared/ipc';
 
 /**
- * APP-001..006 — Replaces FE-001/002/003 from issue #1.
- *
- * The new <App /> renders an AppShell + ProjectList by default. We stub
- * `window.api.projects.list` to return either an empty list (for steady-state
- * shell tests) or seed rows (for navigation tests).
+ * APP-001/002/005/006 unchanged from #5.
+ * APP-007 / APP-008 (added in #6) replace the original APP-003 / APP-004,
+ * which targeted the now-deleted DetailPlaceholder. Both new tests drive
+ * through the real <ProjectDetail> view, so the IPC stub also needs
+ * `projects.get` to succeed for the navigated-to project id.
  *
  * Strategy:
  *  - APP-001/002/006: empty-list mock so ProjectList renders (no rows).
- *    Sidebar and main both visible.
- *  - APP-003/004: populated-list mock — click `Open →` on a row, assert
- *    DetailPlaceholder text appears, then click Back, assert ProjectList
+ *  - APP-007/008: populated-list mock for ProjectList AND a `projects.get`
+ *    stub that returns a matching project; jira.list returns empty so we
+ *    don't have to fight an async tickets fetch. Click `Open` → assert the
+ *    project name shows in the detail header. Click Back → assert ProjectList
  *    heading is back.
  *  - APP-005: delete `window.api` and assert `render(<App />)` doesn't throw.
  */
@@ -35,11 +36,26 @@ declare global {
 function makeIpcApiStub(
   pingResponse: PingResponse,
   projectsListResponse: IpcResult<ProjectInstanceDto[]> = { ok: true, data: [] },
+  /**
+   * Used by APP-007 / APP-008 so ProjectDetail's `projects.get({ id })`
+   * returns a real project (rather than the default unusedErr). For tests
+   * that don't navigate into detail, the default unused-error is fine.
+   */
+  projectsByIdForGet: Record<string, ProjectInstanceDto> = {},
 ): IpcApi {
   const unusedErr = (): IpcResult<never> => ({
     ok: false,
     error: { code: 'NOT_USED_IN_FE_TESTS', message: '' },
   });
+  const projectsGet = vi
+    .fn<IpcApi['projects']['get']>()
+    .mockImplementation(async ({ id }) => {
+      const found = projectsByIdForGet[id];
+      if (found) {
+        return { ok: true, data: found };
+      }
+      return { ok: false, error: { code: 'NOT_FOUND', message: 'not found' } };
+    });
   return {
     ping: vi.fn<IpcApi['ping']>().mockResolvedValue(pingResponse),
     claude: {
@@ -55,7 +71,7 @@ function makeIpcApiStub(
     },
     projects: {
       list: vi.fn<IpcApi['projects']['list']>().mockResolvedValue(projectsListResponse),
-      get: vi.fn<IpcApi['projects']['get']>().mockResolvedValue(unusedErr()),
+      get: projectsGet,
       create: vi.fn<IpcApi['projects']['create']>().mockResolvedValue(unusedErr()),
       update: vi.fn<IpcApi['projects']['update']>().mockResolvedValue(unusedErr()),
       delete: vi.fn<IpcApi['projects']['delete']>().mockResolvedValue(unusedErr()),
@@ -67,8 +83,16 @@ function makeIpcApiStub(
       list: vi.fn<IpcApi['secrets']['list']>().mockResolvedValue(unusedErr()),
     },
     jira: {
-      list: vi.fn<IpcApi['jira']['list']>().mockResolvedValue(unusedErr()),
-      refresh: vi.fn<IpcApi['jira']['refresh']>().mockResolvedValue(unusedErr()),
+      // For APP-007/008 we want jira.list to succeed with an empty ticket
+      // array — that way ProjectDetail completes its mount cycle without
+      // tripping a failure banner. Tests that don't enter detail are
+      // unaffected.
+      list: vi
+        .fn<IpcApi['jira']['list']>()
+        .mockResolvedValue({ ok: true, data: { tickets: [] } }),
+      refresh: vi
+        .fn<IpcApi['jira']['refresh']>()
+        .mockResolvedValue({ ok: true, data: { tickets: [] } }),
       testConnection: vi
         .fn<IpcApi['jira']['testConnection']>()
         .mockResolvedValue(unusedErr()),
@@ -145,36 +169,47 @@ describe('<App /> — APP-001/002/006', () => {
   });
 });
 
-describe('<App /> — APP-003/004 navigation', () => {
+describe('<App /> — APP-007/008 navigation through real ProjectDetail', () => {
   beforeEach(() => {
-    (window as { api?: IpcApi }).api = makeIpcApiStub(PING, {
-      ok: true,
-      data: [makeProject('p-1', 'Alpha'), makeProject('p-2', 'Beta')],
-    });
+    const alpha = makeProject('p-1', 'Alpha');
+    const beta = makeProject('p-2', 'Beta');
+    (window as { api?: IpcApi }).api = makeIpcApiStub(
+      PING,
+      { ok: true, data: [alpha, beta] },
+      // projects.get(id) returns the matching project so ProjectDetail
+      // resolves successfully and renders its real header.
+      { 'p-1': alpha, 'p-2': beta },
+    );
   });
 
-  it('APP-003: clicking row Open switches to detail placeholder', async () => {
+  it('APP-007: clicking row Open switches to detail and shows the project name', async () => {
     render(<App />);
-    // Wait for projects to load + render
+    // Wait for projects to load + render in the list.
     const openBtn = await screen.findByTestId('project-open-p-1');
     fireEvent.click(openBtn);
 
+    // Real <ProjectDetail> renders the project name in the header. The name
+    // appears in both the breadcrumb and the h1, so use the title testid.
     await waitFor(() => {
-      // DetailPlaceholder text per spec: "Project detail view lands in #6"
-      expect(screen.getByText(/project detail view/i)).toBeInTheDocument();
+      expect(screen.getByTestId('project-detail-title')).toHaveTextContent(/alpha/i);
     });
+    // The Back button is part of ProjectDetail's header.
+    expect(screen.getByTestId('detail-back')).toBeInTheDocument();
   });
 
-  it('APP-004: DetailPlaceholder Back button returns to list view', async () => {
+  it('APP-008: detail Back button returns to list view', async () => {
     render(<App />);
     const openBtn = await screen.findByTestId('project-open-p-1');
     fireEvent.click(openBtn);
 
-    const backBtn = await screen.findByTestId('detail-back');
+    // Wait for the ready-state header (its back button is the one we want).
+    // The loading-state also renders a `detail-back` testid; clicking on
+    // the loading-state element after it's been unmounted is a no-op.
+    await screen.findByTestId('project-detail-title');
+    const backBtn = screen.getByTestId('detail-back');
     fireEvent.click(backBtn);
 
     await waitFor(() => {
-      // Back to ProjectList
       expect(screen.getByTestId('page-title')).toHaveTextContent(/projects/i);
     });
   });

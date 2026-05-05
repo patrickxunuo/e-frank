@@ -1,7 +1,7 @@
 # Progress
 
 ## Current Sprint / Focus
-Phase 2 complete on backend; Project List UI (#5) shipped. Next up Project Detail UI (#6).
+Phase 2 complete — Project Detail UI (#6) shipped. Next up Phase 3 — Workflow Runner state machine (#7).
 
 ## Log
 <!-- Newest entries first. Format: - YYYY-MM-DDTHH:MMZ [status] feature-name (developer) — notes -->
