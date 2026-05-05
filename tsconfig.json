@@ -25,6 +25,7 @@
   },
   "include": [
     "src/renderer",
+    "src/renderer/css-modules.d.ts",
     "src/shared",
     "src/preload",
     "src/electron-env.d.ts",

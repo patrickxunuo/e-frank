@@ -1,0 +1,34 @@
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  /* Slight translucency so the gradient mesh shows through. */
+  backdrop-filter: blur(8px);
+  overflow: hidden;
+}
+
+.elevated {
+  background: var(--bg-card-elevated);
+  border-color: var(--border-default);
+  box-shadow: var(--shadow-md);
+}
+
+.header {
+  padding: var(--space-5) var(--space-5) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.body {
+  padding: var(--space-5);
+}
+
+.footer {
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  background: rgba(255, 255, 255, 0.015);
+}
