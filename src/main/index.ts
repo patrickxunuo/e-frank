@@ -1,13 +1,31 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { IPC_CHANNELS } from '../shared/ipc.js';
+import {
+  IPC_CHANNELS,
+  type ClaudeRunRequest,
+  type ClaudeRunResponse,
+  type ClaudeCancelRequest,
+  type ClaudeWriteRequest,
+  type ClaudeStatusResponse,
+  type ClaudeOutputEvent,
+  type ClaudeExitEvent,
+  type IpcResult,
+} from '../shared/ipc.js';
 import { handlePing } from './ping-handler.js';
+import {
+  ClaudeProcessManager,
+  type OutputEvent,
+  type ExitEvent,
+} from './modules/claude-process-manager.js';
+import { NodeSpawner } from './modules/spawner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
+
+const claudeManager = new ClaudeProcessManager({ spawner: new NodeSpawner() });
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -49,9 +67,147 @@ function createWindow(): void {
   }
 }
 
+/**
+ * Send `payload` on `channel` to every live renderer window. Used to fan out
+ * Claude manager events (`output`, `exit`) so any open window stays in sync.
+ */
+function broadcastToWindows(channel: string, payload: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send(channel, payload);
+    }
+  }
+}
+
+/**
+ * Map the manager's `ExitEvent` (with NodeJS.Signals) to the IPC-friendly
+ * `ClaudeExitEvent` shape (signal serialized to string).
+ */
+function toIpcExitEvent(e: ExitEvent): ClaudeExitEvent {
+  return {
+    runId: e.runId,
+    exitCode: e.exitCode,
+    signal: e.signal,
+    durationMs: e.durationMs,
+    reason: e.reason,
+  };
+}
+
+function toIpcOutputEvent(e: OutputEvent): ClaudeOutputEvent {
+  return {
+    runId: e.runId,
+    stream: e.stream,
+    line: e.line,
+    timestamp: e.timestamp,
+  };
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * IPC-boundary input validation. The manager itself also validates, but we
+ * defend at the boundary so malformed renderer payloads can never reach
+ * domain code (rule: never trust the renderer).
+ */
+function validateRunRequest(raw: unknown): IpcResult<ClaudeRunRequest> {
+  if (!isPlainObject(raw)) {
+    return { ok: false, error: { code: 'INVALID_REQUEST', message: 'request must be an object' } };
+  }
+  const { ticketKey, cwd, timeoutMs } = raw;
+  if (typeof ticketKey !== 'string') {
+    return { ok: false, error: { code: 'INVALID_REQUEST', message: 'ticketKey must be a string' } };
+  }
+  if (typeof cwd !== 'string') {
+    return { ok: false, error: { code: 'INVALID_REQUEST', message: 'cwd must be a string' } };
+  }
+  if (timeoutMs !== undefined && (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs))) {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'timeoutMs must be a finite number' },
+    };
+  }
+  const req: ClaudeRunRequest = { ticketKey, cwd };
+  if (typeof timeoutMs === 'number') {
+    req.timeoutMs = timeoutMs;
+  }
+  return { ok: true, data: req };
+}
+
+function validateCancelRequest(raw: unknown): IpcResult<ClaudeCancelRequest> {
+  if (!isPlainObject(raw) || typeof raw['runId'] !== 'string') {
+    return { ok: false, error: { code: 'INVALID_REQUEST', message: 'runId must be a string' } };
+  }
+  return { ok: true, data: { runId: raw['runId'] } };
+}
+
+function validateWriteRequest(raw: unknown): IpcResult<ClaudeWriteRequest> {
+  if (!isPlainObject(raw)) {
+    return { ok: false, error: { code: 'INVALID_REQUEST', message: 'request must be an object' } };
+  }
+  const { runId, text } = raw;
+  if (typeof runId !== 'string') {
+    return { ok: false, error: { code: 'INVALID_REQUEST', message: 'runId must be a string' } };
+  }
+  if (typeof text !== 'string') {
+    return { ok: false, error: { code: 'INVALID_REQUEST', message: 'text must be a string' } };
+  }
+  return { ok: true, data: { runId, text } };
+}
+
 function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.PING, (_event, req) => {
     return handlePing(req);
+  });
+
+  ipcMain.handle(
+    IPC_CHANNELS.CLAUDE_RUN,
+    async (_event, raw): Promise<IpcResult<ClaudeRunResponse>> => {
+      const validated = validateRunRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      const result = claudeManager.run(validated.data);
+      return result;
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.CLAUDE_CANCEL,
+    async (_event, raw): Promise<IpcResult<{ runId: string }>> => {
+      const validated = validateCancelRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      return claudeManager.cancel(validated.data.runId);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.CLAUDE_WRITE,
+    async (_event, raw): Promise<IpcResult<{ bytesWritten: number }>> => {
+      const validated = validateWriteRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      return claudeManager.write(validated.data);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.CLAUDE_STATUS,
+    async (): Promise<IpcResult<ClaudeStatusResponse>> => {
+      return { ok: true, data: { active: claudeManager.status() } };
+    },
+  );
+
+  // Forward manager events to all renderer windows.
+  claudeManager.on('output', (e: OutputEvent) => {
+    broadcastToWindows(IPC_CHANNELS.CLAUDE_OUTPUT, toIpcOutputEvent(e));
+  });
+  claudeManager.on('exit', (e: ExitEvent) => {
+    broadcastToWindows(IPC_CHANNELS.CLAUDE_EXIT, toIpcExitEvent(e));
   });
 }
 

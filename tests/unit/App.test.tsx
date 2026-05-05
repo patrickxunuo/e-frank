@@ -3,7 +3,38 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import App from '../../src/renderer/App';
-import type { IpcApi, PingResponse } from '../../src/shared/ipc';
+import type { IpcApi, IpcResult, PingResponse } from '../../src/shared/ipc';
+
+/**
+ * Minimal IpcApi stub for renderer tests. App.tsx only uses `api.ping`, but
+ * `IpcApi` requires `claude` too (added in #2), so we satisfy the type with
+ * vi.fn() shims that never actually run for these tests.
+ */
+function makeIpcApiStub(pingResponse: PingResponse): IpcApi {
+  return {
+    ping: vi.fn<IpcApi['ping']>().mockResolvedValue(pingResponse),
+    claude: {
+      run: vi.fn<IpcApi['claude']['run']>().mockResolvedValue({
+        ok: false,
+        error: { code: 'NOT_USED_IN_FE_TESTS', message: '' },
+      } as IpcResult<never>),
+      cancel: vi.fn<IpcApi['claude']['cancel']>().mockResolvedValue({
+        ok: false,
+        error: { code: 'NOT_USED_IN_FE_TESTS', message: '' },
+      } as IpcResult<never>),
+      write: vi.fn<IpcApi['claude']['write']>().mockResolvedValue({
+        ok: false,
+        error: { code: 'NOT_USED_IN_FE_TESTS', message: '' },
+      } as IpcResult<never>),
+      status: vi.fn<IpcApi['claude']['status']>().mockResolvedValue({
+        ok: true,
+        data: { active: null },
+      }),
+      onOutput: vi.fn<IpcApi['claude']['onOutput']>(() => () => {}),
+      onExit: vi.fn<IpcApi['claude']['onExit']>(() => () => {}),
+    },
+  };
+}
 
 /**
  * FE-001..003: Renderer-level tests for <App />.
@@ -41,9 +72,7 @@ afterEach(() => {
 describe('<App /> — FE-001: initial render with stubbed window.api', () => {
   beforeEach(() => {
     const pingResponse: PingResponse = { reply: 'pong: hello', receivedAt: 0 };
-    (window as { api?: IpcApi }).api = {
-      ping: vi.fn<IpcApi['ping']>().mockResolvedValue(pingResponse),
-    };
+    (window as { api?: IpcApi }).api = makeIpcApiStub(pingResponse);
   });
 
   it('FE-001: renders title, subtitle, and ping button', () => {
@@ -59,9 +88,7 @@ describe('<App /> — FE-001: initial render with stubbed window.api', () => {
 describe('<App /> — FE-002: clicking Ping resolves and renders reply', () => {
   beforeEach(() => {
     const pingResponse: PingResponse = { reply: 'pong: hello', receivedAt: 0 };
-    (window as { api?: IpcApi }).api = {
-      ping: vi.fn<IpcApi['ping']>().mockResolvedValue(pingResponse),
-    };
+    (window as { api?: IpcApi }).api = makeIpcApiStub(pingResponse);
   });
 
   it('FE-002: clicking ping-button populates ping-result with "pong: hello"', async () => {

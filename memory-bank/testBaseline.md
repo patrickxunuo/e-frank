@@ -7,12 +7,16 @@ Tracks the project's automated test coverage as a baseline reference. Updated wh
 ### Unit / Integration (Vitest)
 | File | Tests | Covers |
 |------|-------|--------|
-| `tests/unit/ipc-contract.test.ts` | 4 | IPC-001 — `src/shared/ipc.ts` exports & types |
+| `tests/unit/ipc-contract.test.ts` | 4 | IPC-001 — `src/shared/ipc.ts` PING contract |
+| `tests/unit/ipc-contract-claude.test.ts` | 21 | IPC-CPM-001/002/003 — claude:* channels + IpcApi.claude type shape + PING regression |
 | `tests/unit/main-ping-handler.test.ts` | 4 | IPC-002, IPC-003 — `handlePing` pure function |
 | `tests/unit/scaffold.test.ts` | 8 | SCAFFOLD-001..004 — config files, scripts, strict mode, electron-builder targets |
+| `tests/unit/preload-path.test.ts` | 3 | preload built as `.cjs`, electron-vite formats includes cjs, sandbox: true |
+| `tests/unit/spawner.test.ts` | 18 | FakeSpawner self-tests — stream emission, exit/error events, kill, stdinWrites |
+| `tests/unit/claude-process-manager.test.ts` | 24 | CPM-001..022 (+2 extras) — manager lifecycle, line buffering, cancel/timeout escalation, stdin, validation |
 | `tests/unit/App.test.tsx` | 4 | FE-001, FE-002, FE-003 — placeholder UI render + ping flow + graceful fallback |
 
-**Total unit:** 20 tests, all PASS.
+**Total unit:** 86 tests, all PASS.
 
 ### E2E (Playwright)
 | File | Tests | Covers |
@@ -32,4 +36,4 @@ Tracks the project's automated test coverage as a baseline reference. Updated wh
 - **Packaging (`npm run dist`)**: Not run in CI yet. SCAFFOLD-004 verifies the `electron-builder.yml` config, but the actual installer build is manual.
 
 ## Bugs Discovered
-None during #1.
+None during #1 or #2 implementation. (#1 had a critical preload-path bug caught by the reviewer pre-merge, plus the sandbox + ESM incompatibility caught by manual `npm run dev` — both fixed and guarded.)
