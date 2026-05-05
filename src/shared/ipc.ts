@@ -11,6 +11,7 @@ import type {
   ProjectInstanceInput,
 } from './schema/project-instance.js';
 import type { Ticket } from './schema/ticket.js';
+import type { Run, RunStateEvent, RunMode } from './schema/run.js';
 
 /**
  * `ProjectInstanceDto` is the renderer-facing alias for the schema's
@@ -37,6 +38,18 @@ export type {
   ValidationError,
 } from './schema/project-instance.js';
 export type { Ticket } from './schema/ticket.js';
+// Re-export run types so renderer code (and #4-style drift-guard tests)
+// can import everything from `shared/ipc`.
+export type {
+  Run,
+  RunMode,
+  RunState,
+  RunStatus,
+  RunStep,
+  RunStateEvent,
+  ApprovalRequest,
+  ApprovalResponse,
+} from './schema/run.js';
 
 export const IPC_CHANNELS = {
   PING: 'app:ping',
@@ -68,6 +81,18 @@ export const IPC_CHANNELS = {
   JIRA_TICKETS_CHANGED: 'jira:tickets-changed',
   /** event channel (main -> renderer) */
   JIRA_ERROR: 'jira:error',
+  // -- Workflow Runner (issue #7) --
+  RUNS_START: 'runs:start',
+  RUNS_CANCEL: 'runs:cancel',
+  RUNS_APPROVE: 'runs:approve',
+  RUNS_REJECT: 'runs:reject',
+  RUNS_MODIFY: 'runs:modify',
+  RUNS_CURRENT: 'runs:current',
+  RUNS_LIST_HISTORY: 'runs:list-history',
+  /** event channel (main -> renderer) */
+  RUNS_CURRENT_CHANGED: 'runs:current-changed',
+  /** event channel (main -> renderer) */
+  RUNS_STATE_CHANGED: 'runs:state-changed',
 } as const;
 
 export type PingRequest = { message: string };
@@ -205,6 +230,57 @@ export interface JiraErrorEvent {
   consecutiveErrors: number;
 }
 
+// -- Workflow Runner IPC payloads --------------------------------------------
+
+export interface RunsStartRequest {
+  projectId: string;
+  ticketKey: string;
+  /** Optional override; defaults to project's `workflow.mode`. */
+  modeOverride?: RunMode;
+}
+
+export interface RunsStartResponse {
+  run: Run;
+}
+
+export interface RunsCancelRequest {
+  runId: string;
+}
+
+export interface RunsApproveRequest {
+  runId: string;
+}
+
+export interface RunsRejectRequest {
+  runId: string;
+}
+
+export interface RunsModifyRequest {
+  runId: string;
+  text: string;
+}
+
+export interface RunsCurrentResponse {
+  /** `null` when there's no active run. */
+  run: Run | null;
+}
+
+export interface RunsListHistoryRequest {
+  projectId: string;
+  /** Defaults to 50 in the runner; renderer may pass a smaller cap. */
+  limit?: number;
+}
+
+export interface RunsListHistoryResponse {
+  runs: Run[];
+}
+
+/** Event payload broadcast on `RUNS_CURRENT_CHANGED`. */
+export interface RunsCurrentChangedEvent {
+  /** `null` indicates the runner has gone idle. */
+  run: Run | null;
+}
+
 /**
  * Discriminated-union result returned over IPC. `code` is a string (rather
  * than a literal-union of manager error codes) to keep the renderer
@@ -250,5 +326,20 @@ export interface IpcApi {
     onTicketsChanged: (listener: (e: JiraTicketsChangedEvent) => void) => () => void;
     /** Subscribe to poller error events. Returns unsubscribe fn. */
     onError: (listener: (e: JiraErrorEvent) => void) => () => void;
+  };
+  runs: {
+    start: (req: RunsStartRequest) => Promise<IpcResult<RunsStartResponse>>;
+    cancel: (req: RunsCancelRequest) => Promise<IpcResult<{ runId: string }>>;
+    approve: (req: RunsApproveRequest) => Promise<IpcResult<{ runId: string }>>;
+    reject: (req: RunsRejectRequest) => Promise<IpcResult<{ runId: string }>>;
+    modify: (req: RunsModifyRequest) => Promise<IpcResult<{ runId: string }>>;
+    current: () => Promise<IpcResult<RunsCurrentResponse>>;
+    listHistory: (
+      req: RunsListHistoryRequest,
+    ) => Promise<IpcResult<RunsListHistoryResponse>>;
+    /** Subscribe to current-changed events (run starts / advances / completes). Returns unsubscribe fn. */
+    onCurrentChanged: (listener: (e: RunsCurrentChangedEvent) => void) => () => void;
+    /** Subscribe to fine-grained state-changed events (every state entry/exit). Returns unsubscribe fn. */
+    onStateChanged: (listener: (e: RunStateEvent) => void) => () => void;
   };
 }

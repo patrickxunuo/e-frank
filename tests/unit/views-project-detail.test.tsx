@@ -164,6 +164,21 @@ function installApi(opts?: {
         jiraOnTicketsChanged as unknown as IpcApi['jira']['onTicketsChanged'],
       onError: jiraOnError as unknown as IpcApi['jira']['onError'],
     },
+    runs: {
+      start: vi.fn<IpcApi['runs']['start']>().mockResolvedValue(unusedErr()),
+      cancel: vi.fn<IpcApi['runs']['cancel']>().mockResolvedValue(unusedErr()),
+      approve: vi.fn<IpcApi['runs']['approve']>().mockResolvedValue(unusedErr()),
+      reject: vi.fn<IpcApi['runs']['reject']>().mockResolvedValue(unusedErr()),
+      modify: vi.fn<IpcApi['runs']['modify']>().mockResolvedValue(unusedErr()),
+      current: vi
+        .fn<IpcApi['runs']['current']>()
+        .mockResolvedValue({ ok: true, data: { run: null } }),
+      listHistory: vi
+        .fn<IpcApi['runs']['listHistory']>()
+        .mockResolvedValue(unusedErr()),
+      onCurrentChanged: vi.fn<IpcApi['runs']['onCurrentChanged']>(() => () => {}),
+      onStateChanged: vi.fn<IpcApi['runs']['onStateChanged']>(() => () => {}),
+    },
   };
 
   (window as { api?: IpcApi }).api = api;
@@ -179,8 +194,6 @@ function installApi(opts?: {
 }
 
 const noop = (): void => {};
-const noopKey = (_: string): void => {};
-const noopKeys = (_: string[]): void => {};
 
 beforeEach(() => {
   // Default: no active run — most tests assume the panel is hidden.
@@ -205,9 +218,6 @@ describe('<ProjectDetail /> — DET', () => {
         <ProjectDetail
           projectId="p-1"
           onBack={noop}
-          onOpenExecution={noopKey}
-          onRun={noopKey}
-          onRunSelected={noopKeys}
         />,
       );
 
@@ -235,9 +245,6 @@ describe('<ProjectDetail /> — DET', () => {
         <ProjectDetail
           projectId="missing"
           onBack={noop}
-          onOpenExecution={noopKey}
-          onRun={noopKey}
-          onRunSelected={noopKeys}
         />,
       );
 
@@ -270,9 +277,6 @@ describe('<ProjectDetail /> — DET', () => {
         <ProjectDetail
           projectId="p-1"
           onBack={noop}
-          onOpenExecution={noopKey}
-          onRun={noopKey}
-          onRunSelected={noopKeys}
         />,
       );
 
@@ -296,9 +300,6 @@ describe('<ProjectDetail /> — DET', () => {
         <ProjectDetail
           projectId="p-1"
           onBack={noop}
-          onOpenExecution={noopKey}
-          onRun={noopKey}
-          onRunSelected={noopKeys}
         />,
       );
 
@@ -322,9 +323,6 @@ describe('<ProjectDetail /> — DET', () => {
         <ProjectDetail
           projectId="p-1"
           onBack={noop}
-          onOpenExecution={noopKey}
-          onRun={noopKey}
-          onRunSelected={noopKeys}
         />,
       );
 
@@ -350,9 +348,6 @@ describe('<ProjectDetail /> — DET', () => {
         <ProjectDetail
           projectId="p-1"
           onBack={noop}
-          onOpenExecution={noopKey}
-          onRun={noopKey}
-          onRunSelected={noopKeys}
         />,
       );
 
@@ -371,31 +366,20 @@ describe('<ProjectDetail /> — DET', () => {
   });
 
   describe('DET-007 per-row Run', () => {
-    it('DET-007: per-row Run button click → onRun(key)', async () => {
-      const tickets = [makeTicket('ABC-1'), makeTicket('ABC-2')];
-      installApi({ tickets });
-      const onRun = vi.fn();
-
-      render(
-        <ProjectDetail
-          projectId="p-1"
-          onBack={noop}
-          onOpenExecution={noopKey}
-          onRun={onRun}
-          onRunSelected={noopKeys}
-        />,
-      );
-
-      const runBtn = await screen.findByTestId('ticket-run-button-ABC-2');
-      fireEvent.click(runBtn);
-
-      expect(onRun).toHaveBeenCalledTimes(1);
-      expect(onRun).toHaveBeenCalledWith('ABC-2');
-    });
+    // Superseded by DET-RUN-001 — ProjectDetail no longer accepts an `onRun`
+    // prop callback; per-row Run now hits `window.api.runs.start` directly.
+    it.skip('DET-007 (superseded by DET-RUN-001): per-row Run hits runs.start', () => {});
   });
 
   describe('DET-008 multi-select Run Selected', () => {
-    it('DET-008: select multiple via per-row checkboxes → onRunSelected with keys in TABLE order', async () => {
+    // Superseded by DET-RUN-003 — Run Selected starts the FIRST checked
+    // ticket via runs.start and reports the queued count in a banner; there
+    // is no longer an `onRunSelected` prop callback.
+    it.skip('DET-008 (superseded by DET-RUN-003): Run Selected starts first + queues remainder', () => {});
+  });
+
+  describe('DET-008 (legacy)', () => {
+    it.skip('legacy: select multiple via per-row checkboxes → onRunSelected with keys in TABLE order', async () => {
       const tickets = [
         makeTicket('ABC-1'),
         makeTicket('ABC-2'),
@@ -408,9 +392,6 @@ describe('<ProjectDetail /> — DET', () => {
         <ProjectDetail
           projectId="p-1"
           onBack={noop}
-          onOpenExecution={noopKey}
-          onRun={noopKey}
-          onRunSelected={onRunSelected}
         />,
       );
 
@@ -456,15 +437,12 @@ describe('<ProjectDetail /> — DET', () => {
     it('DET-009: master checkbox toggles all visible; indeterminate when partial', async () => {
       const tickets = [makeTicket('ABC-1'), makeTicket('ABC-2'), makeTicket('ABC-3')];
       installApi({ tickets });
-      const onRunSelected = vi.fn();
+      const runs = installRunsStub();
 
       render(
         <ProjectDetail
           projectId="p-1"
           onBack={noop}
-          onOpenExecution={noopKey}
-          onRun={noopKey}
-          onRunSelected={onRunSelected}
         />,
       );
 
@@ -481,12 +459,16 @@ describe('<ProjectDetail /> — DET', () => {
         ).toBe(false);
       });
 
-      // Submit and inspect — should be all 3 keys in table order.
+      // Submit and inspect — Run Selected starts the FIRST visible-table-order
+      // ticket via runs.start (per DET-RUN-003 contract).
       fireEvent.click(screen.getByTestId('run-selected-button'));
-      const firstCall = onRunSelected.mock.calls[0];
-      expect(firstCall).toBeDefined();
-      const allKeys = (firstCall as unknown[])[0] as string[];
-      expect(allKeys).toEqual(['ABC-1', 'ABC-2', 'ABC-3']);
+      await waitFor(() => {
+        expect(runs.runsStart).toHaveBeenCalled();
+      });
+      expect(runs.runsStart).toHaveBeenCalledWith({
+        projectId: 'p-1',
+        ticketKey: 'ABC-1',
+      });
 
       // Click master again → none selected.
       fireEvent.click(master);
@@ -533,9 +515,6 @@ describe('<ProjectDetail /> — DET', () => {
         <ProjectDetail
           projectId="p-1"
           onBack={noop}
-          onOpenExecution={noopKey}
-          onRun={noopKey}
-          onRunSelected={noopKeys}
         />,
       );
 
@@ -590,9 +569,6 @@ describe('<ProjectDetail /> — DET', () => {
         <ProjectDetail
           projectId="p-1"
           onBack={noop}
-          onOpenExecution={noopKey}
-          onRun={noopKey}
-          onRunSelected={noopKeys}
         />,
       );
 
@@ -608,38 +584,35 @@ describe('<ProjectDetail /> — DET', () => {
   });
 
   describe('DET-012 active execution panel shown', () => {
-    it('DET-012: stubbed run → Cancel + Open Details visible; Open Details fires onOpenExecution(key)', async () => {
+    it('DET-012: live run → Cancel button visible (Open Details removed in #7)', async () => {
+      // The Active Execution panel now consumes the real `Run` shape from
+      // #7's schema. We stub useActiveRun to return a minimal ready-state
+      // run snapshot. Open Details has been removed (its consumer #8 will
+      // re-introduce it once the streaming logs view exists).
       (useActiveRun as unknown as Mock).mockReturnValue({
+        id: 'run-1',
+        projectId: 'p-1',
         ticketKey: 'ABC-7',
-        ticketTitle: 'A live ticket',
-        progress: 0.5,
-        currentStep: 'Coding',
-        totalSteps: 6,
-        stepIndex: 3,
-        recentLines: ['line one', 'line two'],
-        runId: 'run-1',
+        mode: 'interactive',
+        branchName: 'feat/ABC-7',
+        state: 'running',
+        status: 'running',
+        steps: [],
+        pendingApproval: null,
+        startedAt: 0,
       });
       installApi({ tickets: [makeTicket('ABC-7', { summary: 'A live ticket' })] });
+      installRunsStub();
 
-      const onOpenExecution = vi.fn();
       render(
         <ProjectDetail
           projectId="p-1"
           onBack={noop}
-          onOpenExecution={onOpenExecution}
-          onRun={noopKey}
-          onRunSelected={noopKeys}
         />,
       );
 
       const cancel = await screen.findByTestId('active-execution-cancel');
-      const open = screen.getByTestId('active-execution-open-details');
       expect(cancel).toBeInTheDocument();
-      expect(open).toBeInTheDocument();
-
-      fireEvent.click(open);
-      expect(onOpenExecution).toHaveBeenCalledTimes(1);
-      expect(onOpenExecution).toHaveBeenCalledWith('ABC-7');
     });
   });
 
@@ -657,9 +630,6 @@ describe('<ProjectDetail /> — DET', () => {
         <ProjectDetail
           projectId="p-1"
           onBack={noop}
-          onOpenExecution={noopKey}
-          onRun={noopKey}
-          onRunSelected={noopKeys}
         />,
       );
 
@@ -716,9 +686,6 @@ describe('<ProjectDetail /> — DET', () => {
         <ProjectDetail
           projectId="p-1"
           onBack={noop}
-          onOpenExecution={noopKey}
-          onRun={noopKey}
-          onRunSelected={noopKeys}
         />,
       );
 
@@ -755,6 +722,203 @@ describe('<ProjectDetail /> — DET', () => {
       });
       // Old row gone.
       expect(screen.queryByTestId('ticket-row-ABC-1')).not.toBeInTheDocument();
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // DET-RUN-001..003 — Run handlers wired through window.api.runs.start
+  // ---------------------------------------------------------------------
+  //
+  // The existing `installApi()` helper does not include the `runs` namespace
+  // (it pre-dates issue #7). For the DET-RUN-* tests we patch a `runs` stub
+  // onto the API after `installApi()` returns. Agent B's ProjectDetail wiring
+  // is expected to call `window.api.runs.start({ projectId, ticketKey })` on
+  // both per-row Run and Run Selected.
+  //
+  // For the error-banner test, the spec only mandates "an inline banner" —
+  // the matcher is tolerant: any element with a testid containing `error`
+  // and `run` (e.g. `runs-start-error-banner`) OR any role="alert" that
+  // contains the error text Agent B chose to display.
+  //
+  // For the queued-banner test (DET-RUN-003), the spec text says:
+  //   "Run Selected starts the FIRST checked ticket; remaining keys
+  //    mentioned in a banner ('4 more queued — start them after this run
+  //    completes')"
+  // We assert that runs.start is called with the FIRST selected key (in
+  // table order) and that the remaining count appears somewhere on screen.
+  // -----------------------------------------------------------------------
+
+  function installRunsStub(): {
+    runsStart: Mock;
+    runsCancel: Mock;
+    runsCurrent: Mock;
+    runsOnCurrentChanged: Mock;
+    setStartResult: (
+      r: IpcResult<{
+        run: { id: string; projectId: string; ticketKey: string };
+      }>,
+    ) => void;
+  } {
+    const api = (window as { api?: IpcApi }).api;
+    if (!api) throw new Error('installRunsStub() must run after installApi()');
+
+    let nextResult: IpcResult<{
+      run: { id: string; projectId: string; ticketKey: string };
+    }> = {
+      ok: true,
+      data: {
+        run: { id: 'r-1', projectId: 'p-1', ticketKey: 'ABC-1' },
+      },
+    };
+
+    const runsStart = vi.fn(async () => nextResult);
+    const runsCancel = vi.fn(async () => ({
+      ok: true,
+      data: { runId: 'r-1' },
+    }));
+    const runsCurrent = vi.fn(async () => ({ ok: true, data: null }));
+    const runsOnCurrentChanged = vi.fn(() => () => {});
+
+    // Patch a `runs` namespace onto the existing api. We cast through unknown
+    // to satisfy TS without depending on Agent B's exact `IpcApi['runs']`
+    // shape — the runtime methods are what ProjectDetail will reach for.
+    (api as unknown as { runs: Record<string, unknown> }).runs = {
+      start: runsStart,
+      cancel: runsCancel,
+      approve: vi.fn(),
+      reject: vi.fn(),
+      modify: vi.fn(),
+      current: runsCurrent,
+      listHistory: vi.fn(),
+      onCurrentChanged: runsOnCurrentChanged,
+      onStateChanged: vi.fn(() => () => {}),
+    };
+
+    return {
+      runsStart,
+      runsCancel,
+      runsCurrent,
+      runsOnCurrentChanged,
+      setStartResult: (r) => {
+        nextResult = r;
+      },
+    };
+  }
+
+  describe('DET-RUN-001 per-row Run hits runs.start', () => {
+    it('DET-RUN-001: clicking per-row Run calls window.api.runs.start({ projectId, ticketKey })', async () => {
+      const tickets = [makeTicket('ABC-1'), makeTicket('ABC-2')];
+      installApi({ tickets });
+      const runs = installRunsStub();
+
+      render(
+        <ProjectDetail
+          projectId="p-1"
+          onBack={noop}
+        />,
+      );
+
+      const runBtn = await screen.findByTestId('ticket-run-button-ABC-2');
+      fireEvent.click(runBtn);
+
+      await waitFor(() => {
+        expect(runs.runsStart).toHaveBeenCalledTimes(1);
+      });
+      expect(runs.runsStart).toHaveBeenCalledWith({
+        projectId: 'p-1',
+        ticketKey: 'ABC-2',
+      });
+    });
+  });
+
+  describe('DET-RUN-002 runs.start error → inline banner', () => {
+    it('DET-RUN-002: runs.start error response surfaces as an inline banner', async () => {
+      const tickets = [makeTicket('ABC-1')];
+      installApi({ tickets });
+      const runs = installRunsStub();
+      runs.setStartResult({
+        ok: false,
+        error: { code: 'ALREADY_RUNNING', message: 'a run is already active' },
+      });
+
+      render(
+        <ProjectDetail
+          projectId="p-1"
+          onBack={noop}
+        />,
+      );
+
+      const runBtn = await screen.findByTestId('ticket-run-button-ABC-1');
+      fireEvent.click(runBtn);
+
+      // Tolerant match: any banner-like node containing the error message
+      // OR a testid that names "runs"+"error" / "run"+"error".
+      await waitFor(() => {
+        const byMessage = screen.queryByText(/a run is already active/i);
+        const byCode = screen.queryByText(/ALREADY_RUNNING/);
+        // Common testid candidates Agent B might pick.
+        const byTestId =
+          screen.queryByTestId('runs-start-error-banner') ??
+          screen.queryByTestId('runs-error-banner') ??
+          screen.queryByTestId('run-error-banner') ??
+          screen.queryByTestId('runs-error');
+        const found = byMessage ?? byCode ?? byTestId;
+        expect(found).not.toBeNull();
+      });
+    });
+  });
+
+  describe('DET-RUN-003 Run Selected starts FIRST + queues remainder', () => {
+    it('DET-RUN-003: Run Selected starts the first selected ticket and reports the queue', async () => {
+      const tickets = [
+        makeTicket('ABC-1'),
+        makeTicket('ABC-2'),
+        makeTicket('ABC-3'),
+        makeTicket('ABC-4'),
+        makeTicket('ABC-5'),
+      ];
+      installApi({ tickets });
+      const runs = installRunsStub();
+
+      render(
+        <ProjectDetail
+          projectId="p-1"
+          onBack={noop}
+        />,
+      );
+
+      // Wait for rows.
+      await screen.findByTestId('ticket-row-ABC-1');
+
+      // Select all 5 via the master checkbox.
+      const master = screen.getByTestId('ticket-master-checkbox');
+      fireEvent.click(master);
+
+      // Now click Run Selected.
+      await waitFor(() => {
+        expect(
+          (screen.getByTestId('run-selected-button') as HTMLButtonElement).disabled,
+        ).toBe(false);
+      });
+      fireEvent.click(screen.getByTestId('run-selected-button'));
+
+      // Only the FIRST selected ticket (table order) is started.
+      await waitFor(() => {
+        expect(runs.runsStart).toHaveBeenCalledTimes(1);
+      });
+      expect(runs.runsStart).toHaveBeenCalledWith({
+        projectId: 'p-1',
+        ticketKey: 'ABC-1',
+      });
+
+      // Remaining count (4) appears somewhere on screen — accept either
+      // "4 more queued" or any other phrasing that includes the count and
+      // a "remaining" / "queued" / "rest" cue.
+      await waitFor(() => {
+        const banner = screen.getByTestId('run-queued-banner');
+        // Banner text mentions the count (4) somewhere.
+        expect(banner.textContent ?? '').toMatch(/4/);
+      });
     });
   });
 });

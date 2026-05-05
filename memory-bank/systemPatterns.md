@@ -55,6 +55,33 @@ e-frank/
 - Forward stdout/stderr lines to renderer via a dedicated IPC event channel (`claude:output`)
 - Detect approval checkpoints by parsing structured markers in Claude's output
 
+### Approval marker format (locked, since #7)
+
+The Workflow Runner pauses on a single-line marker emitted by Claude
+skills:
+
+```
+<<<EF_APPROVAL_REQUEST>>>{"plan":"...","filesToModify":[...],"diff":"...","options":["approve","reject"]}<<<END_EF_APPROVAL_REQUEST>>>
+```
+
+The runner parses the JSON between the markers and populates
+`Run.pendingApproval`. Behaviour:
+
+- **interactive mode**: state transitions to `awaitingApproval`; the runner
+  awaits a renderer-side `approve` / `reject` / `modify` decision via the
+  `runs:approve` / `runs:reject` / `runs:modify` IPC channels. On `approve`
+  the runner writes `approve\n` to Claude's stdin; on `modify` it writes
+  the user-supplied text + `\n`; on `reject` it cancels the run.
+- **yolo mode**: the runner writes `approve\n` to stdin immediately and
+  never enters `awaitingApproval`.
+- **malformed JSON**: logged at warn level and treated as regular output;
+  the runner does NOT pause.
+
+The `<<<EF_APPROVAL_REQUEST>>>` and `<<<END_EF_APPROVAL_REQUEST>>>`
+sentinels are deliberately verbose so they can't collide with normal
+program output. Claude skill authors and #9 (UI) agree on this format —
+do not change it without bumping a marker version.
+
 ## API Conventions (none — desktop app)
 - No HTTP server in this app. The "API" is the IPC contract between main and renderer.
 - External APIs (Jira, GitHub) are wrapped in dedicated client modules under `src/main/modules/`.

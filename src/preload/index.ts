@@ -30,6 +30,17 @@ import {
   type JiraTestConnectionResponse,
   type JiraTicketsChangedEvent,
   type JiraErrorEvent,
+  type RunsStartRequest,
+  type RunsStartResponse,
+  type RunsCancelRequest,
+  type RunsApproveRequest,
+  type RunsRejectRequest,
+  type RunsModifyRequest,
+  type RunsCurrentResponse,
+  type RunsListHistoryRequest,
+  type RunsListHistoryResponse,
+  type RunsCurrentChangedEvent,
+  type RunStateEvent,
 } from '../shared/ipc.js';
 
 const api: IpcApi = {
@@ -166,6 +177,72 @@ const api: IpcApi = {
       ipcRenderer.on(IPC_CHANNELS.JIRA_ERROR, wrapped);
       return () => {
         ipcRenderer.removeListener(IPC_CHANNELS.JIRA_ERROR, wrapped);
+      };
+    },
+  },
+
+  runs: {
+    start: (req: RunsStartRequest): Promise<IpcResult<RunsStartResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.RUNS_START, req) as Promise<
+        IpcResult<RunsStartResponse>
+      >,
+
+    cancel: (req: RunsCancelRequest): Promise<IpcResult<{ runId: string }>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.RUNS_CANCEL, req) as Promise<
+        IpcResult<{ runId: string }>
+      >,
+
+    approve: (req: RunsApproveRequest): Promise<IpcResult<{ runId: string }>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.RUNS_APPROVE, req) as Promise<
+        IpcResult<{ runId: string }>
+      >,
+
+    reject: (req: RunsRejectRequest): Promise<IpcResult<{ runId: string }>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.RUNS_REJECT, req) as Promise<
+        IpcResult<{ runId: string }>
+      >,
+
+    modify: (req: RunsModifyRequest): Promise<IpcResult<{ runId: string }>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.RUNS_MODIFY, req) as Promise<
+        IpcResult<{ runId: string }>
+      >,
+
+    current: (): Promise<IpcResult<RunsCurrentResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.RUNS_CURRENT) as Promise<
+        IpcResult<RunsCurrentResponse>
+      >,
+
+    listHistory: (
+      req: RunsListHistoryRequest,
+    ): Promise<IpcResult<RunsListHistoryResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.RUNS_LIST_HISTORY, req) as Promise<
+        IpcResult<RunsListHistoryResponse>
+      >,
+
+    onCurrentChanged: (
+      listener: (e: RunsCurrentChangedEvent) => void,
+    ): (() => void) => {
+      // Strip the IpcRendererEvent first arg before invoking the user's
+      // listener — renderer code must never see Electron-specific types.
+      const wrapped = (
+        _event: IpcRendererEvent,
+        payload: RunsCurrentChangedEvent,
+      ): void => {
+        listener(payload);
+      };
+      ipcRenderer.on(IPC_CHANNELS.RUNS_CURRENT_CHANGED, wrapped);
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.RUNS_CURRENT_CHANGED, wrapped);
+      };
+    },
+
+    onStateChanged: (listener: (e: RunStateEvent) => void): (() => void) => {
+      const wrapped = (_event: IpcRendererEvent, payload: RunStateEvent): void => {
+        listener(payload);
+      };
+      ipcRenderer.on(IPC_CHANNELS.RUNS_STATE_CHANGED, wrapped);
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.RUNS_STATE_CHANGED, wrapped);
       };
     },
   },
