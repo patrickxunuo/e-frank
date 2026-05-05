@@ -8,4 +8,8 @@ declare global {
   }
 }
 
+// CSS Modules ambient declarations live in `src/renderer/css-modules.d.ts`
+// (kept separate so wildcard module patterns aren't shadowed by this file's
+// top-level `import type`).
+
 export {};

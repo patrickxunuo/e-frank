@@ -1,0 +1,22 @@
+.shell {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 100vh;
+  width: 100%;
+}
+
+.main {
+  position: relative;
+  height: 100vh;
+  overflow-y: auto;
+  padding: var(--space-7) var(--space-7) var(--space-7);
+}
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 200px 1fr;
+  }
+  .main {
+    padding: var(--space-5);
+  }
+}

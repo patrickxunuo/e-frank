@@ -24,9 +24,15 @@ Tracks the project's automated test coverage as a baseline reference. Updated wh
 | `tests/unit/run-history.test.ts` | 15 | RH-001..011 — markRunning/markProcessed/clearRunning round-trip, atomic writes, persistence |
 | `tests/unit/jira-poller.test.ts` | 17 | POLLER-001..015 — start/stop/refresh, mutex, eligibility filter, back-off, AUTH short-circuit, NO_TOKEN, PROJECT_NOT_FOUND |
 | `tests/unit/ipc-contract-jira.test.ts` | 27 | IPC-J-001..004 — jira:* channels, IpcApi extension, drift guard on TicketDto, full regression on prior 16 channels + 4 namespaces |
-| `tests/unit/App.test.tsx` | 4 | FE-001, FE-002, FE-003 — placeholder UI render + ping flow + graceful fallback |
+| `tests/unit/App.test.tsx` | 6 | APP-001..006 — App shell render, view routing, sidebar branding, graceful fallback when window.api missing (replaces #1's FE-001..003 — placeholder Ping demo retired) |
+| `tests/unit/tokens.test.ts` | 2 | TOKEN-001 — design tokens declared on `:root` |
+| `tests/unit/components-button.test.tsx` | 3 | CMP-BTN-001..003 — Button variants, onClick, disabled |
+| `tests/unit/components-badge.test.tsx` | 2 | CMP-BDG-001..002 — Badge variants and pulse-dot element |
+| `tests/unit/components-toggle.test.tsx` | 2 | CMP-TGL-001..002 — Toggle onChange, disabled blocks change |
+| `tests/unit/views-project-list.test.tsx` | 8 | LIST-001..008 — heading, empty state, populated rows, navigation, Auto Mode toggle, loading, error+retry |
+| `tests/unit/views-add-project.test.tsx` | 12 | ADD-001..012 — 4 sections, validation, secrets-then-create order, partial failures, Test Connection, mode picker |
 
-**Total unit:** 271 tests, all PASS.
+**Total unit:** 302 tests, all PASS.
 
 ### E2E (Playwright)
 | File | Tests | Covers |
