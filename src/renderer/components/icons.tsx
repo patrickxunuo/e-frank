@@ -188,3 +188,47 @@ export function IconRefresh({ size = 14, ...rest }: IconProps): JSX.Element {
     </svg>
   );
 }
+
+export function IconBranch({ size = 14, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <circle cx="6" cy="5" r="2" />
+      <circle cx="6" cy="19" r="2" />
+      <circle cx="18" cy="9" r="2" />
+      <path d="M6 7v10" />
+      <path d="M6 13c0-2.5 2-4 4.5-4H16" />
+    </svg>
+  );
+}
+
+export function IconPlay({ size = 14, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest} fill="currentColor" stroke="none">
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
+export function IconRuns({ size = 18, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <path d="M4 7h12" />
+      <path d="M4 12h16" />
+      <path d="M4 17h8" />
+      <circle cx="20" cy="17" r="2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function IconPullRequest({ size = 18, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <circle cx="6" cy="6" r="2" />
+      <circle cx="6" cy="18" r="2" />
+      <circle cx="18" cy="18" r="2" />
+      <path d="M6 8v8" />
+      <path d="M11 6h5a2 2 0 0 1 2 2v8" />
+      <path d="m14 9 4-3-4-3" />
+    </svg>
+  );
+}

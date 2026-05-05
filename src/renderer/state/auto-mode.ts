@@ -1,13 +1,17 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
-const STORAGE_KEY = 'auto-mode';
+const GLOBAL_KEY = 'auto-mode';
 
-function readInitial(): boolean {
+function storageKeyFor(projectId?: string): string {
+  return projectId ? `${GLOBAL_KEY}:${projectId}` : GLOBAL_KEY;
+}
+
+function readInitial(key: string): boolean {
   if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
     return false;
   }
   try {
-    return window.localStorage.getItem(STORAGE_KEY) === 'true';
+    return window.localStorage.getItem(key) === 'true';
   } catch {
     return false;
   }
@@ -15,22 +19,38 @@ function readInitial(): boolean {
 
 /**
  * UI-only persisted preference. Backed by `localStorage` so the value
- * survives reloads. The actual poller hook-up is in #6.
+ * survives reloads.
+ *
+ * - `useAutoMode()` — global default (key `auto-mode`). Preserved for
+ *   backward compatibility even though no current caller relies on it.
+ * - `useAutoMode(projectId)` — per-project key `auto-mode:${projectId}`.
+ *
+ * The hook re-reads storage when `projectId` changes so that switching
+ * detail views surfaces the right toggle position on mount.
  */
-export function useAutoMode(): readonly [boolean, (next: boolean) => void] {
-  const [autoMode, setAutoModeState] = useState<boolean>(() => readInitial());
+export function useAutoMode(projectId?: string): readonly [boolean, (next: boolean) => void] {
+  const key = storageKeyFor(projectId);
+  const [autoMode, setAutoModeState] = useState<boolean>(() => readInitial(key));
 
-  const setAutoMode = useCallback((next: boolean): void => {
-    setAutoModeState(next);
-    if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
-      return;
-    }
-    try {
-      window.localStorage.setItem(STORAGE_KEY, next ? 'true' : 'false');
-    } catch {
-      // Swallow — quota or disabled storage shouldn't break the toggle.
-    }
-  }, []);
+  // Re-sync state when the key changes (e.g. switching project detail).
+  useEffect(() => {
+    setAutoModeState(readInitial(key));
+  }, [key]);
+
+  const setAutoMode = useCallback(
+    (next: boolean): void => {
+      setAutoModeState(next);
+      if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+        return;
+      }
+      try {
+        window.localStorage.setItem(key, next ? 'true' : 'false');
+      } catch {
+        // Swallow — quota or disabled storage shouldn't break the toggle.
+      }
+    },
+    [key],
+  );
 
   return [autoMode, setAutoMode] as const;
 }

@@ -32,7 +32,14 @@ Tracks the project's automated test coverage as a baseline reference. Updated wh
 | `tests/unit/views-project-list.test.tsx` | 8 | LIST-001..008 — heading, empty state, populated rows, navigation, Auto Mode toggle, loading, error+retry |
 | `tests/unit/views-add-project.test.tsx` | 12 | ADD-001..012 — 4 sections, validation, secrets-then-create order, partial failures, Test Connection, mode picker |
 
-**Total unit:** 302 tests, all PASS.
+| `tests/unit/components-tabs.test.tsx` | 3 | CMP-TABS-001..003 — controlled tablist, click + onChange, disabled tab |
+| `tests/unit/components-checkbox.test.tsx` | 4 | CMP-CHK-001..004 — checked toggle, indeterminate glyph, disabled |
+| `tests/unit/components-progress.test.tsx` | 2 | CMP-PROG-001..002 — fill width, value clamping |
+| `tests/unit/lib-time.test.ts` | 6 | UTIL-TIME-001..006 — formatRelative bands + invalid input fallback |
+| `tests/unit/lib-priority.test.ts` | 4 | UTIL-PRI-001..004 — Jira priority normalization |
+| `tests/unit/views-project-detail.test.tsx` | 14 | DET-001..014 — header metadata, Auto Mode per-project, multi-select Run, master checkbox indeterminate, tabs, ticket subscription event filter, Active Execution panel |
+
+**Total unit:** 335 tests, all PASS.
 
 ### E2E (Playwright)
 | File | Tests | Covers |
