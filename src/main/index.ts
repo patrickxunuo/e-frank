@@ -17,6 +17,12 @@ import {
   type SecretsSetRequest,
   type SecretsGetResponse,
   type SecretsListResponse,
+  type JiraListResponse,
+  type JiraRefreshResponse,
+  type JiraTestConnectionRequest,
+  type JiraTestConnectionResponse,
+  type JiraTicketsChangedEvent,
+  type JiraErrorEvent,
 } from '../shared/ipc.js';
 import { handlePing } from './ping-handler.js';
 import {
@@ -27,6 +33,12 @@ import {
 import { NodeSpawner } from './modules/spawner.js';
 import { ProjectStore } from './modules/project-store.js';
 import { SafeStorageBackend, SecretsManager } from './modules/secrets-manager.js';
+import { RunHistory } from './modules/run-history.js';
+import {
+  JiraPoller,
+  type PollerErrorEvent,
+  type TicketsChangedEvent,
+} from './modules/jira-poller.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -40,6 +52,8 @@ const claudeManager = new ClaudeProcessManager({ spawner: new NodeSpawner() });
 // is also only safe to call after ready.
 let secretsManager: SecretsManager | null = null;
 let projectStore: ProjectStore | null = null;
+let runHistory: RunHistory | null = null;
+let jiraPoller: JiraPoller | null = null;
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -227,6 +241,37 @@ function validateSecretsSetRequest(raw: unknown): IpcResult<SecretsSetRequest> {
   return { ok: true, data: { ref: raw['ref'], plaintext: raw['plaintext'] } };
 }
 
+function validateJiraProjectIdRequest(raw: unknown): IpcResult<{ projectId: string }> {
+  if (!isPlainObject(raw) || typeof raw['projectId'] !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'projectId must be a string' },
+    };
+  }
+  return { ok: true, data: { projectId: raw['projectId'] } };
+}
+
+function validateJiraTestConnectionRequest(raw: unknown): IpcResult<JiraTestConnectionRequest> {
+  if (
+    !isPlainObject(raw) ||
+    typeof raw['host'] !== 'string' ||
+    typeof raw['email'] !== 'string' ||
+    typeof raw['apiToken'] !== 'string'
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_REQUEST',
+        message: 'host, email, and apiToken must be strings',
+      },
+    };
+  }
+  return {
+    ok: true,
+    data: { host: raw['host'], email: raw['email'], apiToken: raw['apiToken'] },
+  };
+}
+
 /** Generic "manager not initialized" failure — surfaces a clear error to the renderer. */
 function notInitialized<T>(name: string): IpcResult<T> {
   return {
@@ -355,7 +400,24 @@ function registerIpcHandlers(): void {
       if (projectStore === null) {
         return notInitialized('ProjectStore');
       }
-      return projectStore.delete(validated.data.id);
+      // Cascade ordering matters: stop the poller FIRST so any in-flight
+      // tick can't complete and emit `tickets-changed` for an already-deleted
+      // project (`stillTracked()` in runPoll will return false on its next
+      // await once stop() removes the state from the map). Then delete from
+      // the store, then clean up run-history.
+      if (jiraPoller !== null) {
+        jiraPoller.stop(validated.data.id);
+      }
+      const result = await projectStore.delete(validated.data.id);
+      if (result.ok && runHistory !== null) {
+        const cleared = await runHistory.removeProject(validated.data.id);
+        if (!cleared.ok) {
+          console.warn(
+            `[main] run-history cascade for "${validated.data.id}" failed: ${cleared.error.code} - ${cleared.error.message}`,
+          );
+        }
+      }
+      return result;
     },
   );
 
@@ -412,6 +474,102 @@ function registerIpcHandlers(): void {
       return secretsManager.list();
     },
   );
+
+  // -- Jira poller -----------------------------------------------------------
+
+  ipcMain.handle(
+    IPC_CHANNELS.JIRA_LIST,
+    async (_event, raw): Promise<IpcResult<JiraListResponse>> => {
+      const validated = validateJiraProjectIdRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (jiraPoller === null) {
+        return notInitialized('JiraPoller');
+      }
+      const tickets = jiraPoller.list(validated.data.projectId);
+      return { ok: true, data: { tickets: [...tickets] } };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.JIRA_REFRESH,
+    async (_event, raw): Promise<IpcResult<JiraRefreshResponse>> => {
+      const validated = validateJiraProjectIdRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (jiraPoller === null) {
+        return notInitialized('JiraPoller');
+      }
+      const res = await jiraPoller.refreshNow(validated.data.projectId);
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return { ok: true, data: { tickets: res.data.tickets } };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.JIRA_TEST_CONNECTION,
+    async (_event, raw): Promise<IpcResult<JiraTestConnectionResponse>> => {
+      const validated = validateJiraTestConnectionRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (jiraPoller === null) {
+        return notInitialized('JiraPoller');
+      }
+      const res = await jiraPoller.testConnection({
+        host: validated.data.host,
+        auth: { email: validated.data.email, apiToken: validated.data.apiToken },
+      });
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return { ok: true, data: res.data };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.JIRA_REFRESH_POLLERS,
+    async (): Promise<IpcResult<{ projectIds: string[] }>> => {
+      if (jiraPoller === null || projectStore === null) {
+        return notInitialized('JiraPoller');
+      }
+      // Re-sync: stop everything, then start a poller for each current
+      // project. The poller's `start()` is idempotent, but stopping first
+      // means projects deleted since last sync get cleaned up too.
+      jiraPoller.stopAll();
+      const list = await projectStore.list();
+      if (!list.ok) {
+        return { ok: false, error: { code: list.error.code, message: list.error.message } };
+      }
+      const ids: string[] = [];
+      for (const p of list.data) {
+        await jiraPoller.start(p, 5 * 60 * 1000);
+        ids.push(p.id);
+      }
+      return { ok: true, data: { projectIds: ids } };
+    },
+  );
+}
+
+function toIpcTicketsChangedEvent(e: TicketsChangedEvent): JiraTicketsChangedEvent {
+  return {
+    projectId: e.projectId,
+    tickets: e.tickets,
+    timestamp: e.timestamp,
+  };
+}
+
+function toIpcJiraErrorEvent(e: PollerErrorEvent): JiraErrorEvent {
+  return {
+    projectId: e.projectId,
+    code: e.code,
+    message: e.message,
+    consecutiveErrors: e.consecutiveErrors,
+  };
 }
 
 /**
@@ -446,7 +604,7 @@ async function initStores(): Promise<void> {
     });
     const storeInit = await store.init();
     if (!storeInit.ok) {
-       
+
       console.error(
         `[main] ProjectStore init failed: ${storeInit.error.code} - ${storeInit.error.message}`,
       );
@@ -455,8 +613,44 @@ async function initStores(): Promise<void> {
       return;
     }
     projectStore = store;
+
+    const history = new RunHistory({
+      filePath: join(userData, 'run-history.json'),
+    });
+    const historyInit = await history.init();
+    if (!historyInit.ok) {
+
+      console.error(
+        `[main] RunHistory init failed: ${historyInit.error.code} - ${historyInit.error.message}`,
+      );
+      // RunHistory init failure leaves the poller un-constructed; jira:* IPC
+      // handlers will surface NOT_INITIALIZED to the renderer.
+      return;
+    }
+    runHistory = history;
+
+    const poller = new JiraPoller({
+      projectStore: store,
+      secretsManager: secrets,
+      runHistory: history,
+    });
+    poller.on('tickets-changed', (e: TicketsChangedEvent) => {
+      broadcastToWindows(IPC_CHANNELS.JIRA_TICKETS_CHANGED, toIpcTicketsChangedEvent(e));
+    });
+    poller.on('error', (e: PollerErrorEvent) => {
+      broadcastToWindows(IPC_CHANNELS.JIRA_ERROR, toIpcJiraErrorEvent(e));
+    });
+    jiraPoller = poller;
+
+    // Bootstrap: kick off a poller for every currently-known project.
+    const initialList = await store.list();
+    if (initialList.ok) {
+      for (const p of initialList.data) {
+        await poller.start(p, 5 * 60 * 1000);
+      }
+    }
   } catch (err) {
-     
+
     console.error('[main] store initialization threw:', err);
   }
 }
@@ -473,6 +667,14 @@ app.whenReady().then(async () => {
       createWindow();
     }
   });
+});
+
+app.on('before-quit', () => {
+  // Clear every poll timer cleanly so we don't fire a tick after the app
+  // has started tearing down its windows / IPC channels.
+  if (jiraPoller !== null) {
+    jiraPoller.stopAll();
+  }
 });
 
 app.on('window-all-closed', () => {

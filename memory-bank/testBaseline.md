@@ -18,9 +18,15 @@ Tracks the project's automated test coverage as a baseline reference. Updated wh
 | `tests/unit/project-store.test.ts` | 16 | PS-001..015 — JSON store CRUD, atomic writes, write mutex, schema versioning, cascade delete |
 | `tests/unit/secrets-manager.test.ts` | 13 | SM-001..012 — `safeStorage` wrapper, set/get/delete round-trip, plaintext-never-on-disk, backend-unavailable |
 | `tests/unit/ipc-contract-projects.test.ts` | 31 | IPC-PS-001..004 — projects/secrets channels, IpcApi extension, drift guard, regression on prior contracts |
+| `tests/unit/http-client.test.ts` | 6 | HTTP-001..005 — FakeHttpClient self-tests |
+| `tests/unit/ticket-schema.test.ts` | 13 | TICKET-001..005 — Jira issue → Ticket mapping, missing fields, garbage input |
+| `tests/unit/jira-client.test.ts` | 21 | JIRA-001..012 — search/testConnection, JQL encoding, auth header, status mapping, token-not-in-error |
+| `tests/unit/run-history.test.ts` | 15 | RH-001..011 — markRunning/markProcessed/clearRunning round-trip, atomic writes, persistence |
+| `tests/unit/jira-poller.test.ts` | 17 | POLLER-001..015 — start/stop/refresh, mutex, eligibility filter, back-off, AUTH short-circuit, NO_TOKEN, PROJECT_NOT_FOUND |
+| `tests/unit/ipc-contract-jira.test.ts` | 27 | IPC-J-001..004 — jira:* channels, IpcApi extension, drift guard on TicketDto, full regression on prior 16 channels + 4 namespaces |
 | `tests/unit/App.test.tsx` | 4 | FE-001, FE-002, FE-003 — placeholder UI render + ping flow + graceful fallback |
 
-**Total unit:** 172 tests, all PASS.
+**Total unit:** 271 tests, all PASS.
 
 ### E2E (Playwright)
 | File | Tests | Covers |
