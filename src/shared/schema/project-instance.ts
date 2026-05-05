@@ -67,6 +67,18 @@ export interface TicketsConfig {
   query: string;
   /** Optional ref into SecretsManager for Jira/Bitbucket creds. */
   tokenRef?: string;
+  /**
+   * Jira account email — needed for Basic auth alongside the apiToken stored
+   * at `tokenRef`. Optional; the poller emits a NO_TOKEN-equivalent error if
+   * email is missing when `tokenRef` is set.
+   */
+  email?: string;
+  /**
+   * Jira base URL (e.g. `https://example.atlassian.net`). Optional; the poller
+   * emits a NETWORK-style error if host is missing when `tokenRef` is set.
+   * Must be a string starting with `http://` or `https://` if present.
+   */
+  host?: string;
 }
 
 export interface WorkflowConfig {
@@ -258,6 +270,44 @@ function validateTickets(
   const source = checkEnum(errors, joinPath(path, 'source'), raw['source'], TICKET_SOURCES);
   const query = checkString(errors, joinPath(path, 'query'), raw['query']);
   const tokenRef = checkOptionalString(errors, joinPath(path, 'tokenRef'), raw['tokenRef']);
+  // `email` is optional, but if present it must be a non-empty string. Pre-#4
+  // projects without it remain valid; the poller surfaces a NO_TOKEN-style
+  // error when email is missing at poll time.
+  const emailRaw = checkOptionalString(errors, joinPath(path, 'email'), raw['email']);
+  let email: string | undefined;
+  if (emailRaw !== undefined) {
+    if (emailRaw.trim() === '') {
+      errors.push({
+        path: joinPath(path, 'email'),
+        code: 'EMPTY',
+        message: `${joinPath(path, 'email')} must not be empty`,
+      });
+    } else {
+      email = emailRaw;
+    }
+  }
+  // `host` is optional, but if present it must be an http:// or https:// URL.
+  const hostRaw = checkOptionalString(errors, joinPath(path, 'host'), raw['host']);
+  let host: string | undefined;
+  if (hostRaw !== undefined) {
+    const trimmed = hostRaw.trim();
+    if (trimmed === '') {
+      errors.push({
+        path: joinPath(path, 'host'),
+        code: 'EMPTY',
+        message: `${joinPath(path, 'host')} must not be empty`,
+      });
+    } else if (!/^https?:\/\//.test(trimmed)) {
+      errors.push({
+        path: joinPath(path, 'host'),
+        code: 'INVALID_ENUM',
+        message: `${joinPath(path, 'host')} must start with http:// or https://`,
+      });
+    } else {
+      // Strip a trailing slash so URL building stays predictable.
+      host = trimmed.replace(/\/+$/, '');
+    }
+  }
 
   if (source === undefined || query === undefined) {
     return undefined;
@@ -265,6 +315,12 @@ function validateTickets(
   const result: TicketsConfig = { source, query };
   if (tokenRef !== undefined) {
     result.tokenRef = tokenRef;
+  }
+  if (email !== undefined) {
+    result.email = email;
+  }
+  if (host !== undefined) {
+    result.host = host;
   }
   return result;
 }

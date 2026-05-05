@@ -22,6 +22,14 @@ import {
   type SecretsGetResponse,
   type SecretsDeleteRequest,
   type SecretsListResponse,
+  type JiraListRequest,
+  type JiraListResponse,
+  type JiraRefreshRequest,
+  type JiraRefreshResponse,
+  type JiraTestConnectionRequest,
+  type JiraTestConnectionResponse,
+  type JiraTicketsChangedEvent,
+  type JiraErrorEvent,
 } from '../shared/ipc.js';
 
 const api: IpcApi = {
@@ -113,6 +121,53 @@ const api: IpcApi = {
 
     list: (): Promise<IpcResult<SecretsListResponse>> =>
       ipcRenderer.invoke(IPC_CHANNELS.SECRETS_LIST) as Promise<IpcResult<SecretsListResponse>>,
+  },
+
+  jira: {
+    list: (req: JiraListRequest): Promise<IpcResult<JiraListResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.JIRA_LIST, req) as Promise<IpcResult<JiraListResponse>>,
+
+    refresh: (req: JiraRefreshRequest): Promise<IpcResult<JiraRefreshResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.JIRA_REFRESH, req) as Promise<
+        IpcResult<JiraRefreshResponse>
+      >,
+
+    testConnection: (
+      req: JiraTestConnectionRequest,
+    ): Promise<IpcResult<JiraTestConnectionResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.JIRA_TEST_CONNECTION, req) as Promise<
+        IpcResult<JiraTestConnectionResponse>
+      >,
+
+    refreshPollers: (): Promise<IpcResult<{ projectIds: string[] }>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.JIRA_REFRESH_POLLERS) as Promise<
+        IpcResult<{ projectIds: string[] }>
+      >,
+
+    onTicketsChanged: (listener: (e: JiraTicketsChangedEvent) => void): (() => void) => {
+      // Strip the IpcRendererEvent first arg before invoking the user's
+      // listener — renderer code must never see Electron-specific types.
+      const wrapped = (
+        _event: IpcRendererEvent,
+        payload: JiraTicketsChangedEvent,
+      ): void => {
+        listener(payload);
+      };
+      ipcRenderer.on(IPC_CHANNELS.JIRA_TICKETS_CHANGED, wrapped);
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.JIRA_TICKETS_CHANGED, wrapped);
+      };
+    },
+
+    onError: (listener: (e: JiraErrorEvent) => void): (() => void) => {
+      const wrapped = (_event: IpcRendererEvent, payload: JiraErrorEvent): void => {
+        listener(payload);
+      };
+      ipcRenderer.on(IPC_CHANNELS.JIRA_ERROR, wrapped);
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.JIRA_ERROR, wrapped);
+      };
+    },
   },
 };
 

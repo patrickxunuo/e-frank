@@ -41,6 +41,14 @@ function makeIpcApiStub(pingResponse: PingResponse): IpcApi {
       delete: vi.fn<IpcApi['secrets']['delete']>().mockResolvedValue(unusedErr()),
       list: vi.fn<IpcApi['secrets']['list']>().mockResolvedValue(unusedErr()),
     },
+    jira: {
+      list: vi.fn<IpcApi['jira']['list']>().mockResolvedValue(unusedErr()),
+      refresh: vi.fn<IpcApi['jira']['refresh']>().mockResolvedValue(unusedErr()),
+      testConnection: vi.fn<IpcApi['jira']['testConnection']>().mockResolvedValue(unusedErr()),
+      refreshPollers: vi.fn<IpcApi['jira']['refreshPollers']>().mockResolvedValue(unusedErr()),
+      onTicketsChanged: vi.fn<IpcApi['jira']['onTicketsChanged']>(() => () => {}),
+      onError: vi.fn<IpcApi['jira']['onError']>(() => () => {}),
+    },
   };
 }
 

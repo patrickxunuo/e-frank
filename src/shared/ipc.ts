@@ -10,6 +10,7 @@ import type {
   ProjectInstance,
   ProjectInstanceInput,
 } from './schema/project-instance.js';
+import type { Ticket } from './schema/ticket.js';
 
 /**
  * `ProjectInstanceDto` is the renderer-facing alias for the schema's
@@ -17,6 +18,13 @@ import type {
  * code can import the rename from this file directly.
  */
 export type ProjectInstanceDto = ProjectInstance;
+
+/**
+ * `TicketDto` is the renderer-facing alias for the schema's `Ticket`. Same
+ * pattern as `ProjectInstanceDto` — keeps renderer imports stable even if we
+ * later rename the schema type.
+ */
+export type TicketDto = Ticket;
 
 // Re-export schema types so renderer code can import everything from
 // `shared/ipc` rather than reaching into the schema folder directly.
@@ -28,6 +36,7 @@ export type {
   WorkflowConfig,
   ValidationError,
 } from './schema/project-instance.js';
+export type { Ticket } from './schema/ticket.js';
 
 export const IPC_CHANNELS = {
   PING: 'app:ping',
@@ -49,6 +58,16 @@ export const IPC_CHANNELS = {
   SECRETS_GET: 'secrets:get',
   SECRETS_DELETE: 'secrets:delete',
   SECRETS_LIST: 'secrets:list',
+  // -- Jira poller (issue #4) --
+  JIRA_LIST: 'jira:list',
+  JIRA_REFRESH: 'jira:refresh',
+  JIRA_TEST_CONNECTION: 'jira:test-connection',
+  /** Re-syncs pollers after project create/update/delete. */
+  JIRA_REFRESH_POLLERS: 'jira:refresh-pollers',
+  /** event channel (main -> renderer) */
+  JIRA_TICKETS_CHANGED: 'jira:tickets-changed',
+  /** event channel (main -> renderer) */
+  JIRA_ERROR: 'jira:error',
 } as const;
 
 export type PingRequest = { message: string };
@@ -141,6 +160,51 @@ export interface SecretsListResponse {
   refs: string[];
 }
 
+// -- Jira poller IPC payloads -------------------------------------------------
+//
+// `TicketDto` is the renderer-facing alias for the schema's `Ticket`. The
+// `JiraErrorEvent.code` is widened to `string` rather than the poller's
+// internal union for the same reason as `IpcResult.error.code`: keeps the
+// renderer uncoupled from main-process internals.
+
+export interface JiraListRequest {
+  projectId: string;
+}
+export interface JiraListResponse {
+  tickets: TicketDto[];
+}
+
+export interface JiraRefreshRequest {
+  projectId: string;
+}
+export interface JiraRefreshResponse {
+  tickets: TicketDto[];
+}
+
+export interface JiraTestConnectionRequest {
+  host: string;
+  email: string;
+  apiToken: string;
+}
+export interface JiraTestConnectionResponse {
+  accountId: string;
+  displayName: string;
+  emailAddress: string;
+}
+
+export interface JiraTicketsChangedEvent {
+  projectId: string;
+  tickets: TicketDto[];
+  timestamp: number;
+}
+
+export interface JiraErrorEvent {
+  projectId: string;
+  code: string;
+  message: string;
+  consecutiveErrors: number;
+}
+
 /**
  * Discriminated-union result returned over IPC. `code` is a string (rather
  * than a literal-union of manager error codes) to keep the renderer
@@ -174,5 +238,17 @@ export interface IpcApi {
     get: (req: SecretsGetRequest) => Promise<IpcResult<SecretsGetResponse>>;
     delete: (req: SecretsDeleteRequest) => Promise<IpcResult<{ ref: string }>>;
     list: () => Promise<IpcResult<SecretsListResponse>>;
+  };
+  jira: {
+    list: (req: JiraListRequest) => Promise<IpcResult<JiraListResponse>>;
+    refresh: (req: JiraRefreshRequest) => Promise<IpcResult<JiraRefreshResponse>>;
+    testConnection: (
+      req: JiraTestConnectionRequest,
+    ) => Promise<IpcResult<JiraTestConnectionResponse>>;
+    refreshPollers: () => Promise<IpcResult<{ projectIds: string[] }>>;
+    /** Subscribe to ticket-changed events. Returns unsubscribe fn. */
+    onTicketsChanged: (listener: (e: JiraTicketsChangedEvent) => void) => () => void;
+    /** Subscribe to poller error events. Returns unsubscribe fn. */
+    onError: (listener: (e: JiraErrorEvent) => void) => () => void;
   };
 }
