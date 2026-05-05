@@ -6,6 +6,29 @@
  * literals scattered through main/preload/renderer code.
  */
 
+import type {
+  ProjectInstance,
+  ProjectInstanceInput,
+} from './schema/project-instance.js';
+
+/**
+ * `ProjectInstanceDto` is the renderer-facing alias for the schema's
+ * `ProjectInstance`. Aliased (rather than just re-exported) so renderer
+ * code can import the rename from this file directly.
+ */
+export type ProjectInstanceDto = ProjectInstance;
+
+// Re-export schema types so renderer code can import everything from
+// `shared/ipc` rather than reaching into the schema folder directly.
+export type {
+  ProjectInstance,
+  ProjectInstanceInput,
+  RepoConfig,
+  TicketsConfig,
+  WorkflowConfig,
+  ValidationError,
+} from './schema/project-instance.js';
+
 export const IPC_CHANNELS = {
   PING: 'app:ping',
   CLAUDE_RUN: 'claude:run',
@@ -16,6 +39,16 @@ export const IPC_CHANNELS = {
   CLAUDE_OUTPUT: 'claude:output',
   /** event channel (main -> renderer) */
   CLAUDE_EXIT: 'claude:exit',
+  // -- Project store + secrets (issue #3) --
+  PROJECTS_LIST: 'projects:list',
+  PROJECTS_GET: 'projects:get',
+  PROJECTS_CREATE: 'projects:create',
+  PROJECTS_UPDATE: 'projects:update',
+  PROJECTS_DELETE: 'projects:delete',
+  SECRETS_SET: 'secrets:set',
+  SECRETS_GET: 'secrets:get',
+  SECRETS_DELETE: 'secrets:delete',
+  SECRETS_LIST: 'secrets:list',
 } as const;
 
 export type PingRequest = { message: string };
@@ -70,6 +103,44 @@ export interface ClaudeExitEvent {
   reason: 'completed' | 'cancelled' | 'timeout' | 'error';
 }
 
+// -- Project store + secrets IPC payloads -------------------------------------
+//
+// Same duplication policy as the claude:* contracts: the schema's domain types
+// are re-exported above (`ProjectInstanceDto` is the renamed re-export of the
+// schema's `ProjectInstance`); the request/response wrappers below describe
+// the channel-specific envelopes.
+
+export interface ProjectsGetRequest {
+  id: string;
+}
+export interface ProjectsCreateRequest {
+  input: ProjectInstanceInput;
+}
+export interface ProjectsUpdateRequest {
+  id: string;
+  input: ProjectInstanceInput;
+}
+export interface ProjectsDeleteRequest {
+  id: string;
+}
+
+export interface SecretsSetRequest {
+  ref: string;
+  plaintext: string;
+}
+export interface SecretsGetRequest {
+  ref: string;
+}
+export interface SecretsGetResponse {
+  plaintext: string;
+}
+export interface SecretsDeleteRequest {
+  ref: string;
+}
+export interface SecretsListResponse {
+  refs: string[];
+}
+
 /**
  * Discriminated-union result returned over IPC. `code` is a string (rather
  * than a literal-union of manager error codes) to keep the renderer
@@ -90,5 +161,18 @@ export interface IpcApi {
     onOutput: (listener: (e: ClaudeOutputEvent) => void) => () => void;
     /** Subscribe to exit events. Returns unsubscribe fn. */
     onExit: (listener: (e: ClaudeExitEvent) => void) => () => void;
+  };
+  projects: {
+    list: () => Promise<IpcResult<ProjectInstanceDto[]>>;
+    get: (req: ProjectsGetRequest) => Promise<IpcResult<ProjectInstanceDto>>;
+    create: (req: ProjectsCreateRequest) => Promise<IpcResult<ProjectInstanceDto>>;
+    update: (req: ProjectsUpdateRequest) => Promise<IpcResult<ProjectInstanceDto>>;
+    delete: (req: ProjectsDeleteRequest) => Promise<IpcResult<{ id: string }>>;
+  };
+  secrets: {
+    set: (req: SecretsSetRequest) => Promise<IpcResult<{ ref: string }>>;
+    get: (req: SecretsGetRequest) => Promise<IpcResult<SecretsGetResponse>>;
+    delete: (req: SecretsDeleteRequest) => Promise<IpcResult<{ ref: string }>>;
+    list: () => Promise<IpcResult<SecretsListResponse>>;
   };
 }

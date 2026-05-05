@@ -1,11 +1,13 @@
 # Progress
 
 ## Current Sprint / Focus
-Phase 1 — Foundation: Claude Process Manager (#2) complete; next up #3 Project Instance schema
+Phase 1 — Foundation complete (#1, #2, #3); next up Phase 2 — Jira polling (#4) or Project List UI (#5)
 
 ## Log
 <!-- Newest entries first. Format: - YYYY-MM-DDTHH:MMZ [status] feature-name (developer) — notes -->
 <!-- ALWAYS use UTC time (Z suffix). Run: date -u +"%Y-%m-%dT%H:%MZ" -->
+- 2026-05-05T02:50Z [DONE] #3 Project Instance config + secrets storage complete. 172/172 unit tests pass (was 90/90 after #2; +82 new across 4 test files). Reviewer verdict Ready for PR after fixing 1 critical (SecretsManager init failure was silently overwriting corrupt secrets file — now leaves manager null + adds initialized guard) + 4 warnings (NOT_NUMBER code, ProjectStore CRUD init guards, cascade-delete dedup via Set, hide backend error from plaintext leakage path).
+- 2026-05-05T01:00Z [PLAN] #3 Project Instance config + secrets storage planned: hand-rolled validator (no zod), JSON file with schema-versioned envelope + atomic writes + write mutex, `safeStorage`-backed SecretsManager via SecretsBackend abstraction (FakeBackend for tests, mirroring #2's Spawner pattern).
 - 2026-05-04T09:30Z [DONE] #2 Claude Process Manager complete. 90/90 unit tests pass (added 66 from #1's 23 baseline + 1 drift-guard suite). Reviewer verdict Ready for PR after fixing CRLF stripping for Windows + adding shared↔manager type drift guard. New `Spawner` abstraction in `src/main/modules/spawner.ts` enables full unit testing without spawning real processes.
 - 2026-05-04T09:00Z [PLAN] #2 Claude Process Manager planned: one P0 module with Spawner abstraction, single active run, line-buffered IPC streaming, cancel + timeout + stdin support.
 - 2026-05-04T08:50Z [DONE] PR #15 (sandbox CJS preload follow-up fix) merged — `npm run dev` now exposes `window.api` correctly with `sandbox: true`.
