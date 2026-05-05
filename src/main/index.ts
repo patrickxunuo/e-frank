@@ -11,6 +11,12 @@ import {
   type ClaudeOutputEvent,
   type ClaudeExitEvent,
   type IpcResult,
+  type ProjectInstanceDto,
+  type ProjectsCreateRequest,
+  type ProjectsUpdateRequest,
+  type SecretsSetRequest,
+  type SecretsGetResponse,
+  type SecretsListResponse,
 } from '../shared/ipc.js';
 import { handlePing } from './ping-handler.js';
 import {
@@ -19,6 +25,8 @@ import {
   type ExitEvent,
 } from './modules/claude-process-manager.js';
 import { NodeSpawner } from './modules/spawner.js';
+import { ProjectStore } from './modules/project-store.js';
+import { SafeStorageBackend, SecretsManager } from './modules/secrets-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -26,6 +34,12 @@ const __dirname = dirname(__filename);
 let mainWindow: BrowserWindow | null = null;
 
 const claudeManager = new ClaudeProcessManager({ spawner: new NodeSpawner() });
+
+// These are constructed at app-ready time (before window creation) because
+// `SafeStorageBackend` requires `app.whenReady()` and `app.getPath('userData')`
+// is also only safe to call after ready.
+let secretsManager: SecretsManager | null = null;
+let projectStore: ProjectStore | null = null;
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -156,10 +170,77 @@ function validateWriteRequest(raw: unknown): IpcResult<ClaudeWriteRequest> {
   return { ok: true, data: { runId, text } };
 }
 
+// -- Project / secrets request validators -----------------------------------
+
+function validateIdRequest(raw: unknown): IpcResult<{ id: string }> {
+  if (!isPlainObject(raw) || typeof raw['id'] !== 'string') {
+    return { ok: false, error: { code: 'INVALID_REQUEST', message: 'id must be a string' } };
+  }
+  return { ok: true, data: { id: raw['id'] } };
+}
+
+function validateRefRequest(raw: unknown): IpcResult<{ ref: string }> {
+  if (!isPlainObject(raw) || typeof raw['ref'] !== 'string') {
+    return { ok: false, error: { code: 'INVALID_REQUEST', message: 'ref must be a string' } };
+  }
+  return { ok: true, data: { ref: raw['ref'] } };
+}
+
+function validateProjectsCreateRequest(raw: unknown): IpcResult<ProjectsCreateRequest> {
+  if (!isPlainObject(raw) || raw['input'] === undefined) {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'request.input must be present' },
+    };
+  }
+  return { ok: true, data: { input: raw['input'] as ProjectsCreateRequest['input'] } };
+}
+
+function validateProjectsUpdateRequest(raw: unknown): IpcResult<ProjectsUpdateRequest> {
+  if (
+    !isPlainObject(raw) ||
+    typeof raw['id'] !== 'string' ||
+    raw['input'] === undefined
+  ) {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'request requires id and input' },
+    };
+  }
+  return {
+    ok: true,
+    data: { id: raw['id'], input: raw['input'] as ProjectsUpdateRequest['input'] },
+  };
+}
+
+function validateSecretsSetRequest(raw: unknown): IpcResult<SecretsSetRequest> {
+  if (
+    !isPlainObject(raw) ||
+    typeof raw['ref'] !== 'string' ||
+    typeof raw['plaintext'] !== 'string'
+  ) {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'ref and plaintext must be strings' },
+    };
+  }
+  return { ok: true, data: { ref: raw['ref'], plaintext: raw['plaintext'] } };
+}
+
+/** Generic "manager not initialized" failure — surfaces a clear error to the renderer. */
+function notInitialized<T>(name: string): IpcResult<T> {
+  return {
+    ok: false,
+    error: { code: 'NOT_INITIALIZED', message: `${name} failed to initialize at startup` },
+  };
+}
+
 function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.PING, (_event, req) => {
     return handlePing(req);
   });
+
+  // -- Claude Process Manager ------------------------------------------------
 
   ipcMain.handle(
     IPC_CHANNELS.CLAUDE_RUN,
@@ -209,9 +290,179 @@ function registerIpcHandlers(): void {
   claudeManager.on('exit', (e: ExitEvent) => {
     broadcastToWindows(IPC_CHANNELS.CLAUDE_EXIT, toIpcExitEvent(e));
   });
+
+  // -- Project store ---------------------------------------------------------
+
+  ipcMain.handle(
+    IPC_CHANNELS.PROJECTS_LIST,
+    async (): Promise<IpcResult<ProjectInstanceDto[]>> => {
+      if (projectStore === null) {
+        return notInitialized('ProjectStore');
+      }
+      return projectStore.list();
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.PROJECTS_GET,
+    async (_event, raw): Promise<IpcResult<ProjectInstanceDto>> => {
+      const validated = validateIdRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (projectStore === null) {
+        return notInitialized('ProjectStore');
+      }
+      return projectStore.get(validated.data.id);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.PROJECTS_CREATE,
+    async (_event, raw): Promise<IpcResult<ProjectInstanceDto>> => {
+      const validated = validateProjectsCreateRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (projectStore === null) {
+        return notInitialized('ProjectStore');
+      }
+      return projectStore.create(validated.data.input);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.PROJECTS_UPDATE,
+    async (_event, raw): Promise<IpcResult<ProjectInstanceDto>> => {
+      const validated = validateProjectsUpdateRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (projectStore === null) {
+        return notInitialized('ProjectStore');
+      }
+      return projectStore.update(validated.data.id, validated.data.input);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.PROJECTS_DELETE,
+    async (_event, raw): Promise<IpcResult<{ id: string }>> => {
+      const validated = validateIdRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (projectStore === null) {
+        return notInitialized('ProjectStore');
+      }
+      return projectStore.delete(validated.data.id);
+    },
+  );
+
+  // -- Secrets manager -------------------------------------------------------
+
+  ipcMain.handle(
+    IPC_CHANNELS.SECRETS_SET,
+    async (_event, raw): Promise<IpcResult<{ ref: string }>> => {
+      const validated = validateSecretsSetRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (secretsManager === null) {
+        return notInitialized('SecretsManager');
+      }
+      return secretsManager.set(validated.data.ref, validated.data.plaintext);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.SECRETS_GET,
+    async (_event, raw): Promise<IpcResult<SecretsGetResponse>> => {
+      const validated = validateRefRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (secretsManager === null) {
+        return notInitialized('SecretsManager');
+      }
+      return secretsManager.get(validated.data.ref);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.SECRETS_DELETE,
+    async (_event, raw): Promise<IpcResult<{ ref: string }>> => {
+      const validated = validateRefRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (secretsManager === null) {
+        return notInitialized('SecretsManager');
+      }
+      return secretsManager.delete(validated.data.ref);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.SECRETS_LIST,
+    async (): Promise<IpcResult<SecretsListResponse>> => {
+      if (secretsManager === null) {
+        return notInitialized('SecretsManager');
+      }
+      return secretsManager.list();
+    },
+  );
 }
 
-app.whenReady().then(() => {
+/**
+ * Initialize the secrets manager + project store. Failures are logged but
+ * don't crash the app — the corresponding handlers will surface a
+ * `NOT_INITIALIZED` error to the renderer instead.
+ */
+async function initStores(): Promise<void> {
+  try {
+    const userData = app.getPath('userData');
+    const backend = new SafeStorageBackend();
+    const secrets = new SecretsManager({
+      filePath: join(userData, 'secrets.json'),
+      backend,
+    });
+    const secretsInit = await secrets.init();
+    if (!secretsInit.ok) {
+      console.error(
+        `[main] SecretsManager init failed: ${secretsInit.error.code} - ${secretsInit.error.message}`,
+      );
+      // Leave secretsManager null so set/delete return NOT_INITIALIZED — a
+      // mutation on top of an unreadable file would clobber whatever's there
+      // (corrupt envelope, future schemaVersion, partially-written blob).
+      // The user's existing secrets file is left intact for inspection.
+      return;
+    }
+    secretsManager = secrets;
+
+    const store = new ProjectStore({
+      filePath: join(userData, 'projects.json'),
+      secretsManager: secrets,
+    });
+    const storeInit = await store.init();
+    if (!storeInit.ok) {
+       
+      console.error(
+        `[main] ProjectStore init failed: ${storeInit.error.code} - ${storeInit.error.message}`,
+      );
+      // Leave projectStore null so handlers return NOT_INITIALIZED — the
+      // file is corrupt or unsupported and we shouldn't silently overwrite.
+      return;
+    }
+    projectStore = store;
+  } catch (err) {
+     
+    console.error('[main] store initialization threw:', err);
+  }
+}
+
+app.whenReady().then(async () => {
+  await initStores();
   registerIpcHandlers();
   createWindow();
 

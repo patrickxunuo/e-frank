@@ -11,27 +11,35 @@ import type { IpcApi, IpcResult, PingResponse } from '../../src/shared/ipc';
  * vi.fn() shims that never actually run for these tests.
  */
 function makeIpcApiStub(pingResponse: PingResponse): IpcApi {
+  const unusedErr = (): IpcResult<never> => ({
+    ok: false,
+    error: { code: 'NOT_USED_IN_FE_TESTS', message: '' },
+  });
   return {
     ping: vi.fn<IpcApi['ping']>().mockResolvedValue(pingResponse),
     claude: {
-      run: vi.fn<IpcApi['claude']['run']>().mockResolvedValue({
-        ok: false,
-        error: { code: 'NOT_USED_IN_FE_TESTS', message: '' },
-      } as IpcResult<never>),
-      cancel: vi.fn<IpcApi['claude']['cancel']>().mockResolvedValue({
-        ok: false,
-        error: { code: 'NOT_USED_IN_FE_TESTS', message: '' },
-      } as IpcResult<never>),
-      write: vi.fn<IpcApi['claude']['write']>().mockResolvedValue({
-        ok: false,
-        error: { code: 'NOT_USED_IN_FE_TESTS', message: '' },
-      } as IpcResult<never>),
+      run: vi.fn<IpcApi['claude']['run']>().mockResolvedValue(unusedErr()),
+      cancel: vi.fn<IpcApi['claude']['cancel']>().mockResolvedValue(unusedErr()),
+      write: vi.fn<IpcApi['claude']['write']>().mockResolvedValue(unusedErr()),
       status: vi.fn<IpcApi['claude']['status']>().mockResolvedValue({
         ok: true,
         data: { active: null },
       }),
       onOutput: vi.fn<IpcApi['claude']['onOutput']>(() => () => {}),
       onExit: vi.fn<IpcApi['claude']['onExit']>(() => () => {}),
+    },
+    projects: {
+      list: vi.fn<IpcApi['projects']['list']>().mockResolvedValue(unusedErr()),
+      get: vi.fn<IpcApi['projects']['get']>().mockResolvedValue(unusedErr()),
+      create: vi.fn<IpcApi['projects']['create']>().mockResolvedValue(unusedErr()),
+      update: vi.fn<IpcApi['projects']['update']>().mockResolvedValue(unusedErr()),
+      delete: vi.fn<IpcApi['projects']['delete']>().mockResolvedValue(unusedErr()),
+    },
+    secrets: {
+      set: vi.fn<IpcApi['secrets']['set']>().mockResolvedValue(unusedErr()),
+      get: vi.fn<IpcApi['secrets']['get']>().mockResolvedValue(unusedErr()),
+      delete: vi.fn<IpcApi['secrets']['delete']>().mockResolvedValue(unusedErr()),
+      list: vi.fn<IpcApi['secrets']['list']>().mockResolvedValue(unusedErr()),
     },
   };
 }
