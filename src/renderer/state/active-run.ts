@@ -1,28 +1,67 @@
 /**
- * `useActiveRun` — placeholder for #6.
+ * `useActiveRun` — subscribes to the workflow runner's current-changed
+ * stream, scoped to a specific projectId.
  *
- * In #6 the workflow runner isn't wired up yet, so this hook always returns
- * `null`. The interface and call site are set up so #7 can swap the body
- * for a real subscription to `runs:current-changed` (or similar) without
- * touching the consumer.
+ *   - On mount: seed via `runs.current()`, accept iff `projectId` matches
+ *   - Subscribe to `onCurrentChanged`; update only for matching projectId
+ *   - Returns `null` for non-matching project, idle runner, or
+ *     missing `window.api`
+ *   - Unsubscribes on unmount
  *
- * Tests that need to exercise the Active Execution panel mock this hook.
+ * The hook returns the full `Run` snapshot (per #7's runner) — the
+ * Active Execution panel adapts the fields it actually renders.
  */
 
-export interface ActiveRun {
-  ticketKey: string;
-  ticketTitle: string;
-  /** 0..1 — derived from currentStep / totalSteps. */
-  progress: number;
-  currentStep: string;
-  totalSteps: number;
-  stepIndex: number;
-  /** Last few log lines (max 5). Older lines are truncated. */
-  recentLines: string[];
-  runId: string;
-}
+import { useEffect, useState } from 'react';
+import type { Run } from '@shared/ipc';
 
-// TODO(#7): replace with real subscription to runs:current-changed
-export function useActiveRun(_projectId: string): ActiveRun | null {
-  return null;
+export function useActiveRun(projectId: string): Run | null {
+  const [run, setRun] = useState<Run | null>(null);
+
+  useEffect(() => {
+    // Per-effect cancellation flag (matches `useTickets`). When projectId
+    // changes, this effect's cleanup flips `cancelled = true` and the next
+    // effect starts with its own fresh flag.
+    let cancelled = false;
+    if (typeof window === 'undefined' || !window.api) {
+      setRun(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const api = window.api;
+
+    void (async () => {
+      try {
+        const result = await api.runs.current();
+        if (cancelled) return;
+        if (result.ok && result.data.run !== null && result.data.run.projectId === projectId) {
+          setRun(result.data.run);
+        } else {
+          setRun(null);
+        }
+      } catch {
+        if (cancelled) return;
+        setRun(null);
+      }
+    })();
+
+    const off = api.runs.onCurrentChanged((event) => {
+      if (cancelled) return;
+      const next = event.run;
+      if (next !== null && next.projectId === projectId) {
+        setRun(next);
+      } else {
+        setRun(null);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [projectId]);
+
+  return run;
 }

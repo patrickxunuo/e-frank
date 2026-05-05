@@ -23,7 +23,15 @@ import {
   type JiraTestConnectionResponse,
   type JiraTicketsChangedEvent,
   type JiraErrorEvent,
+  type RunsStartRequest,
+  type RunsStartResponse,
+  type RunsModifyRequest,
+  type RunsCurrentResponse,
+  type RunsListHistoryRequest,
+  type RunsListHistoryResponse,
+  type RunsCurrentChangedEvent,
 } from '../shared/ipc.js';
+import type { Run, RunStateEvent, RunMode } from '../shared/schema/run.js';
 import { handlePing } from './ping-handler.js';
 import {
   ClaudeProcessManager,
@@ -39,6 +47,11 @@ import {
   type PollerErrorEvent,
   type TicketsChangedEvent,
 } from './modules/jira-poller.js';
+import { RunStore } from './modules/run-store.js';
+import { StubGitManager } from './modules/git-manager.js';
+import { StubPrCreator } from './modules/pr-creator.js';
+import { StubJiraUpdater } from './modules/jira-updater.js';
+import { WorkflowRunner } from './modules/workflow-runner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -54,6 +67,8 @@ let secretsManager: SecretsManager | null = null;
 let projectStore: ProjectStore | null = null;
 let runHistory: RunHistory | null = null;
 let jiraPoller: JiraPoller | null = null;
+let runStore: RunStore | null = null;
+let workflowRunner: WorkflowRunner | null = null;
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -251,6 +266,102 @@ function validateJiraProjectIdRequest(raw: unknown): IpcResult<{ projectId: stri
   return { ok: true, data: { projectId: raw['projectId'] } };
 }
 
+function validateRunsStartRequest(raw: unknown): IpcResult<RunsStartRequest> {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'request must be an object' },
+    };
+  }
+  const { projectId, ticketKey, modeOverride } = raw;
+  if (typeof projectId !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'projectId must be a string' },
+    };
+  }
+  if (typeof ticketKey !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'ticketKey must be a string' },
+    };
+  }
+  if (
+    modeOverride !== undefined &&
+    modeOverride !== 'interactive' &&
+    modeOverride !== 'yolo'
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_REQUEST',
+        message: 'modeOverride must be "interactive" or "yolo" if present',
+      },
+    };
+  }
+  const req: RunsStartRequest = { projectId, ticketKey };
+  if (modeOverride !== undefined) {
+    req.modeOverride = modeOverride as RunMode;
+  }
+  return { ok: true, data: req };
+}
+
+function validateRunsRunIdRequest(raw: unknown): IpcResult<{ runId: string }> {
+  if (!isPlainObject(raw) || typeof raw['runId'] !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'runId must be a string' },
+    };
+  }
+  return { ok: true, data: { runId: raw['runId'] } };
+}
+
+function validateRunsModifyRequest(raw: unknown): IpcResult<RunsModifyRequest> {
+  if (
+    !isPlainObject(raw) ||
+    typeof raw['runId'] !== 'string' ||
+    typeof raw['text'] !== 'string'
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_REQUEST',
+        message: 'runId and text must be strings',
+      },
+    };
+  }
+  return { ok: true, data: { runId: raw['runId'], text: raw['text'] } };
+}
+
+function validateRunsListHistoryRequest(
+  raw: unknown,
+): IpcResult<RunsListHistoryRequest> {
+  if (!isPlainObject(raw) || typeof raw['projectId'] !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'projectId must be a string' },
+    };
+  }
+  const limit = raw['limit'];
+  if (
+    limit !== undefined &&
+    (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 0)
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_REQUEST',
+        message: 'limit must be a non-negative finite number if present',
+      },
+    };
+  }
+  const req: RunsListHistoryRequest = { projectId: raw['projectId'] };
+  if (typeof limit === 'number') {
+    req.limit = limit;
+  }
+  return { ok: true, data: req };
+}
+
 function validateJiraTestConnectionRequest(raw: unknown): IpcResult<JiraTestConnectionRequest> {
   if (
     !isPlainObject(raw) ||
@@ -400,11 +511,20 @@ function registerIpcHandlers(): void {
       if (projectStore === null) {
         return notInitialized('ProjectStore');
       }
-      // Cascade ordering matters: stop the poller FIRST so any in-flight
-      // tick can't complete and emit `tickets-changed` for an already-deleted
-      // project (`stillTracked()` in runPoll will return false on its next
-      // await once stop() removes the state from the map). Then delete from
-      // the store, then clean up run-history.
+      // Cascade ordering matters:
+      // 1) Cancel any active workflow run for this project FIRST. Otherwise
+      //    the runner keeps mutating run-history for a project that's about
+      //    to be wiped, leaving inconsistent state.
+      // 2) Stop the Jira poller so in-flight ticks can't emit
+      //    `tickets-changed` for an already-deleted project.
+      // 3) Delete from the store.
+      // 4) Clean up run-history.
+      if (workflowRunner !== null) {
+        const active = workflowRunner.current();
+        if (active !== null && active.projectId === validated.data.id) {
+          await workflowRunner.cancel(active.id);
+        }
+      }
       if (jiraPoller !== null) {
         jiraPoller.stop(validated.data.id);
       }
@@ -553,6 +673,133 @@ function registerIpcHandlers(): void {
       return { ok: true, data: { projectIds: ids } };
     },
   );
+
+  // -- Workflow Runner -----------------------------------------------------
+
+  ipcMain.handle(
+    IPC_CHANNELS.RUNS_START,
+    async (_event, raw): Promise<IpcResult<RunsStartResponse>> => {
+      const validated = validateRunsStartRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (workflowRunner === null) {
+        return notInitialized('WorkflowRunner');
+      }
+      const res = await workflowRunner.start(validated.data);
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return { ok: true, data: { run: res.data.run } };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.RUNS_CANCEL,
+    async (_event, raw): Promise<IpcResult<{ runId: string }>> => {
+      const validated = validateRunsRunIdRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (workflowRunner === null) {
+        return notInitialized('WorkflowRunner');
+      }
+      const res = await workflowRunner.cancel(validated.data.runId);
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return { ok: true, data: res.data };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.RUNS_APPROVE,
+    async (_event, raw): Promise<IpcResult<{ runId: string }>> => {
+      const validated = validateRunsRunIdRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (workflowRunner === null) {
+        return notInitialized('WorkflowRunner');
+      }
+      const res = await workflowRunner.approve({ runId: validated.data.runId });
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return { ok: true, data: res.data };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.RUNS_REJECT,
+    async (_event, raw): Promise<IpcResult<{ runId: string }>> => {
+      const validated = validateRunsRunIdRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (workflowRunner === null) {
+        return notInitialized('WorkflowRunner');
+      }
+      const res = await workflowRunner.reject({ runId: validated.data.runId });
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return { ok: true, data: res.data };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.RUNS_MODIFY,
+    async (_event, raw): Promise<IpcResult<{ runId: string }>> => {
+      const validated = validateRunsModifyRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (workflowRunner === null) {
+        return notInitialized('WorkflowRunner');
+      }
+      const res = await workflowRunner.modify({
+        runId: validated.data.runId,
+        text: validated.data.text,
+      });
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return { ok: true, data: res.data };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.RUNS_CURRENT,
+    async (): Promise<IpcResult<RunsCurrentResponse>> => {
+      if (workflowRunner === null) {
+        return notInitialized('WorkflowRunner');
+      }
+      return { ok: true, data: { run: workflowRunner.current() } };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.RUNS_LIST_HISTORY,
+    async (_event, raw): Promise<IpcResult<RunsListHistoryResponse>> => {
+      const validated = validateRunsListHistoryRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (runStore === null) {
+        return notInitialized('RunStore');
+      }
+      const res = await runStore.list(validated.data.projectId, validated.data.limit);
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return { ok: true, data: { runs: res.data } };
+    },
+  );
+}
+
+function toIpcCurrentChangedEvent(e: { run: Run | null }): RunsCurrentChangedEvent {
+  return { run: e.run };
 }
 
 function toIpcTicketsChangedEvent(e: TicketsChangedEvent): JiraTicketsChangedEvent {
@@ -649,6 +896,57 @@ async function initStores(): Promise<void> {
         await poller.start(p, 5 * 60 * 1000);
       }
     }
+
+    // -- Workflow Runner (issue #7) --
+    // Per-run JSON sidecars live under userData/runs/. RunStore.init creates
+    // the directory if missing; failures are logged but never crash the app.
+    const runs = new RunStore({ runsDir: join(userData, 'runs') });
+    const runsInit = await runs.init();
+    if (!runsInit.ok) {
+
+      console.error(
+        `[main] RunStore init failed: ${runsInit.error.code} - ${runsInit.error.message}`,
+      );
+      // Leave runStore null so runs:list-history surfaces NOT_INITIALIZED;
+      // the WorkflowRunner itself can still operate without persistence
+      // (saves are best-effort and logged) so we still construct it.
+    } else {
+      runStore = runs;
+    }
+
+    const runner = new WorkflowRunner({
+      projectStore: {
+        get: async (id: string) => {
+          const r = await store.get(id);
+          if (!r.ok) {
+            return { ok: false, error: { code: r.error.code, message: r.error.message } };
+          }
+          return { ok: true, data: r.data };
+        },
+      },
+      secretsManager: {
+        get: async (ref: string) => {
+          const r = await secrets.get(ref);
+          if (!r.ok) {
+            return { ok: false, error: { code: r.error.code, message: r.error.message } };
+          }
+          return { ok: true, data: { plaintext: r.data.plaintext } };
+        },
+      },
+      runHistory: history,
+      runStore: runs,
+      claudeManager,
+      gitManager: new StubGitManager(),
+      prCreator: new StubPrCreator(),
+      jiraUpdater: new StubJiraUpdater(),
+    });
+    runner.on('state-changed', (e: RunStateEvent) => {
+      broadcastToWindows(IPC_CHANNELS.RUNS_STATE_CHANGED, e);
+    });
+    runner.on('current-changed', (e: { run: Run | null }) => {
+      broadcastToWindows(IPC_CHANNELS.RUNS_CURRENT_CHANGED, toIpcCurrentChangedEvent(e));
+    });
+    workflowRunner = runner;
   } catch (err) {
 
     console.error('[main] store initialization threw:', err);
@@ -674,6 +972,15 @@ app.on('before-quit', () => {
   // has started tearing down its windows / IPC channels.
   if (jiraPoller !== null) {
     jiraPoller.stopAll();
+  }
+  // Best-effort cancel of any in-flight workflow run so we don't leave a
+  // child claude process orphaned. Fire and forget — the app is shutting
+  // down regardless and we can't await here.
+  if (workflowRunner !== null) {
+    const active = workflowRunner.current();
+    if (active !== null) {
+      void workflowRunner.cancel(active.id);
+    }
   }
 });
 

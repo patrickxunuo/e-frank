@@ -1,7 +1,7 @@
 # Progress
 
 ## Current Sprint / Focus
-Phase 2 complete — Project Detail UI (#6) shipped. Next up Phase 3 — Workflow Runner state machine (#7).
+Phase 3 — Workflow Runner state machine (#7) shipped. Active Execution panel from #6 now drives off real runner events. Next up: #8 (Stream Claude Output) and #9 (Approval Interface) — both ride the runner contract this PR establishes.
 
 ## Log
 <!-- Newest entries first. Format: - YYYY-MM-DDTHH:MMZ [status] feature-name (developer) — notes -->

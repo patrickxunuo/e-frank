@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ProjectInstanceDto, TicketDto } from '@shared/ipc';
+import type { ProjectInstanceDto, Run, RunState, TicketDto } from '@shared/ipc';
 import { Badge, type BadgeVariant } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Checkbox } from '../components/Checkbox';
@@ -33,9 +33,59 @@ import styles from './ProjectDetail.module.css';
 export interface ProjectDetailProps {
   projectId: string;
   onBack: () => void;
-  onOpenExecution: (ticketKey: string) => void;
-  onRun: (ticketKey: string) => void;
-  onRunSelected: (ticketKeys: string[]) => void;
+}
+
+/**
+ * Friendly label for a `RunState` — surfaced as the progress-bar caption.
+ * Matches the backend's USER_VISIBLE_LABELS table (kept in sync manually
+ * to avoid pulling main-process types into the renderer).
+ */
+const RUN_STATE_LABELS: Record<RunState, string> = {
+  idle: 'Idle',
+  locking: 'Locking ticket',
+  preparing: 'Preparing repo',
+  branching: 'Creating branch',
+  running: 'Implementing feature',
+  awaitingApproval: 'Awaiting approval',
+  committing: 'Committing changes',
+  pushing: 'Pushing branch',
+  creatingPr: 'Creating pull request',
+  updatingTicket: 'Updating ticket',
+  unlocking: 'Unlocking ticket',
+  done: 'Done',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+};
+
+/**
+ * Linear progress 0..1 derived from the run's current state. The pipeline
+ * has 10 ordered states from `locking` through `done`; we map each to its
+ * position so the bar advances monotonically. `awaitingApproval` is a side
+ * trip from `running`, so we collapse it to running's slot.
+ */
+const STATE_PROGRESS_ORDER: RunState[] = [
+  'locking',
+  'preparing',
+  'branching',
+  'running',
+  'committing',
+  'pushing',
+  'creatingPr',
+  'updatingTicket',
+  'unlocking',
+  'done',
+];
+
+function progressForRun(run: Run): { progress: number; index: number; total: number } {
+  const total = STATE_PROGRESS_ORDER.length;
+  const effective: RunState = run.state === 'awaitingApproval' ? 'running' : run.state;
+  const idx = STATE_PROGRESS_ORDER.indexOf(effective);
+  if (idx === -1) {
+    // failed / cancelled / idle land here — show full bar so the panel
+    // doesn't visually regress on terminal states.
+    return { progress: run.status === 'done' ? 1 : 0, index: 0, total };
+  }
+  return { progress: (idx + 1) / total, index: idx, total };
 }
 
 type ProjectState =
@@ -92,17 +142,77 @@ function priorityLabel(raw: string): string {
 export function ProjectDetail({
   projectId,
   onBack,
-  onOpenExecution,
-  onRun,
-  onRunSelected,
 }: ProjectDetailProps): JSX.Element {
   const [state, setState] = useState<ProjectState>({ kind: 'loading' });
   const [tab, setTab] = useState<TabId>('tickets');
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [runBanner, setRunBanner] = useState<
+    | { kind: 'error'; message: string }
+    | { kind: 'queued'; firstKey: string; remaining: number }
+    | null
+  >(null);
 
   const tickets = useTickets(projectId);
   const activeRun = useActiveRun(projectId);
   const [autoMode, setAutoMode] = useAutoMode(projectId);
+
+  /**
+   * Start a run for `key`. On error, surface an inline banner. We don't
+   * await the IPC round-trip from the click handler — the runner emits
+   * `current-changed` events that the active panel subscribes to.
+   */
+  const startRun = (key: string): void => {
+    if (typeof window === 'undefined' || !window.api) {
+      setRunBanner({ kind: 'error', message: 'IPC bridge unavailable' });
+      return;
+    }
+    setRunBanner(null);
+    const api = window.api;
+    void (async () => {
+      try {
+        const result = await api.runs.start({ projectId, ticketKey: key });
+        if (!result.ok) {
+          setRunBanner({
+            kind: 'error',
+            message:
+              result.error.message ||
+              result.error.code ||
+              'Failed to start run',
+          });
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setRunBanner({ kind: 'error', message });
+      }
+    })();
+  };
+
+  const handleRunSelected = (keys: string[]): void => {
+    if (keys.length === 0) return;
+    const [first, ...rest] = keys;
+    if (first === undefined) return;
+    startRun(first);
+    if (rest.length > 0) {
+      // Sequential queue is a future enhancement — for #7 we start the first
+      // ticket and let the user click Run on the rest after the active run
+      // completes. The banner makes the queueing semantics explicit.
+      setRunBanner({ kind: 'queued', firstKey: first, remaining: rest.length });
+    }
+  };
+
+  const handleCancelActive = (): void => {
+    if (activeRun === null) return;
+    if (typeof window === 'undefined' || !window.api) return;
+    const api = window.api;
+    void api.runs.cancel({ runId: activeRun.id }).then((res) => {
+      if (!res.ok) {
+        setRunBanner({
+          kind: 'error',
+          message: res.error.message || res.error.code || 'Failed to cancel run',
+        });
+      }
+    });
+  };
 
   // -- Fetch the project on mount --
   useEffect(() => {
@@ -344,7 +454,7 @@ export function ProjectDetail({
           leadingIcon={<IconPlay size={12} />}
           onClick={(e) => {
             e.stopPropagation();
-            onRun(row.key);
+            startRun(row.key);
           }}
           data-testid={`ticket-run-button-${row.key}`}
         >
@@ -463,7 +573,7 @@ export function ProjectDetail({
             <Button
               variant="primary"
               leadingIcon={<IconPlay size={12} />}
-              onClick={() => onRunSelected(orderedSelectedKeys)}
+              onClick={() => handleRunSelected(orderedSelectedKeys)}
               disabled={runSelectedDisabled}
               data-testid="run-selected-button"
             >
@@ -513,6 +623,38 @@ export function ProjectDetail({
         </div>
       )}
 
+      {runBanner && (
+        <div
+          className={styles.banner}
+          role={runBanner.kind === 'error' ? 'alert' : 'status'}
+          data-testid={
+            runBanner.kind === 'error' ? 'run-error-banner' : 'run-queued-banner'
+          }
+        >
+          <span>
+            {runBanner.kind === 'error' ? (
+              <>
+                <strong>Couldn’t start run.</strong> {runBanner.message}
+              </>
+            ) : (
+              <>
+                <strong>Run started for {runBanner.firstKey}</strong> — select again
+                after this run completes for the remaining {runBanner.remaining}.
+              </>
+            )}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            leadingIcon={<IconClose size={12} />}
+            onClick={() => setRunBanner(null)}
+            data-testid="run-banner-dismiss"
+          >
+            Dismiss
+          </Button>
+        </div>
+      )}
+
       <div className={styles.body}>
         <Tabs
           items={tabItems}
@@ -555,56 +697,56 @@ export function ProjectDetail({
         </div>
       </div>
 
-      {activeRun && (
-        <aside className={styles.activePanel} data-testid="active-execution-panel">
-          <div className={styles.activeCard}>
-            <div className={styles.activeLeft}>
-              <div className={styles.activeHead}>
-                <div className={styles.activeBadgeRow}>
-                  <span className={styles.activeKey} data-testid="active-execution-key">
-                    {activeRun.ticketKey}
-                  </span>
-                  <Badge variant="running" pulse>
-                    Running
-                  </Badge>
+      {activeRun && (() => {
+        const { progress, index, total } = progressForRun(activeRun);
+        const stateLabel = RUN_STATE_LABELS[activeRun.state];
+        // #8 will populate streaming logs; for #7 the panel ships without
+        // them. The empty array keeps the LogPreview height stable.
+        const recentLines: string[] = [];
+        return (
+          <aside className={styles.activePanel} data-testid="active-execution-panel">
+            <div className={styles.activeCard}>
+              <div className={styles.activeLeft}>
+                <div className={styles.activeHead}>
+                  <div className={styles.activeBadgeRow}>
+                    <span className={styles.activeKey} data-testid="active-execution-key">
+                      {activeRun.ticketKey}
+                    </span>
+                    <Badge variant="running" pulse>
+                      {activeRun.state === 'awaitingApproval' ? 'Awaiting' : 'Running'}
+                    </Badge>
+                  </div>
+                  <div className={styles.activeActions}>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      leadingIcon={<IconClose size={12} />}
+                      onClick={handleCancelActive}
+                      data-testid="active-execution-cancel"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
                 </div>
-                <div className={styles.activeActions}>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onOpenExecution(activeRun.ticketKey)}
-                    data-testid="active-execution-open-details"
-                  >
-                    Open Details
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    leadingIcon={<IconClose size={12} />}
-                    data-testid="active-execution-cancel"
-                  >
-                    Cancel
-                  </Button>
-                </div>
+                <span className={styles.activeTitle}>{activeRun.ticketKey}</span>
+                <ProgressBar
+                  value={progress}
+                  label={stateLabel}
+                  hint={`Step ${index + 1} of ${total}`}
+                  data-testid="active-execution-progress"
+                />
               </div>
-              <span className={styles.activeTitle}>{activeRun.ticketTitle}</span>
-              <ProgressBar
-                value={activeRun.progress}
-                label={activeRun.currentStep}
-                hint={`Step ${activeRun.stepIndex + 1} of ${activeRun.totalSteps}`}
-                data-testid="active-execution-progress"
-              />
+              <div className={styles.activeRight}>
+                <LogPreview
+                  lines={recentLines}
+                  maxHeight={140}
+                  data-testid="active-execution-log"
+                />
+              </div>
             </div>
-            <div className={styles.activeRight}>
-              <LogPreview
-                lines={activeRun.recentLines}
-                maxHeight={140}
-                data-testid="active-execution-log"
-              />
-            </div>
-          </div>
-        </aside>
-      )}
+          </aside>
+        );
+      })()}
     </div>
   );
 }

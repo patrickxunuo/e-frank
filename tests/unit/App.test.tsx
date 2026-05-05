@@ -102,6 +102,21 @@ function makeIpcApiStub(
       onTicketsChanged: vi.fn<IpcApi['jira']['onTicketsChanged']>(() => () => {}),
       onError: vi.fn<IpcApi['jira']['onError']>(() => () => {}),
     },
+    runs: {
+      start: vi.fn<IpcApi['runs']['start']>().mockResolvedValue(unusedErr()),
+      cancel: vi.fn<IpcApi['runs']['cancel']>().mockResolvedValue(unusedErr()),
+      approve: vi.fn<IpcApi['runs']['approve']>().mockResolvedValue(unusedErr()),
+      reject: vi.fn<IpcApi['runs']['reject']>().mockResolvedValue(unusedErr()),
+      modify: vi.fn<IpcApi['runs']['modify']>().mockResolvedValue(unusedErr()),
+      current: vi
+        .fn<IpcApi['runs']['current']>()
+        .mockResolvedValue({ ok: true, data: { run: null } }),
+      listHistory: vi
+        .fn<IpcApi['runs']['listHistory']>()
+        .mockResolvedValue(unusedErr()),
+      onCurrentChanged: vi.fn<IpcApi['runs']['onCurrentChanged']>(() => () => {}),
+      onStateChanged: vi.fn<IpcApi['runs']['onStateChanged']>(() => () => {}),
+    },
   };
 }
 
