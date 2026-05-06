@@ -9,7 +9,7 @@ Project memory. Read this file first to find what you need.
 - [progress.md](progress.md) — Current status and development progress
 
 ## Topic Files
-(none yet — will be created as the project grows)
+- [checkpoint-protocol.md](checkpoint-protocol.md) — Approval marker contract pointer (#9 / #7)
 
 ## Last Updated
 2026-05-04

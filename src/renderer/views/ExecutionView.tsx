@@ -8,7 +8,9 @@
  * Live runs subscribe to `runs.onCurrentChanged` so the page stays in
  * lockstep with the runner. Terminal runs are read once via the hook.
  *
- * The right pane is a placeholder card pending #9's approval panel.
+ * The right pane hosts the `<ApprovalPanel>` (#9) when
+ * `Run.pendingApproval` is populated; otherwise the body collapses to a
+ * single column and the log reclaims full width.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -18,13 +20,13 @@ import type {
   RunStateEvent,
   RunStatus,
 } from '@shared/ipc';
+import { ApprovalPanel } from '../components/ApprovalPanel';
 import { Badge, type BadgeVariant } from '../components/Badge';
 import { Button } from '../components/Button';
 import { ExecutionLog } from '../components/ExecutionLog';
 import { PromptInput } from '../components/PromptInput';
 import { Toggle } from '../components/Toggle';
 import {
-  IconAlert,
   IconArrowLeft,
   IconClose,
 } from '../components/icons';
@@ -325,6 +327,7 @@ export function ExecutionView({
   // ---------- Ready ----------
 
   const ready = resolution.run;
+  const showApproval = ready.pendingApproval !== null;
   const terminal = isTerminal(ready);
   const promptDisabled = terminal || claudeRunId === null;
 
@@ -419,7 +422,10 @@ export function ExecutionView({
         </div>
       </header>
 
-      <div className={styles.body}>
+      <div
+        className={styles.body}
+        data-has-panel={showApproval ? 'true' : 'false'}
+      >
         <div className={styles.leftPane}>
           <ExecutionLog
             steps={log.steps}
@@ -428,25 +434,15 @@ export function ExecutionView({
             data-testid="execution-log"
           />
         </div>
-        <aside className={styles.rightPane} aria-label="Approval panel placeholder">
-          <div
-            className={styles.placeholderCard}
-            data-testid="execution-approval-placeholder"
-          >
-            <div className={styles.placeholderHeader}>
-              <span className={styles.placeholderIcon} aria-hidden="true">
-                <IconAlert size={16} />
-              </span>
-              <span className={styles.placeholderTitle}>Approval panel lands in #9</span>
-            </div>
-            <p className={styles.placeholderBody}>
-              When the agent pauses for review, the diff and approve / reject /
-              modify controls will land here. For now, type into the prompt
-              below to interact directly.
-            </p>
-            <span className={styles.placeholderHint}>Coming soon</span>
-          </div>
-        </aside>
+        {showApproval && (
+          <aside className={styles.rightPane} aria-label="Approval panel">
+            <ApprovalPanel
+              runId={ready.id}
+              approval={ready.pendingApproval!}
+              disabled={isTerminal(ready)}
+            />
+          </aside>
+        )}
       </div>
 
       <div

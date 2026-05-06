@@ -33,6 +33,8 @@ export interface PromptInputProps {
   /** Resolves true on success (clears input), false on cancel. */
   onSubmit: (text: string) => Promise<boolean> | boolean;
   'data-testid'?: string;
+  /** Override for the Send button's `data-testid`. Defaults to `log-send-button`. */
+  sendTestId?: string;
   sendLabel?: string;
 }
 
@@ -60,6 +62,7 @@ export const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
       disabled = false,
       onSubmit,
       'data-testid': testId,
+      sendTestId,
       sendLabel = 'Send',
     },
     ref,
@@ -143,7 +146,7 @@ export const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
                 void submit();
               }}
               disabled={sendDisabled}
-              data-testid="log-send-button"
+              data-testid={sendTestId ?? 'log-send-button'}
             >
               {sendLabel}
             </Button>
