@@ -164,6 +164,14 @@ function installApi(opts?: {
         jiraOnTicketsChanged as unknown as IpcApi['jira']['onTicketsChanged'],
       onError: jiraOnError as unknown as IpcApi['jira']['onError'],
     },
+    connections: {
+      list: vi.fn() as unknown as IpcApi['connections']['list'],
+      get: vi.fn() as unknown as IpcApi['connections']['get'],
+      create: vi.fn() as unknown as IpcApi['connections']['create'],
+      update: vi.fn() as unknown as IpcApi['connections']['update'],
+      delete: vi.fn() as unknown as IpcApi['connections']['delete'],
+      test: vi.fn() as unknown as IpcApi['connections']['test'],
+    },
     runs: {
       start: vi.fn<IpcApi['runs']['start']>().mockResolvedValue(unusedErr()),
       cancel: vi.fn<IpcApi['runs']['cancel']>().mockResolvedValue(unusedErr()),

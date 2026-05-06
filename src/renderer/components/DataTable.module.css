@@ -4,7 +4,12 @@
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
   background: var(--bg-card);
-  backdrop-filter: blur(8px);
+  /* `backdrop-filter: blur(...)` was here previously — removed because
+   * Chromium's paint pipeline briefly miscalculates the scroll viewport
+   * when blur is applied to a stacking context that contains animating
+   * children, causing the parent's vertical scrollbar to flash on first
+   * paint of the page. The visual effect was barely perceptible since
+   * the wrapper sits on an opaque card background anyway. */
 }
 
 .table {
@@ -24,7 +29,7 @@
   color: var(--text-tertiary);
   padding: 14px var(--space-5);
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.015);
+  background: var(--surface-overlay-subtle);
   white-space: nowrap;
 }
 
@@ -35,9 +40,14 @@
 .row {
   cursor: pointer;
   transition: background-color var(--duration-fast) var(--ease-out);
-  /* Staggered fade-up entrance — feels deliberate without being noisy. */
+  /* Staggered fade-in entrance. The previous version animated
+   * `transform: translateY(6px) -> 0` alongside opacity, but
+   * `transform` on a `<tr>` element creates a table-layout containing
+   * block and Chromium briefly extends the parent scroll-height during
+   * the keyframe — causing the parent's vertical scrollbar to flash.
+   * Pure opacity fade has none of that side effect. */
   opacity: 0;
-  animation: rowEnter 360ms var(--ease-out) forwards;
+  animation: rowEnter 280ms var(--ease-out) forwards;
 }
 
 .row.unclickable {
@@ -60,7 +70,7 @@
 }
 
 .row:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--surface-overlay-subtle);
 }
 
 .empty {
@@ -70,10 +80,8 @@
 @keyframes rowEnter {
   from {
     opacity: 0;
-    transform: translateY(6px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }

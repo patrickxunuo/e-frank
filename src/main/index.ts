@@ -32,8 +32,18 @@ import {
   type RunsReadLogRequest,
   type RunsReadLogResponse,
   type RunsCurrentChangedEvent,
+  type ConnectionsCreateRequest,
+  type ConnectionsUpdateRequest,
+  type ConnectionsTestRequest,
+  type ConnectionsTestResponse,
 } from '../shared/ipc.js';
 import type { Run, RunStateEvent, RunMode, RunLogEntry } from '../shared/schema/run.js';
+import type {
+  Connection,
+  ConnectionIdentity,
+  Provider,
+  AuthMethod,
+} from '../shared/schema/connection.js';
 import { handlePing } from './ping-handler.js';
 import {
   ClaudeProcessManager,
@@ -42,7 +52,11 @@ import {
 } from './modules/claude-process-manager.js';
 import { NodeSpawner } from './modules/spawner.js';
 import { ProjectStore } from './modules/project-store.js';
+import { ConnectionStore } from './modules/connection-store.js';
 import { SafeStorageBackend, SecretsManager } from './modules/secrets-manager.js';
+import { FetchHttpClient } from './modules/http-client.js';
+import { JiraClient } from './modules/jira-client.js';
+import { GithubClient } from './modules/github-client.js';
 import { RunHistory } from './modules/run-history.js';
 import {
   JiraPoller,
@@ -68,6 +82,7 @@ const claudeManager = new ClaudeProcessManager({ spawner: new NodeSpawner() });
 // is also only safe to call after ready.
 let secretsManager: SecretsManager | null = null;
 let projectStore: ProjectStore | null = null;
+let connectionStore: ConnectionStore | null = null;
 let runHistory: RunHistory | null = null;
 let jiraPoller: JiraPoller | null = null;
 let runStore: RunStore | null = null;
@@ -397,6 +412,273 @@ function validateJiraTestConnectionRequest(raw: unknown): IpcResult<JiraTestConn
   };
 }
 
+// -- Connections request validators -----------------------------------------
+
+function validateConnectionsCreateRequest(
+  raw: unknown,
+): IpcResult<ConnectionsCreateRequest> {
+  if (!isPlainObject(raw) || raw['input'] === undefined) {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'request.input must be present' },
+    };
+  }
+  return {
+    ok: true,
+    data: { input: raw['input'] as ConnectionsCreateRequest['input'] },
+  };
+}
+
+function validateConnectionsUpdateRequest(
+  raw: unknown,
+): IpcResult<ConnectionsUpdateRequest> {
+  if (
+    !isPlainObject(raw) ||
+    typeof raw['id'] !== 'string' ||
+    raw['input'] === undefined
+  ) {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'request requires id and input' },
+    };
+  }
+  return {
+    ok: true,
+    data: { id: raw['id'], input: raw['input'] as ConnectionsUpdateRequest['input'] },
+  };
+}
+
+function validateConnectionsTestRequest(
+  raw: unknown,
+): IpcResult<ConnectionsTestRequest> {
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'request must be an object' },
+    };
+  }
+  const mode = raw['mode'];
+  if (mode === 'existing') {
+    if (typeof raw['id'] !== 'string') {
+      return {
+        ok: false,
+        error: { code: 'INVALID_REQUEST', message: 'id must be a string' },
+      };
+    }
+    return { ok: true, data: { mode: 'existing', id: raw['id'] } };
+  }
+  if (mode === 'preview') {
+    const provider = raw['provider'];
+    const host = raw['host'];
+    const authMethod = raw['authMethod'];
+    const plaintextToken = raw['plaintextToken'];
+    if (
+      typeof provider !== 'string' ||
+      (provider !== 'github' && provider !== 'bitbucket' && provider !== 'jira')
+    ) {
+      return {
+        ok: false,
+        error: { code: 'INVALID_REQUEST', message: 'provider must be a valid Provider' },
+      };
+    }
+    if (typeof host !== 'string') {
+      return {
+        ok: false,
+        error: { code: 'INVALID_REQUEST', message: 'host must be a string' },
+      };
+    }
+    if (
+      typeof authMethod !== 'string' ||
+      (authMethod !== 'pat' && authMethod !== 'app-password' && authMethod !== 'api-token')
+    ) {
+      return {
+        ok: false,
+        error: { code: 'INVALID_REQUEST', message: 'authMethod must be a valid AuthMethod' },
+      };
+    }
+    if (typeof plaintextToken !== 'string') {
+      return {
+        ok: false,
+        error: { code: 'INVALID_REQUEST', message: 'plaintextToken must be a string' },
+      };
+    }
+    const email = raw['email'];
+    if (email !== undefined && typeof email !== 'string') {
+      return {
+        ok: false,
+        error: { code: 'INVALID_REQUEST', message: 'email must be a string if present' },
+      };
+    }
+    const data: ConnectionsTestRequest = {
+      mode: 'preview',
+      provider: provider as Provider,
+      host,
+      authMethod: authMethod as AuthMethod,
+      plaintextToken,
+    };
+    if (typeof email === 'string') {
+      data.email = email;
+    }
+    return { ok: true, data };
+  }
+  return {
+    ok: false,
+    error: { code: 'INVALID_REQUEST', message: 'mode must be "existing" or "preview"' },
+  };
+}
+
+/**
+ * Resolve credentials and run a one-shot Test Connection. For `mode:
+ * 'existing'`, looks up the connection + reads the secret; for `mode:
+ * 'preview'`, takes fields from the request directly. Constructs a fresh
+ * `JiraClient` or `GithubClient` per call. On `existing` success, also
+ * persists the verification on the connection row.
+ *
+ * Bitbucket → NOT_IMPLEMENTED (kept here so the renderer can still render
+ * Bitbucket rows; only the test action is gated).
+ */
+async function runConnectionTest(
+  req: ConnectionsTestRequest,
+): Promise<IpcResult<ConnectionsTestResponse>> {
+  if (connectionStore === null || secretsManager === null) {
+    return notInitialized('ConnectionStore');
+  }
+  let provider: Provider;
+  let host: string;
+  let authMethod: AuthMethod;
+  let plaintextToken: string;
+  let email: string | undefined;
+  let existingId: string | undefined;
+
+  if (req.mode === 'existing') {
+    const got = await connectionStore.get(req.id);
+    if (!got.ok) {
+      return { ok: false, error: { code: got.error.code, message: got.error.message } };
+    }
+    const conn = got.data;
+    const secret = await secretsManager.get(conn.secretRef);
+    if (!secret.ok) {
+      return {
+        ok: false,
+        error: { code: secret.error.code, message: secret.error.message },
+      };
+    }
+    provider = conn.provider;
+    host = conn.host;
+    authMethod = conn.authMethod;
+    existingId = conn.id;
+    if (conn.provider === 'jira' && conn.authMethod === 'api-token') {
+      // Stored as "email\ntoken" — split on the first newline.
+      const value = secret.data.plaintext;
+      const nl = value.indexOf('\n');
+      if (nl < 0) {
+        return {
+          ok: false,
+          error: {
+            code: 'INVALID_SECRET',
+            message: 'stored Jira secret is missing the email\\ntoken split',
+          },
+        };
+      }
+      email = value.slice(0, nl);
+      plaintextToken = value.slice(nl + 1);
+    } else {
+      plaintextToken = secret.data.plaintext;
+    }
+  } else {
+    provider = req.provider;
+    host = req.host;
+    authMethod = req.authMethod;
+    plaintextToken = req.plaintextToken;
+    if (req.email !== undefined) {
+      email = req.email;
+    }
+  }
+
+  const httpClient = new FetchHttpClient();
+
+  if (provider === 'github') {
+    const client = new GithubClient({
+      httpClient,
+      host,
+      auth: { token: plaintextToken },
+    });
+    const res = await client.testConnection();
+    if (!res.ok) {
+      // Only an explicit HTTP 401 invalidates a stored connection's
+      // verified state. 403/network/5xx leave the cached "verified" bit
+      // alone — the token may still be valid, this call just couldn't
+      // confirm it.
+      if (
+        existingId !== undefined &&
+        res.error.code === 'AUTH' &&
+        res.error.status === 401
+      ) {
+        await connectionStore.markVerificationFailed(existingId);
+      }
+      return { ok: false, error: { code: res.error.code, message: res.error.message } };
+    }
+    const identity: ConnectionIdentity = {
+      kind: 'github',
+      login: res.data.login,
+      ...(res.data.name !== undefined ? { name: res.data.name } : {}),
+      scopes: res.data.scopes,
+    };
+    const verifiedAt = Date.now();
+    if (existingId !== undefined) {
+      await connectionStore.recordVerification(existingId, identity);
+    }
+    return { ok: true, data: { identity, verifiedAt } };
+  }
+
+  if (provider === 'jira') {
+    if (authMethod === 'api-token' && (email === undefined || email === '')) {
+      return {
+        ok: false,
+        error: { code: 'AUTH', message: 'Jira api-token connections require an email' },
+      };
+    }
+    const client = new JiraClient({
+      httpClient,
+      host,
+      auth: { email: email ?? '', apiToken: plaintextToken },
+    });
+    const res = await client.testConnection();
+    if (!res.ok) {
+      if (
+        existingId !== undefined &&
+        res.error.code === 'AUTH' &&
+        res.error.status === 401
+      ) {
+        await connectionStore.markVerificationFailed(existingId);
+      }
+      return { ok: false, error: { code: res.error.code, message: res.error.message } };
+    }
+    const identity: ConnectionIdentity = {
+      kind: 'jira',
+      accountId: res.data.accountId,
+      displayName: res.data.displayName,
+      ...(res.data.emailAddress !== ''
+        ? { emailAddress: res.data.emailAddress }
+        : {}),
+    };
+    const verifiedAt = Date.now();
+    if (existingId !== undefined) {
+      await connectionStore.recordVerification(existingId, identity);
+    }
+    return { ok: true, data: { identity, verifiedAt } };
+  }
+
+  // Bitbucket — placeholder.
+  return {
+    ok: false,
+    error: {
+      code: 'NOT_IMPLEMENTED',
+      message: 'Bitbucket connections are not yet supported',
+    },
+  };
+}
+
 /** Generic "manager not initialized" failure — surfaces a clear error to the renderer. */
 function notInitialized<T>(name: string): IpcResult<T> {
   return {
@@ -606,6 +888,112 @@ function registerIpcHandlers(): void {
         return notInitialized('SecretsManager');
       }
       return secretsManager.list();
+    },
+  );
+
+  // -- Connections (issue #24) ----------------------------------------------
+
+  ipcMain.handle(
+    IPC_CHANNELS.CONNECTIONS_LIST,
+    async (): Promise<IpcResult<Connection[]>> => {
+      if (connectionStore === null) {
+        return notInitialized('ConnectionStore');
+      }
+      return connectionStore.list();
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.CONNECTIONS_GET,
+    async (_event, raw): Promise<IpcResult<Connection>> => {
+      const validated = validateIdRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (connectionStore === null) {
+        return notInitialized('ConnectionStore');
+      }
+      return connectionStore.get(validated.data.id);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.CONNECTIONS_CREATE,
+    async (_event, raw): Promise<IpcResult<Connection>> => {
+      const validated = validateConnectionsCreateRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (connectionStore === null) {
+        return notInitialized('ConnectionStore');
+      }
+      const result = await connectionStore.create(validated.data.input);
+      if (!result.ok) {
+        return { ok: false, error: { code: result.error.code, message: result.error.message } };
+      }
+      return { ok: true, data: result.data };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.CONNECTIONS_UPDATE,
+    async (_event, raw): Promise<IpcResult<Connection>> => {
+      const validated = validateConnectionsUpdateRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (connectionStore === null) {
+        return notInitialized('ConnectionStore');
+      }
+      const result = await connectionStore.update(validated.data.id, validated.data.input);
+      if (!result.ok) {
+        return { ok: false, error: { code: result.error.code, message: result.error.message } };
+      }
+      return { ok: true, data: result.data };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.CONNECTIONS_DELETE,
+    async (_event, raw): Promise<IpcResult<{ id: string }>> => {
+      const validated = validateIdRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (connectionStore === null) {
+        return notInitialized('ConnectionStore');
+      }
+      const result = await connectionStore.delete(validated.data.id);
+      if (!result.ok) {
+        // Forward `details` (e.g. `{ referencedBy: string[] }` for IN_USE)
+        // so the renderer can surface the blocking project IDs. The
+        // `IpcResult` error type is intentionally narrow; we attach the
+        // optional `details` via a structural cast so the renderer can
+        // read it defensively without committing to a richer contract.
+        const error: { code: string; message: string; details?: unknown } = {
+          code: result.error.code,
+          message: result.error.message,
+        };
+        if (result.error.details !== undefined) {
+          error.details = result.error.details;
+        }
+        return { ok: false, error: error as { code: string; message: string } };
+      }
+      return { ok: true, data: result.data };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.CONNECTIONS_TEST,
+    async (_event, raw): Promise<IpcResult<ConnectionsTestResponse>> => {
+      const validated = validateConnectionsTestRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (connectionStore === null || secretsManager === null) {
+        return notInitialized('ConnectionStore');
+      }
+      return runConnectionTest(validated.data);
     },
   );
 
@@ -876,6 +1264,26 @@ async function initStores(): Promise<void> {
       return;
     }
     secretsManager = secrets;
+
+    // -- Connection store (issue #24) --
+    // Independent of the project store / poller — it just needs the
+    // SecretsManager to set/cascade the connection's token. The
+    // `getReferencingProjectIds` callback returns [] for now; #25 wires
+    // projects' connection refs through here.
+    const connections = new ConnectionStore({
+      filePath: join(userData, 'connections.json'),
+      secretsManager: secrets,
+      getReferencingProjectIds: async () => [],
+    });
+    const connectionsInit = await connections.init();
+    if (!connectionsInit.ok) {
+      console.error(
+        `[main] ConnectionStore init failed: ${connectionsInit.error.code} - ${connectionsInit.error.message}`,
+      );
+      // Leave connectionStore null — handlers surface NOT_INITIALIZED.
+    } else {
+      connectionStore = connections;
+    }
 
     const store = new ProjectStore({
       filePath: join(userData, 'projects.json'),

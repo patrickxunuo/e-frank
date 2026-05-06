@@ -1,13 +1,28 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; style-src 'self' 'unsafe-inline' https://api.fontshare.com https://fonts.bunny.net; font-src 'self' https://api.fontshare.com https://cdn.fontshare.com https://fonts.bunny.net; img-src 'self' data:; connect-src 'self';"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://api.fontshare.com https://fonts.bunny.net; font-src 'self' https://api.fontshare.com https://cdn.fontshare.com https://fonts.bunny.net; img-src 'self' data:; connect-src 'self';"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>e-frank</title>
+    <script>
+      // Pre-React paint guard: read the persisted theme synchronously so the
+      // first frame matches the user's last choice. Defaults to dark (the
+      // attribute already on <html> handles that case implicitly).
+      (function () {
+        try {
+          var t = localStorage.getItem('ef.theme');
+          if (t === 'light' || t === 'dark') {
+            document.documentElement.setAttribute('data-theme', t);
+          }
+        } catch (e) {
+          /* localStorage unavailable — keep the default attribute. */
+        }
+      })();
+    </script>
     <link rel="preconnect" href="https://api.fontshare.com" crossorigin />
     <link rel="preconnect" href="https://fonts.bunny.net" crossorigin />
     <link

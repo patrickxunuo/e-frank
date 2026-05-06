@@ -58,6 +58,19 @@ export function IconProjects({ size = 18, ...rest }: IconProps): JSX.Element {
   );
 }
 
+export function IconKey({ size = 18, ...rest }: IconProps): JSX.Element {
+  // Stylized key — bow + bit, drawn in the same stroke style as IconProjects/
+  // IconSettings. Used for the Connections nav row.
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <circle cx="8" cy="14" r="3.5" />
+      <path d="m11 12 8-8" />
+      <path d="m15 8 3 3" />
+      <path d="m17 6 2 2" />
+    </svg>
+  );
+}
+
 export function IconSettings({ size = 18, ...rest }: IconProps): JSX.Element {
   return (
     <svg {...baseProps(size)} {...rest}>
@@ -229,6 +242,38 @@ export function IconPullRequest({ size = 18, ...rest }: IconProps): JSX.Element 
       <path d="M6 8v8" />
       <path d="M11 6h5a2 2 0 0 1 2 2v8" />
       <path d="m14 9 4-3-4-3" />
+    </svg>
+  );
+}
+
+export function IconSun({ size = 16, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2" />
+      <path d="M12 20v2" />
+      <path d="m4.93 4.93 1.41 1.41" />
+      <path d="m17.66 17.66 1.41 1.41" />
+      <path d="M2 12h2" />
+      <path d="M20 12h2" />
+      <path d="m4.93 19.07 1.41-1.41" />
+      <path d="m17.66 6.34 1.41-1.41" />
+    </svg>
+  );
+}
+
+export function IconMoon({ size = 16, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+    </svg>
+  );
+}
+
+export function IconChevronDown({ size = 12, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <path d="m6 9 6 6 6-6" />
     </svg>
   );
 }

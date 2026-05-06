@@ -30,5 +30,5 @@
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-3);
-  background: rgba(255, 255, 255, 0.015);
+  background: var(--surface-overlay-subtle);
 }

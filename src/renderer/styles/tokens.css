@@ -1,9 +1,43 @@
 /*
- * Design tokens — the only source of truth for color, space, type, motion.
- * All component CSS modules MUST consume these via var(--name); never hard-code.
+ * Design tokens. Two scopes:
+ *   :root[data-theme='dark']   — dark palette (refined from the prior single :root set)
+ *   :root[data-theme='light']  — light palette
+ *
+ * App.tsx writes data-theme to <html> on mount via useTheme(). The hard
+ * default for first-launch users is 'dark' (set in index.html so the
+ * pre-React paint doesn't flash light).
  */
 
 :root {
+  /* Spacing (theme-agnostic) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* Radii (theme-agnostic) */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* Transitions (theme-agnostic) */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+
+  /* Typography (theme-agnostic) */
+  --font-display: 'General Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-body: 'General Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+:root[data-theme='dark'] {
   /* Surfaces */
   --bg-app: #0e0f13;
   --bg-sidebar: #14161c;
@@ -19,7 +53,7 @@
   --accent-hover: #6b91ff;
   --accent-press: #3a64da;
   --accent-deep: #2c4ea0;
-  --accent-soft: rgba(77, 124, 255, 0.12);
+  --accent-soft: rgba(77, 124, 255, 0.16);
   --accent-border: rgba(77, 124, 255, 0.32);
   --success: #4ad98a;
   --success-soft: rgba(74, 217, 138, 0.14);
@@ -31,40 +65,100 @@
   /* Text */
   --text-primary: #ecedf1;
   --text-secondary: #8a8f99;
-  --text-tertiary: #5b606b;
+  --text-tertiary: #6b7180;
   --text-on-accent: #ffffff;
 
-  /* Spacing */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-  --space-7: 48px;
-  --space-8: 64px;
+  /* Surface overlays — used for hover / active surface fills, dividers, scrim. */
+  --surface-overlay-subtle: rgba(255, 255, 255, 0.025);
+  --surface-overlay-low: rgba(255, 255, 255, 0.04);
+  --surface-overlay-mid: rgba(255, 255, 255, 0.08);
+  --surface-overlay-strong: rgba(255, 255, 255, 0.14);
 
-  /* Radii */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-pill: 999px;
+  /* Status borders + extras (0.30-ish opacity, used as 1px borders on tinted backgrounds) */
+  --accent-soft-strong: rgba(77, 124, 255, 0.24);
+  --accent-glow: rgba(77, 124, 255, 0.55);
+  --success-border: rgba(74, 217, 138, 0.30);
+  --warning-border: rgba(240, 185, 92, 0.30);
+  --danger-border: rgba(240, 111, 111, 0.30);
+  --danger-soft-strong: rgba(240, 111, 111, 0.22);
+
+  /* Scrim used over content to highlight modal dialogs. */
+  --bg-scrim: rgba(7, 8, 11, 0.7);
+
+  /* Translucent backdrops for sticky / blurred surfaces. */
+  --bg-header-from: rgba(20, 22, 28, 0.85);
+  --bg-header-to: rgba(14, 15, 19, 0.85);
+  --bg-panel-from: rgba(35, 39, 50, 0.92);
+  --bg-panel-to: rgba(26, 29, 36, 0.92);
 
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.45);
-  --shadow-glow-accent: 0 0 0 1px rgba(77, 124, 255, 0.4), 0 8px 24px rgba(77, 124, 255, 0.18);
-
-  /* Transitions */
-  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
-  --duration-fast: 120ms;
-  --duration-base: 200ms;
-
-  /* Typography */
-  --font-display: 'General Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-body: 'General Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --shadow-strong: 0 20px 60px -20px rgba(0, 0, 0, 0.7);
+  --shadow-glow-accent: 0 0 0 2px rgba(77, 124, 255, 0.55), 0 8px 24px rgba(77, 124, 255, 0.22);
 
   color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  /* Surfaces */
+  --bg-app: #ffffff;
+  --bg-sidebar: #f5f6f8;
+  --bg-card: #ffffff;
+  --bg-card-elevated: #ffffff;
+  --bg-input: #ffffff;
+  --border-subtle: rgba(15, 17, 23, 0.06);
+  --border-default: rgba(15, 17, 23, 0.12);
+  --border-emphasis: rgba(15, 17, 23, 0.22);
+
+  /* Brand & status */
+  --accent: #3a6ae8;
+  --accent-hover: #2c54bf;
+  --accent-press: #21449d;
+  --accent-deep: #182f6c;
+  --accent-soft: rgba(58, 106, 232, 0.1);
+  --accent-border: rgba(58, 106, 232, 0.3);
+  --success: #138a4f;
+  --success-soft: rgba(19, 138, 79, 0.1);
+  --warning: #b67514;
+  --warning-soft: rgba(182, 117, 20, 0.12);
+  --danger: #c83232;
+  --danger-soft: rgba(200, 50, 50, 0.1);
+
+  /* Text */
+  --text-primary: #0e0f13;
+  --text-secondary: #4a4f59;
+  --text-tertiary: #8a8f99;
+  --text-on-accent: #ffffff;
+
+  /* Surface overlays — light theme uses tinted dark overlays. */
+  --surface-overlay-subtle: rgba(15, 17, 23, 0.02);
+  --surface-overlay-low: rgba(15, 17, 23, 0.04);
+  --surface-overlay-mid: rgba(15, 17, 23, 0.06);
+  --surface-overlay-strong: rgba(15, 17, 23, 0.10);
+
+  /* Status borders + extras */
+  --accent-soft-strong: rgba(58, 106, 232, 0.20);
+  --accent-glow: rgba(58, 106, 232, 0.45);
+  --success-border: rgba(19, 138, 79, 0.30);
+  --warning-border: rgba(182, 117, 20, 0.30);
+  --danger-border: rgba(200, 50, 50, 0.30);
+  --danger-soft-strong: rgba(200, 50, 50, 0.18);
+
+  /* Scrim used over content to highlight modal dialogs. */
+  --bg-scrim: rgba(15, 17, 23, 0.45);
+
+  /* Translucent backdrops for sticky / blurred surfaces. */
+  --bg-header-from: rgba(245, 246, 248, 0.92);
+  --bg-header-to: rgba(255, 255, 255, 0.85);
+  --bg-panel-from: rgba(255, 255, 255, 0.95);
+  --bg-panel-to: rgba(245, 246, 248, 0.92);
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(15, 17, 23, 0.06);
+  --shadow-md: 0 8px 24px rgba(15, 17, 23, 0.08);
+  --shadow-strong: 0 20px 60px -20px rgba(15, 17, 23, 0.18);
+  --shadow-glow-accent: 0 0 0 2px rgba(58, 106, 232, 0.4), 0 8px 24px rgba(58, 106, 232, 0.18);
+
+  color-scheme: light;
 }

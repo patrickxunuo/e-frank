@@ -27,7 +27,7 @@
   position: relative;
   width: 38px;
   height: 22px;
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--surface-overlay-mid);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-pill);
   transition:
@@ -40,7 +40,7 @@
 .row[data-checked='true'] .track {
   background: var(--accent);
   border-color: var(--accent);
-  box-shadow: 0 0 16px -4px rgba(77, 124, 255, 0.6);
+  box-shadow: 0 0 16px -4px var(--accent-glow);
 }
 
 .thumb {

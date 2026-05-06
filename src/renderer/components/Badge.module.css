@@ -14,37 +14,37 @@
 
 .idle {
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface-overlay-low);
   border-color: var(--border-default);
 }
 
 .running {
   color: var(--accent);
-  background: rgba(77, 124, 255, 0.14);
-  border-color: rgba(77, 124, 255, 0.3);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
 }
 
 .success {
   color: var(--success);
   background: var(--success-soft);
-  border-color: rgba(74, 217, 138, 0.3);
+  border-color: var(--success-border);
 }
 
 .warning {
   color: var(--warning);
   background: var(--warning-soft);
-  border-color: rgba(240, 185, 92, 0.3);
+  border-color: var(--warning-border);
 }
 
 .danger {
   color: var(--danger);
   background: var(--danger-soft);
-  border-color: rgba(240, 111, 111, 0.3);
+  border-color: var(--danger-border);
 }
 
 .neutral {
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface-overlay-low);
   border-color: var(--border-subtle);
 }
 
@@ -64,9 +64,9 @@
 @keyframes pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(77, 124, 255, 0.5);
+    box-shadow: 0 0 0 0 var(--accent-glow);
   }
   50% {
-    box-shadow: 0 0 0 5px rgba(77, 124, 255, 0);
+    box-shadow: 0 0 0 5px transparent;
   }
 }

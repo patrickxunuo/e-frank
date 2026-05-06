@@ -10,7 +10,7 @@
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
-  border: 1px solid rgba(240, 111, 111, 0.3);
+  border: 1px solid var(--danger-border);
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 13px;
@@ -77,7 +77,7 @@
 
 .modeCard[data-selected='true'] {
   border-color: var(--accent);
-  background: rgba(77, 124, 255, 0.08);
+  background: var(--accent-soft);
   box-shadow: var(--shadow-glow-accent);
 }
 
@@ -97,10 +97,10 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--accent);
-  background: rgba(77, 124, 255, 0.16);
+  background: var(--accent-soft);
   border-radius: var(--radius-pill);
   padding: 2px 8px;
-  border: 1px solid rgba(77, 124, 255, 0.3);
+  border: 1px solid var(--accent-border);
 }
 
 .modeDescription {
@@ -130,17 +130,17 @@
 .testPill[data-state='success'] {
   background: var(--success-soft);
   color: var(--success);
-  border: 1px solid rgba(74, 217, 138, 0.3);
+  border: 1px solid var(--success-border);
 }
 
 .testPill[data-state='error'] {
   background: var(--danger-soft);
   color: var(--danger);
-  border: 1px solid rgba(240, 111, 111, 0.3);
+  border: 1px solid var(--danger-border);
 }
 
 .testPill[data-state='loading'] {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface-overlay-low);
   color: var(--text-secondary);
   border: 1px solid var(--border-default);
 }

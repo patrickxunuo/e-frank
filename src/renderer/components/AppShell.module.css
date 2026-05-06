@@ -9,6 +9,11 @@
   position: relative;
   height: 100vh;
   overflow-y: auto;
+  /* Reserve space for the scrollbar so it doesn't flash in/out during
+   * row-enter animations on first paint. The gutter stays empty when
+   * content fits; the scrollbar slides into the same gutter when it
+   * doesn't — no layout shift either way. */
+  scrollbar-gutter: stable;
   padding: var(--space-7) var(--space-7) var(--space-7);
 }
 

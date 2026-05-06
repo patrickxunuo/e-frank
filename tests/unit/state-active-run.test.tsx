@@ -133,6 +133,14 @@ function installApi(opts: {
       onTicketsChanged: vi.fn<IpcApi['jira']['onTicketsChanged']>(() => () => {}),
       onError: vi.fn<IpcApi['jira']['onError']>(() => () => {}),
     },
+    connections: {
+      list: vi.fn() as unknown as IpcApi['connections']['list'],
+      get: vi.fn() as unknown as IpcApi['connections']['get'],
+      create: vi.fn() as unknown as IpcApi['connections']['create'],
+      update: vi.fn() as unknown as IpcApi['connections']['update'],
+      delete: vi.fn() as unknown as IpcApi['connections']['delete'],
+      test: vi.fn() as unknown as IpcApi['connections']['test'],
+    },
     // Cast so we can install `runs` even though IpcApi['runs'] is a typed
     // interface — Agent B is responsible for the schema, we just need the
     // runtime shape for the hook to call against.

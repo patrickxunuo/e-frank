@@ -43,6 +43,13 @@ import {
   type RunsReadLogResponse,
   type RunsCurrentChangedEvent,
   type RunStateEvent,
+  type Connection,
+  type ConnectionsGetRequest,
+  type ConnectionsCreateRequest,
+  type ConnectionsUpdateRequest,
+  type ConnectionsDeleteRequest,
+  type ConnectionsTestRequest,
+  type ConnectionsTestResponse,
 } from '../shared/ipc.js';
 
 const api: IpcApi = {
@@ -181,6 +188,30 @@ const api: IpcApi = {
         ipcRenderer.removeListener(IPC_CHANNELS.JIRA_ERROR, wrapped);
       };
     },
+  },
+
+  connections: {
+    list: (): Promise<IpcResult<Connection[]>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONNECTIONS_LIST) as Promise<IpcResult<Connection[]>>,
+
+    get: (req: ConnectionsGetRequest): Promise<IpcResult<Connection>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONNECTIONS_GET, req) as Promise<IpcResult<Connection>>,
+
+    create: (req: ConnectionsCreateRequest): Promise<IpcResult<Connection>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONNECTIONS_CREATE, req) as Promise<IpcResult<Connection>>,
+
+    update: (req: ConnectionsUpdateRequest): Promise<IpcResult<Connection>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONNECTIONS_UPDATE, req) as Promise<IpcResult<Connection>>,
+
+    delete: (req: ConnectionsDeleteRequest): Promise<IpcResult<{ id: string }>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONNECTIONS_DELETE, req) as Promise<
+        IpcResult<{ id: string }>
+      >,
+
+    test: (req: ConnectionsTestRequest): Promise<IpcResult<ConnectionsTestResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONNECTIONS_TEST, req) as Promise<
+        IpcResult<ConnectionsTestResponse>
+      >,
   },
 
   runs: {

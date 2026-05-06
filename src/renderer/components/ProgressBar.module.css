@@ -32,7 +32,7 @@
   position: relative;
   width: 100%;
   height: 6px;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--surface-overlay-low);
   border-radius: var(--radius-pill);
   overflow: hidden;
   border: 1px solid var(--border-subtle);
@@ -48,5 +48,5 @@
   );
   border-radius: var(--radius-pill);
   transition: width var(--duration-base) var(--ease-out);
-  box-shadow: 0 0 16px -2px rgba(77, 124, 255, 0.5);
+  box-shadow: 0 0 16px -2px var(--accent-glow);
 }

@@ -5,9 +5,9 @@ import {
   type ValidationError,
 } from '@shared/schema/project-instance.js';
 import { Button } from '../components/Button';
+import { Dropdown } from '../components/Dropdown';
 import { FormSection } from '../components/FormSection';
 import { Input } from '../components/Input';
-import { Select } from '../components/Select';
 import { Textarea } from '../components/Textarea';
 import {
   IconAlert,
@@ -270,18 +270,19 @@ export function AddProject({ onClose, onCreated }: AddProjectProps): JSX.Element
         data-testid="add-project-section-2"
       >
         <div className={styles.grid2}>
-          <Select
+          <Dropdown
             label="Repository Type"
             required
             value={form.repoType}
-            onChange={(e) => set('repoType', e.target.value as RepoType)}
+            onChange={(value) => set('repoType', value as RepoType)}
+            options={[
+              { value: 'github', label: 'GitHub' },
+              { value: 'bitbucket', label: 'Bitbucket' },
+            ]}
             error={fieldErrors.get('repo.type')}
             data-testid="field-repo-type"
             name="repoType"
-          >
-            <option value="github">GitHub</option>
-            <option value="bitbucket">Bitbucket</option>
-          </Select>
+          />
           <Input
             label="Base Branch"
             required
@@ -327,17 +328,16 @@ export function AddProject({ onClose, onCreated }: AddProjectProps): JSX.Element
         data-testid="add-project-section-3"
       >
         <div className={styles.grid2}>
-          <Select
+          <Dropdown
             label="Ticket Source Type"
             required
             value={form.ticketSource}
-            onChange={(e) => set('ticketSource', e.target.value as 'jira')}
+            onChange={(value) => set('ticketSource', value as 'jira')}
+            options={[{ value: 'jira', label: 'Jira' }]}
             error={fieldErrors.get('tickets.source')}
             data-testid="field-ticket-source"
             name="ticketSource"
-          >
-            <option value="jira">Jira</option>
-          </Select>
+          />
           <Input
             label="Jira Host"
             value={form.jiraHost}
