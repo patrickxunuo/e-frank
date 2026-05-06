@@ -437,7 +437,10 @@ describe('src/shared/schema/project-instance.ts', () => {
       expect(result.value.repo.connectionId).toBe('conn-gh-1');
       expect(result.value.repo.slug).toBe('gazhang/frontend-app');
       expect(result.value.tickets.connectionId).toBe('conn-jr-1');
-      expect(result.value.tickets.projectKey).toBe('PROJ');
+      // Narrow the discriminated union before reading jira-only fields.
+      if (result.value.tickets.source === 'jira') {
+        expect(result.value.tickets.projectKey).toBe('PROJ');
+      }
       // Old fields must NOT be present on the validated value.
       const repoUnknown = result.value.repo as unknown as Record<string, unknown>;
       const ticketsUnknown = result.value.tickets as unknown as Record<string, unknown>;
@@ -634,7 +637,158 @@ describe('src/shared/schema/project-instance.ts', () => {
       const result = validateProjectInstance(input);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.value.tickets.query).toBe('project = PROJ AND status = "Ready"');
+      if (result.value.tickets.source === 'jira') {
+        expect(result.value.tickets.query).toBe('project = PROJ AND status = "Ready"');
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GH-ISSUES-SCH-001..004 — issue #25 polish:
+  //   TICKET_SOURCES adds 'github-issues'.
+  //   TicketsConfig becomes a discriminated union by `source`.
+  //   The github-issues branch requires connectionId + repoSlug; `labels`
+  //   optional. The jira branch keeps existing rules.
+  // -------------------------------------------------------------------------
+  describe('GH-ISSUES-SCH-001 TICKET_SOURCES includes github-issues', () => {
+    it('GH-ISSUES-SCH-001: TICKET_SOURCES contains both jira and github-issues', () => {
+      expect(TICKET_SOURCES).toContain('jira');
+      expect(TICKET_SOURCES).toContain('github-issues');
+    });
+  });
+
+  describe('GH-ISSUES-SCH-002 jira branch validates as before', () => {
+    it('GH-ISSUES-SCH-002: jira branch with connectionId + projectKey → ok:true (regression)', () => {
+      const base = validFullProject();
+      const input = {
+        ...base,
+        tickets: {
+          source: 'jira',
+          connectionId: 'conn-jr-1',
+          projectKey: 'PROJ',
+        },
+      };
+      const result = validateProjectInstance(input);
+      expect(result.ok).toBe(true);
+    });
+
+    it('GH-ISSUES-SCH-002: jira branch missing projectKey still REQUIRED', () => {
+      const base = validFullProject();
+      const ticketsNoKey: Record<string, unknown> = {
+        source: 'jira',
+        connectionId: 'conn-jr-1',
+      };
+      const input = { ...base, tickets: ticketsNoKey };
+      const result = validateProjectInstance(input);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      const err = findError(result.errors, 'tickets.projectKey');
+      expect(err).toBeDefined();
+      expect(err?.code).toBe('REQUIRED');
+    });
+  });
+
+  describe('GH-ISSUES-SCH-003 github-issues branch requires connectionId + repoSlug', () => {
+    it('GH-ISSUES-SCH-003: github-issues with connectionId + repoSlug → ok:true', () => {
+      const base = validFullProject();
+      const input = {
+        ...base,
+        tickets: {
+          source: 'github-issues',
+          connectionId: 'conn-gh-1',
+          repoSlug: 'gazhang/foo',
+        },
+      };
+      const result = validateProjectInstance(input);
+      expect(result.ok).toBe(true);
+    });
+
+    it('GH-ISSUES-SCH-003: github-issues missing repoSlug → REQUIRED at tickets.repoSlug', () => {
+      const base = validFullProject();
+      const input = {
+        ...base,
+        tickets: {
+          source: 'github-issues',
+          connectionId: 'conn-gh-1',
+        },
+      };
+      const result = validateProjectInstance(input);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      const err = findError(result.errors, 'tickets.repoSlug');
+      expect(err).toBeDefined();
+      expect(err?.code).toBe('REQUIRED');
+    });
+
+    it('GH-ISSUES-SCH-003: github-issues missing connectionId → REQUIRED', () => {
+      const base = validFullProject();
+      const input = {
+        ...base,
+        tickets: {
+          source: 'github-issues',
+          repoSlug: 'gazhang/foo',
+        },
+      };
+      const result = validateProjectInstance(input);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      const err = findError(result.errors, 'tickets.connectionId');
+      expect(err).toBeDefined();
+      expect(err?.code).toBe('REQUIRED');
+    });
+  });
+
+  describe('GH-ISSUES-SCH-004 github-issues branch accepts optional labels', () => {
+    it('GH-ISSUES-SCH-004: github-issues with labels → ok:true', () => {
+      const base = validFullProject();
+      const input = {
+        ...base,
+        tickets: {
+          source: 'github-issues',
+          connectionId: 'conn-gh-1',
+          repoSlug: 'gazhang/foo',
+          labels: 'bug,priority/high',
+        },
+      };
+      const result = validateProjectInstance(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(
+        (result.value.tickets as unknown as Record<string, unknown>)['labels'],
+      ).toBe('bug,priority/high');
+    });
+
+    it('GH-ISSUES-SCH-004: github-issues without labels → ok:true (labels optional)', () => {
+      const base = validFullProject();
+      const input = {
+        ...base,
+        tickets: {
+          source: 'github-issues',
+          connectionId: 'conn-gh-1',
+          repoSlug: 'gazhang/foo',
+        },
+      };
+      const result = validateProjectInstance(input);
+      expect(result.ok).toBe(true);
+    });
+
+    it('GH-ISSUES-SCH-004: github-issues with empty `labels` → EMPTY (non-empty if present)', () => {
+      const base = validFullProject();
+      const input = {
+        ...base,
+        tickets: {
+          source: 'github-issues',
+          connectionId: 'conn-gh-1',
+          repoSlug: 'gazhang/foo',
+          labels: '   ',
+        },
+      };
+      const result = validateProjectInstance(input);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      const err = findError(result.errors, 'tickets.labels');
+      expect(err).toBeDefined();
+      expect(err?.code).toBe('EMPTY');
     });
   });
 });

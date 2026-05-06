@@ -5,9 +5,11 @@ import { useEffect } from 'react';
 import {
   useConnectionRepos,
   useConnectionJiraProjects,
+  useConnectionBranches,
   __resetConnectionResourceCaches,
   type RepoSummary,
   type JiraProjectSummary,
+  type BranchSummary,
 } from '../../src/renderer/state/connection-resources';
 import type { IpcApi, IpcResult } from '../../src/shared/ipc';
 
@@ -168,6 +170,9 @@ function installApi(opts?: {
       onCurrentChanged: vi.fn(() => () => {}),
       onStateChanged: vi.fn(() => () => {}),
     } as unknown as IpcApi['runs'],
+    dialog: {
+      selectFolder: vi.fn() as unknown as IpcApi['dialog']['selectFolder'],
+    },
   };
 
   (window as { api?: IpcApi }).api = api;
@@ -389,5 +394,313 @@ describe('useConnectionRepos / useConnectionJiraProjects — CONN-RES-HOOK', () 
     });
     expect(cap.latest?.error).not.toBeNull();
     expect(cap.latest?.data).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// BRANCH-005 — useConnectionBranches (issue #25 polish)
+//
+// Same idle-when-null + per-session cache contract as the other two hooks,
+// but keyed by `${connectionId}::${slug}`. The hook accepts a nullable
+// connectionId AND nullable slug — null on either ⇒ idle.
+//
+// Cache key is `${connectionId}::${slug}` so two different repos under the
+// same connection get separate cache entries.
+//
+// `refresh()` clears the cache entry for the CURRENT (connId, slug) tuple
+// and re-fetches.
+// ===========================================================================
+
+interface BranchesApiStub {
+  api: IpcApi;
+  listBranches: Mock;
+}
+
+function installBranchesApi(opts?: {
+  listBranchesResult?: IpcResult<{
+    branches: Array<{ name: string; protected: boolean }>;
+  }>;
+}): BranchesApiStub {
+  const unusedErr = (): IpcResult<never> => ({
+    ok: false,
+    error: { code: 'NOT_USED_IN_FE_TESTS', message: '' },
+  });
+
+  const listBranches = vi.fn().mockResolvedValue(
+    opts?.listBranchesResult ?? {
+      ok: true,
+      data: {
+        branches: [
+          { name: 'main', protected: true },
+          { name: 'develop', protected: false },
+          { name: 'feature/xyz', protected: false },
+        ],
+      },
+    },
+  );
+
+  const api: IpcApi = {
+    ping: vi.fn<IpcApi['ping']>().mockResolvedValue({ reply: 'pong', receivedAt: 0 }),
+    claude: {
+      run: vi.fn<IpcApi['claude']['run']>().mockResolvedValue(unusedErr()),
+      cancel: vi.fn<IpcApi['claude']['cancel']>().mockResolvedValue(unusedErr()),
+      write: vi.fn<IpcApi['claude']['write']>().mockResolvedValue(unusedErr()),
+      status: vi
+        .fn<IpcApi['claude']['status']>()
+        .mockResolvedValue({ ok: true, data: { active: null } }),
+      onOutput: vi.fn<IpcApi['claude']['onOutput']>(() => () => {}),
+      onExit: vi.fn<IpcApi['claude']['onExit']>(() => () => {}),
+    },
+    projects: {
+      list: vi.fn<IpcApi['projects']['list']>().mockResolvedValue({ ok: true, data: [] }),
+      get: vi.fn<IpcApi['projects']['get']>().mockResolvedValue(unusedErr()),
+      create: vi.fn<IpcApi['projects']['create']>().mockResolvedValue(unusedErr()),
+      update: vi.fn<IpcApi['projects']['update']>().mockResolvedValue(unusedErr()),
+      delete: vi.fn<IpcApi['projects']['delete']>().mockResolvedValue(unusedErr()),
+    },
+    secrets: {
+      set: vi.fn<IpcApi['secrets']['set']>().mockResolvedValue(unusedErr()),
+      get: vi.fn<IpcApi['secrets']['get']>().mockResolvedValue(unusedErr()),
+      delete: vi.fn<IpcApi['secrets']['delete']>().mockResolvedValue(unusedErr()),
+      list: vi.fn<IpcApi['secrets']['list']>().mockResolvedValue(unusedErr()),
+    },
+    jira: {
+      list: vi.fn<IpcApi['jira']['list']>().mockResolvedValue(unusedErr()),
+      refresh: vi.fn<IpcApi['jira']['refresh']>().mockResolvedValue(unusedErr()),
+      testConnection: vi.fn<IpcApi['jira']['testConnection']>().mockResolvedValue(unusedErr()),
+      refreshPollers: vi.fn<IpcApi['jira']['refreshPollers']>().mockResolvedValue(unusedErr()),
+      onTicketsChanged: vi.fn<IpcApi['jira']['onTicketsChanged']>(() => () => {}),
+      onError: vi.fn<IpcApi['jira']['onError']>(() => () => {}),
+    },
+    connections: {
+      list: vi.fn().mockResolvedValue({ ok: true, data: [] }),
+      get: vi.fn().mockResolvedValue(unusedErr()),
+      create: vi.fn().mockResolvedValue(unusedErr()),
+      update: vi.fn().mockResolvedValue(unusedErr()),
+      delete: vi.fn().mockResolvedValue(unusedErr()),
+      test: vi.fn().mockResolvedValue(unusedErr()),
+      listRepos: vi.fn().mockResolvedValue(unusedErr()),
+      listJiraProjects: vi.fn().mockResolvedValue(unusedErr()),
+      listBranches,
+    } as unknown as IpcApi['connections'],
+    runs: {
+      start: vi.fn().mockResolvedValue(unusedErr()),
+      cancel: vi.fn().mockResolvedValue(unusedErr()),
+      approve: vi.fn().mockResolvedValue(unusedErr()),
+      reject: vi.fn().mockResolvedValue(unusedErr()),
+      modify: vi.fn().mockResolvedValue(unusedErr()),
+      current: vi.fn().mockResolvedValue({ ok: true, data: { run: null } }),
+      listHistory: vi.fn().mockResolvedValue(unusedErr()),
+      readLog: vi.fn().mockResolvedValue({ ok: true, data: { entries: [] } }),
+      onCurrentChanged: vi.fn(() => () => {}),
+      onStateChanged: vi.fn(() => () => {}),
+    } as unknown as IpcApi['runs'],
+    dialog: {
+      selectFolder: vi.fn() as unknown as IpcApi['dialog']['selectFolder'],
+    },
+  };
+
+  (window as { api?: IpcApi }).api = api;
+  return { api, listBranches };
+}
+
+function BranchesConsumer({
+  connectionId,
+  slug,
+  capture,
+}: {
+  connectionId: string | null;
+  slug: string | null;
+  capture: CapturedHook<BranchSummary>;
+}): null {
+  const value = useConnectionBranches(connectionId, slug);
+  useEffect(() => {
+    capture.latest = value;
+    capture.history.push(value);
+  }, [value, capture]);
+  return null;
+}
+
+describe('useConnectionBranches — BRANCH-005', () => {
+  it('BRANCH-005: connectionId === null → idle (no IPC call), data empty', async () => {
+    const stub = installBranchesApi();
+    const cap: CapturedHook<BranchSummary> = { latest: null, history: [] };
+
+    render(<BranchesConsumer connectionId={null} slug="gazhang/foo" capture={cap} />);
+
+    await waitFor(() => {
+      expect(cap.latest).not.toBeNull();
+    });
+    expect(cap.latest?.loading).toBe(false);
+    expect(cap.latest?.data).toEqual([]);
+    expect(cap.latest?.error).toBeNull();
+    expect(stub.listBranches).not.toHaveBeenCalled();
+  });
+
+  it('BRANCH-005: slug === null → idle (no IPC call)', async () => {
+    const stub = installBranchesApi();
+    const cap: CapturedHook<BranchSummary> = { latest: null, history: [] };
+
+    render(<BranchesConsumer connectionId="conn-gh-1" slug={null} capture={cap} />);
+
+    await waitFor(() => {
+      expect(cap.latest).not.toBeNull();
+    });
+    expect(cap.latest?.loading).toBe(false);
+    expect(stub.listBranches).not.toHaveBeenCalled();
+  });
+
+  it('BRANCH-005: both set → calls listBranches with { connectionId, slug }', async () => {
+    const stub = installBranchesApi();
+    const cap: CapturedHook<BranchSummary> = { latest: null, history: [] };
+
+    render(
+      <BranchesConsumer
+        connectionId="conn-gh-1"
+        slug="gazhang/foo"
+        capture={cap}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(stub.listBranches).toHaveBeenCalledTimes(1);
+    });
+    const callArg = stub.listBranches.mock.calls[0]?.[0];
+    expect(callArg).toEqual({ connectionId: 'conn-gh-1', slug: 'gazhang/foo' });
+  });
+
+  it('BRANCH-005: returns the branches array on success', async () => {
+    installBranchesApi();
+    const cap: CapturedHook<BranchSummary> = { latest: null, history: [] };
+
+    render(
+      <BranchesConsumer
+        connectionId="conn-gh-1"
+        slug="gazhang/foo"
+        capture={cap}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(cap.latest?.loading).toBe(false);
+    });
+    expect(cap.latest?.data).toHaveLength(3);
+    expect(cap.latest?.data.map((b) => b.name)).toEqual([
+      'main',
+      'develop',
+      'feature/xyz',
+    ]);
+  });
+
+  it('BRANCH-005: cache keyed by `${connectionId}::${slug}` — same key short-circuits', async () => {
+    const stub = installBranchesApi();
+    const capA: CapturedHook<BranchSummary> = { latest: null, history: [] };
+    const capB: CapturedHook<BranchSummary> = { latest: null, history: [] };
+
+    const a = render(
+      <BranchesConsumer
+        connectionId="conn-gh-1"
+        slug="gazhang/foo"
+        capture={capA}
+      />,
+    );
+    await waitFor(() => {
+      expect(stub.listBranches).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(capA.latest?.loading).toBe(false);
+    });
+    a.unmount();
+
+    // Mount a second consumer with the SAME (connId, slug) tuple — cache hit.
+    render(
+      <BranchesConsumer
+        connectionId="conn-gh-1"
+        slug="gazhang/foo"
+        capture={capB}
+      />,
+    );
+    await waitFor(() => {
+      expect(capB.latest).not.toBeNull();
+    });
+    await waitFor(() => {
+      expect(capB.latest?.data).toHaveLength(3);
+    });
+    expect(stub.listBranches).toHaveBeenCalledTimes(1);
+  });
+
+  it('BRANCH-005: different slug under same connection → SEPARATE cache entry (re-fetches)', async () => {
+    const stub = installBranchesApi();
+    const capA: CapturedHook<BranchSummary> = { latest: null, history: [] };
+    const capB: CapturedHook<BranchSummary> = { latest: null, history: [] };
+
+    const a = render(
+      <BranchesConsumer
+        connectionId="conn-gh-1"
+        slug="gazhang/foo"
+        capture={capA}
+      />,
+    );
+    await waitFor(() => {
+      expect(stub.listBranches).toHaveBeenCalledTimes(1);
+    });
+    a.unmount();
+
+    render(
+      <BranchesConsumer
+        connectionId="conn-gh-1"
+        slug="gazhang/other-repo"
+        capture={capB}
+      />,
+    );
+    // The DIFFERENT slug must produce a fresh fetch.
+    await waitFor(() => {
+      expect(stub.listBranches).toHaveBeenCalledTimes(2);
+    });
+    const calls = stub.listBranches.mock.calls;
+    expect(calls[0]?.[0]).toEqual({ connectionId: 'conn-gh-1', slug: 'gazhang/foo' });
+    expect(calls[1]?.[0]).toEqual({
+      connectionId: 'conn-gh-1',
+      slug: 'gazhang/other-repo',
+    });
+  });
+
+  it('BRANCH-005: refresh() clears the cache entry and re-calls listBranches', async () => {
+    const stub = installBranchesApi();
+    const cap: CapturedHook<BranchSummary> = { latest: null, history: [] };
+
+    render(
+      <BranchesConsumer
+        connectionId="conn-gh-1"
+        slug="gazhang/foo"
+        capture={cap}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(stub.listBranches).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(cap.latest?.loading).toBe(false);
+    });
+
+    stub.listBranches.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        branches: [{ name: 'main', protected: true }],
+      },
+    });
+
+    await act(async () => {
+      await cap.latest?.refresh();
+    });
+
+    await waitFor(() => {
+      expect(stub.listBranches).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(cap.latest?.data).toHaveLength(1);
+    });
+    expect(cap.latest?.data[0]?.name).toBe('main');
   });
 });

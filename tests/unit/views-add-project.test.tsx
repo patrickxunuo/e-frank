@@ -40,6 +40,7 @@ interface ApiStub {
   connectionsList: ReturnType<typeof vi.fn>;
   listRepos: ReturnType<typeof vi.fn>;
   listJiraProjects: ReturnType<typeof vi.fn>;
+  listBranches: ReturnType<typeof vi.fn>;
   projectsCreate: ReturnType<typeof vi.fn>;
   projectsUpdate: ReturnType<typeof vi.fn>;
 }
@@ -112,12 +113,22 @@ function makeProject(id: string, name: string): ProjectInstanceDto {
   };
 }
 
+const branchesPayload = {
+  branches: [
+    { name: 'main', protected: true },
+    { name: 'develop', protected: false },
+    { name: 'feature/xyz', protected: false },
+  ],
+};
+
 function installApi(opts?: {
   connections?: Connection[];
   listReposResult?: IpcResult<typeof reposPayload>;
   listJiraProjectsResult?: IpcResult<typeof jiraProjectsPayload>;
+  listBranchesResult?: IpcResult<typeof branchesPayload>;
   projectsCreateResult?: IpcResult<ProjectInstanceDto>;
   projectsUpdateResult?: IpcResult<ProjectInstanceDto>;
+  selectFolderResult?: IpcResult<{ path: string | null }>;
 }): ApiStub {
   const unusedErr = (): IpcResult<never> => ({
     ok: false,
@@ -136,6 +147,14 @@ function installApi(opts?: {
     .mockResolvedValue(
       opts?.listJiraProjectsResult ?? { ok: true, data: jiraProjectsPayload },
     );
+  const listBranches = vi
+    .fn()
+    .mockResolvedValue(
+      opts?.listBranchesResult ?? { ok: true, data: branchesPayload },
+    );
+  const selectFolder = vi.fn().mockResolvedValue(
+    opts?.selectFolderResult ?? { ok: true, data: { path: '/picked/path' } },
+  );
   const projectsCreate = vi.fn().mockResolvedValue(
     opts?.projectsCreateResult ?? {
       ok: true,
@@ -193,7 +212,11 @@ function installApi(opts?: {
       test: vi.fn().mockResolvedValue(unusedErr()),
       listRepos,
       listJiraProjects,
+      listBranches,
     } as unknown as IpcApi['connections'],
+    // Folder picker — installed unconditionally so tests that don't care
+    // about it don't crash if the AddProject view eagerly looks for it.
+    dialog: { selectFolder } as unknown as IpcApi['dialog'],
     runs: {
       start: vi.fn().mockResolvedValue(unusedErr()),
       cancel: vi.fn().mockResolvedValue(unusedErr()),
@@ -214,6 +237,7 @@ function installApi(opts?: {
     connectionsList,
     listRepos,
     listJiraProjects,
+    listBranches,
     projectsCreate,
     projectsUpdate,
   };
@@ -241,12 +265,20 @@ async function fillValidForm(): Promise<void> {
   fireEvent.change(screen.getByTestId('field-repo-connection'), {
     target: { value: ghConn.id },
   });
-  // Wait for the repo list IPC to resolve.
+  // Wait for the repo list IPC to resolve so the repo Dropdown's hidden
+  // <select> has the option for 'gazhang/frontend-app'. Without this the
+  // form-state set goes through but the seeding effect can race and clobber
+  // a downstream branch-set.
   await waitFor(() => {
     expect(screen.queryByTestId('field-repo-slug')).toBeInTheDocument();
   });
   fireEvent.change(screen.getByTestId('field-repo-slug'), {
     target: { value: 'gazhang/frontend-app' },
+  });
+  // Settle: the listBranches IPC fires after the repo is picked AND the
+  // seeding effect runs after listRepos data is in cache. Drain microtasks.
+  await waitFor(() => {
+    expect(screen.queryByTestId('field-repo-base-branch')).toBeInTheDocument();
   });
 
   fireEvent.change(screen.getByTestId('field-repo-local-path'), {
@@ -423,7 +455,9 @@ describe('<AddProject /> — ADD-PROJ', () => {
       expect(req.input.repo.connectionId).toBe(ghConn.id);
       expect(req.input.repo.slug).toBe('gazhang/frontend-app');
       expect(req.input.tickets.connectionId).toBe(jiraConn.id);
-      expect(req.input.tickets.projectKey).toBe('PROJ');
+      if (req.input.tickets.source === 'jira') {
+        expect(req.input.tickets.projectKey).toBe('PROJ');
+      }
       // Old credential fields must not be in the input.
       const repoUnknown = req.input.repo as unknown as Record<string, unknown>;
       const ticketsUnknown = req.input.tickets as unknown as Record<string, unknown>;
@@ -502,7 +536,9 @@ describe('<AddProject /> — ADD-PROJ', () => {
       });
 
       const req = stub.projectsCreate.mock.calls[0]?.[0] as ProjectsCreateRequest;
-      expect(req.input.tickets.query).toBe('project = PROJ AND status = "Ready for AI"');
+      if (req.input.tickets.source === 'jira') {
+        expect(req.input.tickets.query).toBe('project = PROJ AND status = "Ready for AI"');
+      }
     });
   });
 
@@ -623,6 +659,305 @@ describe('<AddProject /> — ADD-PROJ', () => {
 
       const req = stub.projectsCreate.mock.calls[0]?.[0] as ProjectsCreateRequest;
       expect(req.input.workflow.mode).toBe('yolo');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // BRANCH-006..008 — base-branch dropdown (issue #25 polish)
+  //
+  // Per spec:
+  //  - The Base Branch field becomes a `<Dropdown searchable>` populated
+  //    from `useConnectionBranches(repoConnectionId, repoSlug)`.
+  //  - Disabled until a repo is picked.
+  //  - Default selection: the picked repo's `defaultBranch` (from listRepos).
+  //  - Switching repos resets the branch to the new repo's default.
+  //  - testid `field-repo-base-branch` stays on the hidden select inside the
+  //    dropdown (so existing fireEvent.change tests keep working).
+  // -------------------------------------------------------------------------
+  describe('BRANCH-006..008 base-branch dropdown', () => {
+    it('BRANCH-006: base-branch dropdown disabled when no repo picked', async () => {
+      installApi();
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      // Pick the GitHub connection so the repo dropdown renders, but DON'T
+      // pick a repo yet. The base-branch field must be disabled.
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByTestId('field-repo-connection'), {
+        target: { value: ghConn.id },
+      });
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-slug')).toBeInTheDocument();
+      });
+
+      // The hidden <select> for base-branch is `disabled` when no repo picked.
+      const baseBranch = screen.getByTestId(
+        'field-repo-base-branch',
+      ) as HTMLSelectElement;
+      expect(baseBranch.disabled).toBe(true);
+    });
+
+    it('BRANCH-007: default branch selected from listRepos.defaultBranch when repo picked', async () => {
+      // First repo's defaultBranch is 'main' (from reposPayload above).
+      installApi();
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByTestId('field-repo-connection'), {
+        target: { value: ghConn.id },
+      });
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-slug')).toBeInTheDocument();
+      });
+
+      // Pick a repo whose defaultBranch is 'main'.
+      fireEvent.change(screen.getByTestId('field-repo-slug'), {
+        target: { value: 'gazhang/frontend-app' },
+      });
+
+      await waitFor(() => {
+        const el = screen.getByTestId(
+          'field-repo-base-branch',
+        ) as HTMLSelectElement;
+        expect(el.value).toBe('main');
+      });
+    });
+
+    it('BRANCH-008: switching repo resets the branch to the new repo default', async () => {
+      // backend-svc also has defaultBranch 'main' in our default fixture.
+      // To make this test observable, override listReposResult so the second
+      // repo has a DIFFERENT default branch.
+      installApi({
+        listReposResult: {
+          ok: true,
+          data: {
+            repos: [
+              { slug: 'gazhang/frontend-app', defaultBranch: 'main', private: true },
+              {
+                slug: 'gazhang/backend-svc',
+                defaultBranch: 'develop',
+                private: false,
+              },
+            ],
+          },
+        },
+      });
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByTestId('field-repo-connection'), {
+        target: { value: ghConn.id },
+      });
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-slug')).toBeInTheDocument();
+      });
+
+      // Pick first repo (default = 'main').
+      fireEvent.change(screen.getByTestId('field-repo-slug'), {
+        target: { value: 'gazhang/frontend-app' },
+      });
+      await waitFor(() => {
+        const el = screen.getByTestId(
+          'field-repo-base-branch',
+        ) as HTMLSelectElement;
+        expect(el.value).toBe('main');
+      });
+
+      // Switch to the second repo (default = 'develop'). Branch resets.
+      fireEvent.change(screen.getByTestId('field-repo-slug'), {
+        target: { value: 'gazhang/backend-svc' },
+      });
+      await waitFor(() => {
+        const el = screen.getByTestId(
+          'field-repo-base-branch',
+        ) as HTMLSelectElement;
+        expect(el.value).toBe('develop');
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GH-ISSUES-VIEW-001..004 — Tickets section provider awareness
+  //
+  // Spec:
+  //  - `field-tickets-source` dropdown (Jira / GitHub Issues). When this
+  //    flips between values, the Tickets connection picker filters by
+  //    provider ('github' for github-issues, 'jira' for jira).
+  //  - github-issues path: `field-tickets-repo-slug` shows up (instead of
+  //    `field-tickets-project-key`), pre-filled with the source repo's slug.
+  //  - Optional `field-ticket-labels` field (github-issues only).
+  //  - On submit, `tickets` payload uses the discriminated-union shape:
+  //      { source: 'github-issues', connectionId, repoSlug, labels? }
+  // -------------------------------------------------------------------------
+  describe('GH-ISSUES-VIEW-001..004 tickets source selector', () => {
+    it('GH-ISSUES-VIEW-001: AddProject Tickets section shows source dropdown', async () => {
+      installApi();
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-tickets-source')).toBeInTheDocument();
+      });
+      const el = screen.getByTestId('field-tickets-source') as HTMLSelectElement;
+      expect(el.tagName.toLowerCase()).toBe('select');
+    });
+
+    it('GH-ISSUES-VIEW-002: picking github-issues source filters connection picker to provider==="github"', async () => {
+      installApi();
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-tickets-source')).toBeInTheDocument();
+      });
+
+      // Default source is 'jira'. Switch to github-issues.
+      fireEvent.change(screen.getByTestId('field-tickets-source'), {
+        target: { value: 'github-issues' },
+      });
+
+      // Tickets connection picker now has only github-provider connections
+      // available. We assert by attempting to set the Jira connection id —
+      // the underlying <select> won't accept a value not in <options>, so
+      // the rendered value should NOT match jiraConn.id.
+      await waitFor(() => {
+        const conn = screen.getByTestId(
+          'field-tickets-connection',
+        ) as HTMLSelectElement;
+        const opts = Array.from(conn.options).map((o) => o.value);
+        expect(opts).toContain(ghConn.id);
+        expect(opts).not.toContain(jiraConn.id);
+      });
+    });
+
+    it('GH-ISSUES-VIEW-003: github-issues source shows repo picker pre-filled with source repo slug', async () => {
+      installApi();
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      // Pick the source repo first so the source slug is known.
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByTestId('field-repo-connection'), {
+        target: { value: ghConn.id },
+      });
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-slug')).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByTestId('field-repo-slug'), {
+        target: { value: 'gazhang/frontend-app' },
+      });
+
+      // Switch tickets source to github-issues.
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-tickets-source')).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByTestId('field-tickets-source'), {
+        target: { value: 'github-issues' },
+      });
+
+      // Pick the github connection on the tickets side.
+      await waitFor(() => {
+        const conn = screen.getByTestId(
+          'field-tickets-connection',
+        ) as HTMLSelectElement;
+        // Pre-selected to the only available github connection OR user picks.
+        if (conn.value !== ghConn.id) {
+          fireEvent.change(conn, { target: { value: ghConn.id } });
+        }
+      });
+
+      // The new picker — `field-tickets-repo-slug` — appears, and its value
+      // pre-fills with the source repo's slug.
+      await waitFor(() => {
+        const el = screen.getByTestId(
+          'field-tickets-repo-slug',
+        ) as HTMLSelectElement;
+        expect(el.value).toBe('gazhang/frontend-app');
+      });
+    });
+
+    it('GH-ISSUES-VIEW-004: submit builds the github-issues TicketsConfig shape', async () => {
+      const stub = installApi();
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      // Fill the source repo
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-name')).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByTestId('field-name'), {
+        target: { value: 'My Project' },
+      });
+      fireEvent.change(screen.getByTestId('field-repo-connection'), {
+        target: { value: ghConn.id },
+      });
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-slug')).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByTestId('field-repo-slug'), {
+        target: { value: 'gazhang/frontend-app' },
+      });
+      fireEvent.change(screen.getByTestId('field-repo-local-path'), {
+        target: { value: '/abs/path/repo' },
+      });
+      // Base branch is now a Dropdown — the hidden select still accepts a
+      // change event with one of the rendered options.
+      fireEvent.change(screen.getByTestId('field-repo-base-branch'), {
+        target: { value: 'main' },
+      });
+
+      // Switch tickets source to github-issues.
+      fireEvent.change(screen.getByTestId('field-tickets-source'), {
+        target: { value: 'github-issues' },
+      });
+
+      // Pick the GH tickets connection (same connection as source).
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-tickets-connection')).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByTestId('field-tickets-connection'), {
+        target: { value: ghConn.id },
+      });
+
+      // Repo slug for tickets — pre-filled but we set it explicitly.
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-tickets-repo-slug')).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByTestId('field-tickets-repo-slug'), {
+        target: { value: 'gazhang/frontend-app' },
+      });
+
+      // Optional labels.
+      const labels = screen.queryByTestId('field-ticket-labels');
+      if (labels) {
+        fireEvent.change(labels, { target: { value: 'bug,priority/high' } });
+      }
+
+      fireEvent.change(screen.getByTestId('field-branch-format'), {
+        target: { value: 'feature/{ticketKey}' },
+      });
+
+      fireEvent.click(screen.getByTestId('add-project-submit'));
+
+      await waitFor(() => {
+        expect(stub.projectsCreate).toHaveBeenCalled();
+      });
+
+      const req = stub.projectsCreate.mock.calls[0]?.[0] as ProjectsCreateRequest;
+      const tickets = req.input.tickets as unknown as Record<string, unknown>;
+      expect(tickets['source']).toBe('github-issues');
+      expect(tickets['connectionId']).toBe(ghConn.id);
+      expect(tickets['repoSlug']).toBe('gazhang/frontend-app');
+      // jira-only fields must NOT leak into the github-issues branch.
+      expect(tickets['projectKey']).toBeUndefined();
+      expect(tickets['query']).toBeUndefined();
+      // Labels: present iff the input was rendered.
+      if (labels) {
+        expect(tickets['labels']).toBe('bug,priority/high');
+      }
     });
   });
 });

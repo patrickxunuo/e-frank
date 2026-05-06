@@ -67,6 +67,10 @@ function ticketIconFor(source: ProjectInstanceDto['tickets']['source']): JSX.Ele
   switch (source) {
     case 'jira':
       return <IconJira />;
+    case 'github-issues':
+      // No dedicated GitHub Issues icon yet — fall through to the generic
+      // ticket icon (Jira). The label below disambiguates.
+      return <IconJira />;
     default:
       return <IconJira />;
   }
@@ -76,18 +80,23 @@ function ticketLabelFor(source: ProjectInstanceDto['tickets']['source']): string
   switch (source) {
     case 'jira':
       return 'Jira';
+    case 'github-issues':
+      return 'GitHub Issues';
     default:
       return source;
   }
 }
 
 /**
- * Returns the ticket-source identifier for the row. As of #25, this is
- * `tickets.projectKey` directly; pre-#25 records are migrated by the
- * schema break in the same PR so we never see a `query`-only record.
+ * Returns the ticket-source identifier for the row. The polish bundle
+ * widens `tickets` to a discriminated union — Jira projects show the
+ * `projectKey`, GitHub Issues projects show the `repoSlug`.
  */
-function ticketSourceLabel(projectKey: string): string {
-  return projectKey || 'Jira';
+function ticketSourceLabel(tickets: ProjectInstanceDto['tickets']): string {
+  if (tickets.source === 'jira') {
+    return tickets.projectKey || 'Jira';
+  }
+  return tickets.repoSlug || 'GitHub Issues';
 }
 
 function basenameOf(p: string): string {
@@ -144,7 +153,7 @@ export function ProjectList({
           <span className={styles.providerBadge}>{ticketIconFor(row.tickets.source)}</span>
           <div className={styles.cellText}>
             <span className={styles.cellPrimary}>{ticketLabelFor(row.tickets.source)}</span>
-            <span className={styles.cellSecondary}>{ticketSourceLabel(row.tickets.projectKey)}</span>
+            <span className={styles.cellSecondary}>{ticketSourceLabel(row.tickets)}</span>
           </div>
         </div>
       ),

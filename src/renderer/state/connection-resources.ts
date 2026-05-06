@@ -31,6 +31,11 @@ export interface JiraProjectSummary {
   name: string;
 }
 
+export interface BranchSummary {
+  name: string;
+  protected: boolean;
+}
+
 export interface UseConnectionResourceState<T> {
   data: ReadonlyArray<T>;
   loading: boolean;
@@ -45,6 +50,9 @@ const BRIDGE_UNAVAILABLE = 'IPC bridge unavailable';
 // instances share them.
 const repoCache = new Map<string, ReadonlyArray<RepoSummary>>();
 const jiraProjectCache = new Map<string, ReadonlyArray<JiraProjectSummary>>();
+// Branches: keyed by `${connectionId}::${slug}` so the same connection can
+// cache branches for several repos in parallel.
+const branchCache = new Map<string, ReadonlyArray<BranchSummary>>();
 
 interface FetchCtx<T> {
   cache: Map<string, ReadonlyArray<T>>;
@@ -197,8 +205,72 @@ export function useConnectionJiraProjects(
   return useConnectionResource(connectionId, ctxRef.current);
 }
 
+/**
+ * `useConnectionBranches` reads branches for a specific repo through a
+ * github connection. Idle when EITHER `connectionId` or `slug` is null —
+ * the repo picker can be empty for a long time before the user picks one.
+ *
+ * Cache key: `${connectionId}::${slug}` so multiple repos under the same
+ * connection cache independently.
+ */
+export function useConnectionBranches(
+  connectionId: string | null,
+  slug: string | null,
+): UseConnectionResourceState<BranchSummary> {
+  // Combine the two-part key into one string so we can reuse the generic
+  // `useConnectionResource` hook (which keys by a single id internally).
+  const combinedKey =
+    connectionId !== null && slug !== null && slug !== ''
+      ? `${connectionId}::${slug}`
+      : null;
+  const connectionIdRef = useRef<string | null>(connectionId);
+  connectionIdRef.current = connectionId;
+  const slugRef = useRef<string | null>(slug);
+  slugRef.current = slug;
+
+  const ctxRef = useRef<FetchCtx<BranchSummary>>();
+  if (!ctxRef.current) {
+    ctxRef.current = {
+      cache: branchCache,
+      fetcher: async (key: string) => {
+        // Recover (connectionId, slug) from the combined key. The split is
+        // unambiguous because connection ids never contain `::` (they're
+        // `conn-<8 hex>` or similar).
+        const sep = key.indexOf('::');
+        if (sep < 0) {
+          return { ok: false, message: 'invalid branch cache key' };
+        }
+        const connId = key.slice(0, sep);
+        const repoSlug = key.slice(sep + 2);
+        if (typeof window === 'undefined' || !window.api) {
+          return { ok: false, message: BRIDGE_UNAVAILABLE };
+        }
+        try {
+          const result = await window.api.connections.listBranches({
+            connectionId: connId,
+            slug: repoSlug,
+          });
+          if (result.ok) {
+            return { ok: true, data: result.data.branches };
+          }
+          return {
+            ok: false,
+            message:
+              result.error.message || result.error.code || 'Failed to list branches',
+          };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return { ok: false, message };
+        }
+      },
+    };
+  }
+  return useConnectionResource(combinedKey, ctxRef.current);
+}
+
 /** Test-only: clear the per-session caches between vitest cases. */
 export function __resetConnectionResourceCaches(): void {
   repoCache.clear();
   jiraProjectCache.clear();
+  branchCache.clear();
 }

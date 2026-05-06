@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
@@ -40,6 +40,10 @@ import {
   type ConnectionsListReposResponse,
   type ConnectionsListJiraProjectsRequest,
   type ConnectionsListJiraProjectsResponse,
+  type ConnectionsListBranchesRequest,
+  type ConnectionsListBranchesResponse,
+  type DialogSelectFolderRequest,
+  type DialogSelectFolderResponse,
 } from '../shared/ipc.js';
 import type { Run, RunStateEvent, RunMode, RunLogEntry } from '../shared/schema/run.js';
 import type {
@@ -63,10 +67,10 @@ import { JiraClient } from './modules/jira-client.js';
 import { GithubClient } from './modules/github-client.js';
 import { RunHistory } from './modules/run-history.js';
 import {
-  JiraPoller,
+  TicketPoller,
   type PollerErrorEvent,
   type TicketsChangedEvent,
-} from './modules/jira-poller.js';
+} from './modules/ticket-poller.js';
 import { RunStore } from './modules/run-store.js';
 import { RunLogStore } from './modules/run-log-store.js';
 import { StubGitManager } from './modules/git-manager.js';
@@ -88,7 +92,7 @@ let secretsManager: SecretsManager | null = null;
 let projectStore: ProjectStore | null = null;
 let connectionStore: ConnectionStore | null = null;
 let runHistory: RunHistory | null = null;
-let jiraPoller: JiraPoller | null = null;
+let jiraPoller: TicketPoller | null = null;
 let runStore: RunStore | null = null;
 let runLogStore: RunLogStore | null = null;
 let workflowRunner: WorkflowRunner | null = null;
@@ -474,6 +478,71 @@ function validateConnectionsListJiraProjectsRequest(
     };
   }
   return { ok: true, data: { connectionId: raw['connectionId'] } };
+}
+
+function validateConnectionsListBranchesRequest(
+  raw: unknown,
+): IpcResult<ConnectionsListBranchesRequest> {
+  if (
+    !isPlainObject(raw) ||
+    typeof raw['connectionId'] !== 'string' ||
+    typeof raw['slug'] !== 'string'
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_REQUEST',
+        message: 'connectionId and slug must be strings',
+      },
+    };
+  }
+  return {
+    ok: true,
+    data: { connectionId: raw['connectionId'], slug: raw['slug'] },
+  };
+}
+
+function validateDialogSelectFolderRequest(
+  raw: unknown,
+): IpcResult<DialogSelectFolderRequest> {
+  // Both fields are optional. The renderer can pass an empty object.
+  if (raw === undefined || raw === null) {
+    return { ok: true, data: {} };
+  }
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'request must be an object' },
+    };
+  }
+  const out: DialogSelectFolderRequest = {};
+  const dp = raw['defaultPath'];
+  if (dp !== undefined) {
+    if (typeof dp !== 'string') {
+      return {
+        ok: false,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'defaultPath must be a string if present',
+        },
+      };
+    }
+    out.defaultPath = dp;
+  }
+  const t = raw['title'];
+  if (t !== undefined) {
+    if (typeof t !== 'string') {
+      return {
+        ok: false,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'title must be a string if present',
+        },
+      };
+    }
+    out.title = t;
+  }
+  return { ok: true, data: out };
 }
 
 function validateConnectionsTestRequest(
@@ -1079,6 +1148,87 @@ function registerIpcHandlers(): void {
   );
 
   ipcMain.handle(
+    IPC_CHANNELS.CONNECTIONS_LIST_BRANCHES,
+    async (_event, raw): Promise<IpcResult<ConnectionsListBranchesResponse>> => {
+      const validated = validateConnectionsListBranchesRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (connectionStore === null || secretsManager === null) {
+        return notInitialized('ConnectionStore');
+      }
+      const got = await connectionStore.get(validated.data.connectionId);
+      if (!got.ok) {
+        return { ok: false, error: { code: got.error.code, message: got.error.message } };
+      }
+      const conn = got.data;
+      if (conn.provider !== 'github') {
+        return {
+          ok: false,
+          error: {
+            code: 'INVALID_PROVIDER',
+            message: 'connection provider mismatch',
+          },
+        };
+      }
+      const secret = await secretsManager.get(conn.secretRef);
+      if (!secret.ok) {
+        return {
+          ok: false,
+          error: { code: secret.error.code, message: secret.error.message },
+        };
+      }
+      const client = new GithubClient({
+        httpClient: new FetchHttpClient(),
+        host: conn.host,
+        auth: { token: secret.data.plaintext },
+      });
+      const res = await client.listBranches(validated.data.slug);
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return {
+        ok: true,
+        data: {
+          branches: res.data.map((b) => ({ name: b.name, protected: b.protected })),
+        },
+      };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.DIALOG_SELECT_FOLDER,
+    async (_event, raw): Promise<IpcResult<DialogSelectFolderResponse>> => {
+      const validated = validateDialogSelectFolderRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      try {
+        // Anchor the dialog to the focused window when possible so the
+        // sheet sits over our app on macOS instead of floating loose.
+        const parent = BrowserWindow.getFocusedWindow() ?? mainWindow;
+        const opts: Electron.OpenDialogOptions = {
+          properties: ['openDirectory', 'createDirectory'],
+        };
+        if (validated.data.title !== undefined) opts.title = validated.data.title;
+        if (validated.data.defaultPath !== undefined)
+          opts.defaultPath = validated.data.defaultPath;
+        const result =
+          parent !== null
+            ? await dialog.showOpenDialog(parent, opts)
+            : await dialog.showOpenDialog(opts);
+        if (result.canceled || result.filePaths.length === 0) {
+          return { ok: true, data: { path: null } };
+        }
+        return { ok: true, data: { path: result.filePaths[0] ?? null } };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: { code: 'IO_FAILURE', message } };
+      }
+    },
+  );
+
+  ipcMain.handle(
     IPC_CHANNELS.CONNECTIONS_LIST_JIRA_PROJECTS,
     async (
       _event,
@@ -1441,15 +1591,24 @@ async function initStores(): Promise<void> {
     });
     const storeInit = await store.init();
     if (!storeInit.ok) {
-
       console.error(
         `[main] ProjectStore init failed: ${storeInit.error.code} - ${storeInit.error.message}`,
       );
-      // Leave projectStore null so handlers return NOT_INITIALIZED — the
-      // file is corrupt or unsupported and we shouldn't silently overwrite.
-      return;
+      // We DO NOT `return` here anymore. Bailing out left every other IPC
+      // handler unregistered (renderer would error on Connections, runs,
+      // claude:* — anything downstream). Now we leave `projectStore`
+      // null so projects:* handlers surface NOT_INITIALIZED, but the rest
+      // of the app keeps wiring. The store also auto-archives an
+      // incompatible projects file inside init() — so this branch only
+      // hits on a hard IO failure (couldn't rename, etc.).
+    } else {
+      projectStore = store;
+      if (storeInit.data.recoveredFrom !== undefined) {
+        console.warn(
+          `[main] ProjectStore recovered from incompatible file; archive at "${storeInit.data.recoveredFrom}"`,
+        );
+      }
     }
-    projectStore = store;
 
     const history = new RunHistory({
       filePath: join(userData, 'run-history.json'),
@@ -1466,7 +1625,7 @@ async function initStores(): Promise<void> {
     }
     runHistory = history;
 
-    const poller = new JiraPoller({
+    const poller = new TicketPoller({
       projectStore: store,
       connectionStore: connections,
       secretsManager: secrets,

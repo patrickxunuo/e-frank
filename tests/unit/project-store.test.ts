@@ -231,23 +231,65 @@ describe('ProjectStore', () => {
       expect(ids).toContain(b.id);
     });
 
-    it('PS-003: init() with invalid JSON → FILE_CORRUPT', async () => {
+    it('PS-003: init() with invalid JSON → recovers (archives + empty store + recoveredFrom path)', async () => {
       fs.files.set(FILE_PATH, '{ this is { not valid json');
       const result = await store.init();
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.error.code).toBe('FILE_CORRUPT');
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data.count).toBe(0);
+      expect(result.data.recoveredFrom).toBeDefined();
+      expect(result.data.recoveredFrom).toMatch(/projects\.json\.bak-/);
+      // Original file is gone from the live path (renamed to the backup).
+      expect(fs.files.has(FILE_PATH)).toBe(false);
+      // Backup exists at the recoveredFrom path.
+      expect(fs.files.has(result.data.recoveredFrom!)).toBe(true);
     });
 
-    it('PS-004: init() with schemaVersion 99 → UNSUPPORTED_SCHEMA_VERSION', async () => {
+    it('PS-004: init() with schemaVersion 99 → recovers (archives + empty store)', async () => {
       fs.files.set(
         FILE_PATH,
         JSON.stringify({ schemaVersion: 99, projects: [] }),
       );
       const result = await store.init();
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.error.code).toBe('UNSUPPORTED_SCHEMA_VERSION');
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data.count).toBe(0);
+      expect(result.data.recoveredFrom).toBeDefined();
+    });
+
+    it('PS-004b: init() with old-schema project (host/email/tokenRef) → recovers', async () => {
+      // The pre-#25 schema had `repo.host`, `tickets.host/email/tokenRef`.
+      // The new validator rejects those as drift; init recovers gracefully.
+      const oldStyleProject = {
+        id: 'p-1',
+        name: 'Old',
+        repo: {
+          type: 'github',
+          localPath: '/abs/repo',
+          baseBranch: 'main',
+          host: 'github.com',
+          tokenRef: 'old-ref',
+        },
+        tickets: {
+          source: 'jira',
+          query: 'project = ABC',
+          host: 'https://x.atlassian.net',
+          email: 'me@x.com',
+          tokenRef: 'old-jira',
+        },
+        workflow: { mode: 'interactive', branchFormat: 'feature/{ticketKey}-{slug}' },
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      fs.files.set(
+        FILE_PATH,
+        JSON.stringify({ schemaVersion: 1, projects: [oldStyleProject] }),
+      );
+      const result = await store.init();
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data.count).toBe(0);
+      expect(result.data.recoveredFrom).toBeDefined();
     });
   });
 
@@ -437,7 +479,9 @@ describe('ProjectStore', () => {
       expect(p.repo.connectionId).toBe('conn-gh-1');
       expect(p.repo.slug).toBe('gazhang/frontend-app');
       expect(p.tickets.connectionId).toBe('conn-jr-1');
-      expect(p.tickets.projectKey).toBe('PROJ');
+      if (p.tickets.source === 'jira') {
+        expect(p.tickets.projectKey).toBe('PROJ');
+      }
       // Removed fields must not be present.
       const repoUnknown = p.repo as unknown as Record<string, unknown>;
       const ticketsUnknown = p.tickets as unknown as Record<string, unknown>;

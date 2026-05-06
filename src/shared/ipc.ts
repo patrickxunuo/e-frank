@@ -110,6 +110,9 @@ export const IPC_CHANNELS = {
   // -- Connection-driven resource pickers (issue #25) --
   CONNECTIONS_LIST_REPOS: 'connections:list-repos',
   CONNECTIONS_LIST_JIRA_PROJECTS: 'connections:list-jira-projects',
+  // -- Polish bundle: branches picker + folder picker (project-pickers-polish) --
+  CONNECTIONS_LIST_BRANCHES: 'connections:list-branches',
+  DIALOG_SELECT_FOLDER: 'dialog:select-folder',
   // -- Workflow Runner (issue #7) --
   RUNS_START: 'runs:start',
   RUNS_CANCEL: 'runs:cancel',
@@ -372,6 +375,28 @@ export interface ConnectionsListJiraProjectsResponse {
   projects: Array<{ key: string; name: string }>;
 }
 
+export interface ConnectionsListBranchesRequest {
+  connectionId: string;
+  /** Repo slug, e.g. "owner/name". */
+  slug: string;
+}
+export interface ConnectionsListBranchesResponse {
+  branches: Array<{ name: string; protected: boolean }>;
+}
+
+// -- Folder picker (Electron native dialog) ----------------------------------
+
+export interface DialogSelectFolderRequest {
+  /** Optional starting directory; falls back to OS default. */
+  defaultPath?: string;
+  /** Window title for the OS dialog. */
+  title?: string;
+}
+export interface DialogSelectFolderResponse {
+  /** `null` when the user cancels. */
+  path: string | null;
+}
+
 /**
  * Discriminated-union result returned over IPC. `code` is a string (rather
  * than a literal-union of manager error codes) to keep the renderer
@@ -431,6 +456,14 @@ export interface IpcApi {
     listJiraProjects: (
       req: ConnectionsListJiraProjectsRequest,
     ) => Promise<IpcResult<ConnectionsListJiraProjectsResponse>>;
+    listBranches: (
+      req: ConnectionsListBranchesRequest,
+    ) => Promise<IpcResult<ConnectionsListBranchesResponse>>;
+  };
+  dialog: {
+    selectFolder: (
+      req: DialogSelectFolderRequest,
+    ) => Promise<IpcResult<DialogSelectFolderResponse>>;
   };
   runs: {
     start: (req: RunsStartRequest) => Promise<IpcResult<RunsStartResponse>>;

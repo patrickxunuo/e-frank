@@ -42,6 +42,10 @@ type ConnectionsListReposResponse = import('../../src/shared/ipc').ConnectionsLi
 type ConnectionsListJiraProjectsRequest = import('../../src/shared/ipc').ConnectionsListJiraProjectsRequest;
 type ConnectionsListJiraProjectsResponse = import('../../src/shared/ipc').ConnectionsListJiraProjectsResponse;
 
+// Issue #25 polish: branch picker channel.
+type ConnectionsListBranchesRequest = import('../../src/shared/ipc').ConnectionsListBranchesRequest;
+type ConnectionsListBranchesResponse = import('../../src/shared/ipc').ConnectionsListBranchesResponse;
+
 describe('src/shared/ipc.ts — Connection model + Connections settings extension', () => {
   // -----------------------------------------------------------------
   // IPC-CONN-001 — channel-string contract
@@ -349,6 +353,52 @@ describe('src/shared/ipc.ts — Connection model + Connections settings extensio
       expectTypeOf<ProjEntry['key']>().toEqualTypeOf<string>();
       expectTypeOf<ProjEntry>().toHaveProperty('name');
       expectTypeOf<ProjEntry['name']>().toEqualTypeOf<string>();
+    });
+  });
+
+  // -----------------------------------------------------------------
+  // BRANCH-004 — issue #25 polish: list-branches channel + IpcApi shape
+  // -----------------------------------------------------------------
+  describe('BRANCH-004 listBranches channel + IpcApi shape', () => {
+    it('BRANCH-004: CONNECTIONS_LIST_BRANCHES === "connections:list-branches"', () => {
+      expect(IPC_CHANNELS.CONNECTIONS_LIST_BRANCHES).toBe(
+        'connections:list-branches',
+      );
+    });
+
+    it('BRANCH-004: CONNECTIONS_LIST_BRANCHES keeps its literal-string type (compile-time)', () => {
+      expectTypeOf(
+        IPC_CHANNELS.CONNECTIONS_LIST_BRANCHES,
+      ).toEqualTypeOf<'connections:list-branches'>();
+    });
+
+    it('BRANCH-004: CONNECTIONS_LIST_BRANCHES key is present on IPC_CHANNELS', () => {
+      expect(Object.keys(IPC_CHANNELS)).toContain('CONNECTIONS_LIST_BRANCHES');
+    });
+
+    it('BRANCH-004: IpcApi.connections.listBranches signature', () => {
+      expectTypeOf<IpcApi['connections']>().toHaveProperty('listBranches');
+      expectTypeOf<IpcApi['connections']['listBranches']>().toEqualTypeOf<
+        (
+          req: ConnectionsListBranchesRequest,
+        ) => Promise<IpcResult<ConnectionsListBranchesResponse>>
+      >();
+    });
+
+    it('BRANCH-004: ConnectionsListBranchesRequest carries `connectionId` + `slug` strings', () => {
+      expectTypeOf<ConnectionsListBranchesRequest>().toHaveProperty('connectionId');
+      expectTypeOf<ConnectionsListBranchesRequest['connectionId']>().toEqualTypeOf<string>();
+      expectTypeOf<ConnectionsListBranchesRequest>().toHaveProperty('slug');
+      expectTypeOf<ConnectionsListBranchesRequest['slug']>().toEqualTypeOf<string>();
+    });
+
+    it('BRANCH-004: ConnectionsListBranchesResponse.branches has name + protected', () => {
+      expectTypeOf<ConnectionsListBranchesResponse>().toHaveProperty('branches');
+      type BranchEntry = ConnectionsListBranchesResponse['branches'][number];
+      expectTypeOf<BranchEntry>().toHaveProperty('name');
+      expectTypeOf<BranchEntry['name']>().toEqualTypeOf<string>();
+      expectTypeOf<BranchEntry>().toHaveProperty('protected');
+      expectTypeOf<BranchEntry['protected']>().toEqualTypeOf<boolean>();
     });
   });
 });

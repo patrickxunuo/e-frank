@@ -184,6 +184,7 @@ function installApi(opts?: {
       test: vi.fn() as unknown as IpcApi['connections']['test'],
       listRepos: vi.fn() as unknown as IpcApi['connections']['listRepos'],
       listJiraProjects: vi.fn() as unknown as IpcApi['connections']['listJiraProjects'],
+      listBranches: vi.fn() as unknown as IpcApi['connections']['listBranches'],
     },
     runs: {
       start: vi.fn<IpcApi['runs']['start']>().mockResolvedValue(unusedErr()),
@@ -203,6 +204,9 @@ function installApi(opts?: {
       // on at runtime so legacy tests that don't care about it keep working.
       readLog: vi.fn().mockResolvedValue({ ok: true, data: { entries: [] } }),
     } as unknown as IpcApi['runs'],
+    dialog: {
+      selectFolder: vi.fn() as unknown as IpcApi['dialog']['selectFolder'],
+    },
   };
 
   (window as { api?: IpcApi }).api = api;

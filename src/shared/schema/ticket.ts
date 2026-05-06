@@ -89,3 +89,99 @@ export function ticketFromJiraIssue(input: unknown, host: string): Ticket | null
     url: `${host}/browse/${key}`,
   };
 }
+
+/**
+ * Tolerant mapping from a raw GitHub issue object (as returned by
+ * `/repos/{slug}/issues`) to a `Ticket`. Returns `null` for:
+ *   - non-objects
+ *   - PR-shaped issues (presence of `pull_request` field — GitHub's
+ *     `/issues` endpoint conflates issues and PRs)
+ *   - issues missing a numeric `number` or string `title`
+ *
+ * Mapping rules:
+ *   - `key`     = `${repoSlug}#${number}` (e.g. "gazhang/foo#123")
+ *   - `summary` = `title`
+ *   - `status`  = "Open" | "Closed" derived from `state`
+ *   - `priority`= derived from `priority/high|medium|low` labels (case-
+ *     insensitive). If multiple match, the first encountered wins; if none
+ *     match, falls back to "—" (em-dash).
+ *   - `assignee`= `assignee.login` if present, else `null`
+ *   - `updatedAt` = `updated_at` (ISO 8601)
+ *   - `url`     = `html_url`
+ */
+export function ticketFromGithubIssue(
+  input: unknown,
+  repoSlug: string,
+): Ticket | null {
+  if (!isPlainObject(input)) {
+    return null;
+  }
+  // GitHub returns PRs through `/issues` too — discriminator is the
+  // `pull_request` field. Filter them out unconditionally.
+  if (input['pull_request'] !== undefined) {
+    return null;
+  }
+
+  const numberRaw = input['number'];
+  if (typeof numberRaw !== 'number' || !Number.isFinite(numberRaw)) {
+    return null;
+  }
+  const titleRaw = input['title'];
+  if (typeof titleRaw !== 'string') {
+    return null;
+  }
+
+  const stateRaw = input['state'];
+  let status = 'Open';
+  if (stateRaw === 'closed') {
+    status = 'Closed';
+  } else if (stateRaw === 'open') {
+    status = 'Open';
+  }
+
+  // priority: scan labels for `priority/high|medium|low`. Labels can be
+  // either a string or a `{ name: string }` object — accept both shapes.
+  let priority = '—';
+  const labelsRaw = input['labels'];
+  if (Array.isArray(labelsRaw)) {
+    for (const lbl of labelsRaw) {
+      let labelName: string | null = null;
+      if (typeof lbl === 'string') {
+        labelName = lbl;
+      } else if (isPlainObject(lbl) && typeof lbl['name'] === 'string') {
+        labelName = lbl['name'] as string;
+      }
+      if (labelName === null) continue;
+      const m = /^priority\/(high|medium|low)$/i.exec(labelName);
+      if (m && m[1] !== undefined) {
+        const level = m[1].toLowerCase();
+        priority = level.charAt(0).toUpperCase() + level.slice(1);
+        break;
+      }
+    }
+  }
+
+  let assignee: string | null = null;
+  const assigneeRaw = input['assignee'];
+  if (
+    isPlainObject(assigneeRaw) &&
+    typeof assigneeRaw['login'] === 'string' &&
+    assigneeRaw['login'] !== ''
+  ) {
+    assignee = assigneeRaw['login'] as string;
+  }
+
+  const updatedAt =
+    typeof input['updated_at'] === 'string' ? (input['updated_at'] as string) : '';
+  const url = typeof input['html_url'] === 'string' ? (input['html_url'] as string) : '';
+
+  return {
+    key: `${repoSlug}#${numberRaw}`,
+    summary: titleRaw,
+    status,
+    priority,
+    assignee,
+    updatedAt,
+    url,
+  };
+}

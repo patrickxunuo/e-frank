@@ -119,6 +119,10 @@ function installApi(opts?: {
       test: vi.fn() as unknown as IpcApi['connections']['test'],
       listRepos: vi.fn() as unknown as IpcApi['connections']['listRepos'],
       listJiraProjects: vi.fn() as unknown as IpcApi['connections']['listJiraProjects'],
+      listBranches: vi.fn() as unknown as IpcApi['connections']['listBranches'],
+    },
+    dialog: {
+      selectFolder: vi.fn() as unknown as IpcApi['dialog']['selectFolder'],
     },
     runs: {
       start: vi.fn() as unknown as IpcApi['runs']['start'],

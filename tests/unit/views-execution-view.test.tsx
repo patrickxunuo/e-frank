@@ -193,6 +193,7 @@ function installApi(opts?: {
       test: vi.fn() as unknown as IpcApi['connections']['test'],
       listRepos: vi.fn() as unknown as IpcApi['connections']['listRepos'],
       listJiraProjects: vi.fn() as unknown as IpcApi['connections']['listJiraProjects'],
+      listBranches: vi.fn() as unknown as IpcApi['connections']['listBranches'],
     },
     runs: {
       start: vi.fn() as unknown as IpcApi['runs']['start'],
@@ -207,6 +208,9 @@ function installApi(opts?: {
       // `readLog` is patched via the unknown cast — Agent B owns the typed signature.
       readLog: runsReadLog,
     } as unknown as IpcApi['runs'],
+    dialog: {
+      selectFolder: vi.fn() as unknown as IpcApi['dialog']['selectFolder'],
+    },
   };
 
   (window as { api?: IpcApi }).api = api;

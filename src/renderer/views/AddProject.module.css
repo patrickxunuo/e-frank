@@ -81,3 +81,20 @@
   justify-content: flex-end;
   gap: var(--space-3);
 }
+
+/*
+ * Repository Path field + Browse button live on the same line. The Input
+ * carries its own label/hint, and the Browse button drops to align with
+ * the bottom of the input shell using a flex row + bottom alignment.
+ */
+.repoPathRow {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.repoPathRow > :global(.field),
+.repoPathRow > div:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}

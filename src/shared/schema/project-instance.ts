@@ -44,7 +44,7 @@ function pathIsAbsolute(p: string): boolean {
 export const REPO_TYPES = ['github', 'bitbucket'] as const;
 export type RepoType = (typeof REPO_TYPES)[number];
 
-export const TICKET_SOURCES = ['jira'] as const;
+export const TICKET_SOURCES = ['jira', 'github-issues'] as const;
 export type TicketSource = (typeof TICKET_SOURCES)[number];
 
 export const WORKFLOW_MODES = ['interactive', 'yolo'] as const;
@@ -63,17 +63,38 @@ export interface RepoConfig {
   slug: string;
 }
 
-export interface TicketsConfig {
-  source: TicketSource;
+/**
+ * `TicketsConfig` is a discriminated union on `source`. Each branch carries
+ * the fields the poller needs for that provider; field shapes intentionally
+ * differ (e.g. Jira has `projectKey` + `query`; GitHub Issues has `repoSlug`
+ * + `labels`).
+ */
+export type TicketsConfig = TicketsJiraConfig | TicketsGithubIssuesConfig;
+
+export interface TicketsJiraConfig {
+  source: 'jira';
+  /** ID of a Connection (provider === 'jira'). */
+  connectionId: string;
+  /** Jira project key (e.g. 'PROJ'). */
+  projectKey: string;
   /**
    * JQL override. Optional — when omitted, the poller defaults to
    * `project = "{projectKey}"`.
    */
   query?: string;
-  /** ID of a Connection (provider === source). */
+}
+
+export interface TicketsGithubIssuesConfig {
+  source: 'github-issues';
+  /** ID of a Connection (provider === 'github'). */
   connectionId: string;
-  /** Jira project key (e.g. 'PROJ'). */
-  projectKey: string;
+  /**
+   * Repo to read issues from. Defaults to the project's source repo
+   * (`repo.slug`) on first switch in the UI; user can override via the picker.
+   */
+  repoSlug: string;
+  /** Optional comma-separated label filter, matches GitHub's API. */
+  labels?: string;
 }
 
 export interface WorkflowConfig {
@@ -305,37 +326,92 @@ function validateTickets(
     joinPath(path, 'connectionId'),
     raw['connectionId'],
   );
-  const projectKey = checkString(errors, joinPath(path, 'projectKey'), raw['projectKey']);
 
-  // `query` is now OPTIONAL. If present, must be a non-empty string after trim.
-  let query: string | undefined;
-  const queryRaw = raw['query'];
-  if (queryRaw !== undefined && queryRaw !== null) {
-    if (typeof queryRaw !== 'string') {
-      errors.push({
-        path: joinPath(path, 'query'),
-        code: 'NOT_STRING',
-        message: `${joinPath(path, 'query')} must be a string`,
-      });
-    } else if (queryRaw.trim() === '') {
-      errors.push({
-        path: joinPath(path, 'query'),
-        code: 'EMPTY',
-        message: `${joinPath(path, 'query')} must not be empty`,
-      });
-    } else {
-      query = queryRaw;
+  // Dispatch on source for the per-provider field set. We still surface
+  // every per-field error (so the form can show all problems at once) but
+  // the assembled object only goes in the right shape on success.
+  if (source === 'jira') {
+    const projectKey = checkString(
+      errors,
+      joinPath(path, 'projectKey'),
+      raw['projectKey'],
+    );
+
+    // `query` is OPTIONAL. If present, must be a non-empty string after trim.
+    let query: string | undefined;
+    const queryRaw = raw['query'];
+    if (queryRaw !== undefined && queryRaw !== null) {
+      if (typeof queryRaw !== 'string') {
+        errors.push({
+          path: joinPath(path, 'query'),
+          code: 'NOT_STRING',
+          message: `${joinPath(path, 'query')} must be a string`,
+        });
+      } else if (queryRaw.trim() === '') {
+        errors.push({
+          path: joinPath(path, 'query'),
+          code: 'EMPTY',
+          message: `${joinPath(path, 'query')} must not be empty`,
+        });
+      } else {
+        query = queryRaw;
+      }
     }
+
+    if (connectionId === undefined || projectKey === undefined) {
+      return undefined;
+    }
+    const result: TicketsJiraConfig = { source: 'jira', connectionId, projectKey };
+    if (query !== undefined) {
+      result.query = query;
+    }
+    return result;
   }
 
-  if (source === undefined || connectionId === undefined || projectKey === undefined) {
-    return undefined;
+  if (source === 'github-issues') {
+    const repoSlug = checkString(
+      errors,
+      joinPath(path, 'repoSlug'),
+      raw['repoSlug'],
+    );
+
+    // `labels` is OPTIONAL. If present, must be a non-empty string after trim.
+    let labels: string | undefined;
+    const labelsRaw = raw['labels'];
+    if (labelsRaw !== undefined && labelsRaw !== null) {
+      if (typeof labelsRaw !== 'string') {
+        errors.push({
+          path: joinPath(path, 'labels'),
+          code: 'NOT_STRING',
+          message: `${joinPath(path, 'labels')} must be a string`,
+        });
+      } else if (labelsRaw.trim() === '') {
+        errors.push({
+          path: joinPath(path, 'labels'),
+          code: 'EMPTY',
+          message: `${joinPath(path, 'labels')} must not be empty`,
+        });
+      } else {
+        labels = labelsRaw;
+      }
+    }
+
+    if (connectionId === undefined || repoSlug === undefined) {
+      return undefined;
+    }
+    const result: TicketsGithubIssuesConfig = {
+      source: 'github-issues',
+      connectionId,
+      repoSlug,
+    };
+    if (labels !== undefined) {
+      result.labels = labels;
+    }
+    return result;
   }
-  const result: TicketsConfig = { source, connectionId, projectKey };
-  if (query !== undefined) {
-    result.query = query;
-  }
-  return result;
+
+  // Source was missing or invalid — checkEnum already pushed an error.
+  return undefined;
 }
 
 function validateWorkflow(

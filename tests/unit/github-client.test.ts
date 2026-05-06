@@ -367,4 +367,149 @@ describe('GithubClient', () => {
     if (r.ok) return;
     expect(r.error.code).toBe('INVALID_RESPONSE');
   });
+
+  // -------------------------------------------------------------------------
+  // BRANCH-001..003 — listBranches(slug) (issue #25 polish)
+  //
+  // Spec:
+  //   - URL: `${host}/repos/${slug}/branches?per_page=100`
+  //   - Returns array of `{ name: string; protected: boolean }`
+  //   - Same security rules: token never in error.message
+  //   - Same status mapping as listRepos / testConnection (401/403→AUTH, etc)
+  // -------------------------------------------------------------------------
+  describe('BRANCH-001..003 listBranches()', () => {
+    const SLUG = 'gazhang/foo';
+    const BRANCHES_URL_PREFIX = `${HOST}/repos/${SLUG}/branches`;
+
+    it('BRANCH-001: GETs `${host}/repos/{slug}/branches?per_page=100`', async () => {
+      http.expectPrefix('GET', BRANCHES_URL_PREFIX, jsonResp([]));
+
+      const r = await client.listBranches(SLUG);
+      expect(r.ok).toBe(true);
+
+      expect(http.calls).toHaveLength(1);
+      const url = http.calls[0]?.url ?? '';
+      expect(url.startsWith(BRANCHES_URL_PREFIX)).toBe(true);
+      expect(url).toContain('per_page=100');
+    });
+
+    it('BRANCH-001: every request carries the same Bearer auth + Accept + version headers', async () => {
+      http.expectPrefix('GET', BRANCHES_URL_PREFIX, jsonResp([]));
+      await client.listBranches(SLUG);
+
+      const headers = http.calls[0]?.headers ?? {};
+      const authH = Object.entries(headers).find(([k]) => k.toLowerCase() === 'authorization');
+      expect(authH?.[1]).toBe(`Bearer ${TOKEN}`);
+      const acceptH = Object.entries(headers).find(([k]) => k.toLowerCase() === 'accept');
+      expect(acceptH?.[1]).toBe('application/vnd.github+json');
+      const versionH = Object.entries(headers).find(
+        ([k]) => k.toLowerCase() === 'x-github-api-version',
+      );
+      expect(versionH?.[1]).toBe('2022-11-28');
+    });
+
+    it('BRANCH-002: 200 → array of `{ name, protected }` (only those two fields kept)', async () => {
+      const branches = [
+        { name: 'main', protected: true, commit: { sha: 'aaa' } },
+        { name: 'develop', protected: false, commit: { sha: 'bbb' } },
+        { name: 'feature/xyz', protected: false, commit: { sha: 'ccc' } },
+      ];
+      http.expectPrefix('GET', BRANCHES_URL_PREFIX, jsonResp(branches));
+
+      const r = await client.listBranches(SLUG);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data).toHaveLength(3);
+      expect(r.data[0]).toEqual({ name: 'main', protected: true });
+      expect(r.data[1]).toEqual({ name: 'develop', protected: false });
+      expect(r.data[2]).toEqual({ name: 'feature/xyz', protected: false });
+    });
+
+    it('BRANCH-002: malformed entries are dropped (not thrown)', async () => {
+      const branches = [
+        { name: 'main', protected: true },
+        { name: 42, protected: true }, // bad name type
+        { protected: true }, // missing name
+        { name: 'develop' /* missing protected */ },
+        'not-an-object',
+      ];
+      http.expectPrefix('GET', BRANCHES_URL_PREFIX, jsonResp(branches));
+
+      const r = await client.listBranches(SLUG);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      // Only the well-formed entry survives.
+      expect(r.data).toEqual([{ name: 'main', protected: true }]);
+    });
+
+    it('BRANCH-002: 401 → AUTH', async () => {
+      http.expectPrefix('GET', BRANCHES_URL_PREFIX, jsonResp({}, 401));
+      const r = await client.listBranches(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('AUTH');
+      expect(r.error.status).toBe(401);
+    });
+
+    it('BRANCH-002: 404 → NOT_FOUND', async () => {
+      http.expectPrefix('GET', BRANCHES_URL_PREFIX, jsonResp({}, 404));
+      const r = await client.listBranches(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('NOT_FOUND');
+    });
+
+    it('BRANCH-002: 500 → SERVER_ERROR', async () => {
+      http.expectPrefix('GET', BRANCHES_URL_PREFIX, jsonResp({}, 500));
+      const r = await client.listBranches(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('SERVER_ERROR');
+    });
+
+    it('BRANCH-003: token NEVER appears in error.message (401 echoing token)', async () => {
+      http.expectPrefix(
+        'GET',
+        BRANCHES_URL_PREFIX,
+        jsonResp({ message: `bad token: ${TOKEN}` }, 401),
+      );
+      const r = await client.listBranches(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(JSON.stringify(r)).not.toContain(TOKEN);
+    });
+
+    it('BRANCH-003: token NEVER appears in error.message (5xx with token in body)', async () => {
+      http.expectPrefix(
+        'GET',
+        BRANCHES_URL_PREFIX,
+        jsonResp({ detail: TOKEN }, 500),
+      );
+      const r = await client.listBranches(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(JSON.stringify(r)).not.toContain(TOKEN);
+    });
+
+    it('BRANCH-003: NETWORK error does NOT leak the token', async () => {
+      // Unmatched call → FakeHttpClient returns NETWORK
+      const r = await client.listBranches(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(JSON.stringify(r)).not.toContain(TOKEN);
+    });
+
+    it('BRANCH-003: malformed body containing the token does NOT leak it', async () => {
+      http.expectPrefix(
+        'GET',
+        BRANCHES_URL_PREFIX,
+        jsonResp(`garbage with ${TOKEN} embedded`, 200),
+      );
+      const r = await client.listBranches(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('INVALID_RESPONSE');
+      expect(JSON.stringify(r)).not.toContain(TOKEN);
+    });
+  });
 });

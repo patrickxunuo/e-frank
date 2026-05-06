@@ -173,6 +173,11 @@ function installApi(opts?: {
       delete: del,
       test,
     } as unknown as IpcApi['connections'],
+    dialog: {
+      selectFolder: vi
+        .fn()
+        .mockResolvedValue({ ok: true, data: { path: null } }),
+    } as unknown as IpcApi['dialog'],
   } as IpcApi;
 
   (window as { api?: IpcApi }).api = api;

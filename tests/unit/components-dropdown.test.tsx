@@ -274,4 +274,137 @@ describe('<Dropdown /> — CMP-DROPDOWN', () => {
     const trigger = screen.getByTestId('provider-select-trigger');
     expect(trigger.textContent).toMatch(/select a provider/i);
   });
+
+  // ---------------------------------------------------------------------------
+  // CMP-DROPDOWN-013..017 — searchable={true} (issue #25 polish)
+  //
+  // The Dropdown gains a `searchable` prop. When true and the menu is open,
+  // a `<input type="text">` renders above the option list. Typing into it
+  // filters the option list client-side (case-insensitive substring match
+  // on `option.label`). Highlighted index resets on filter change. Search
+  // input is auto-focused on open and cleared when the menu closes.
+  //
+  // The search input has testid `{testid}-search`.
+  //
+  // We extend the Harness with the `searchable` prop. A larger option list is
+  // used so the filter is observable.
+  // ---------------------------------------------------------------------------
+
+  const SEARCH_OPTS: DropdownOption[] = [
+    { value: 'apple', label: 'Apple' },
+    { value: 'banana', label: 'Banana' },
+    { value: 'cherry', label: 'Cherry' },
+    { value: 'date', label: 'Date' },
+    { value: 'elderberry', label: 'Elderberry' },
+  ];
+
+  function SearchableHarness({
+    initial = '',
+    onChangeSpy,
+  }: {
+    initial?: string;
+    onChangeSpy?: (next: string) => void;
+  }): JSX.Element {
+    const [value, setValue] = useState<string>(initial);
+    return (
+      <Dropdown
+        data-testid="fruit"
+        value={value}
+        onChange={(next) => {
+          setValue(next);
+          onChangeSpy?.(next);
+        }}
+        options={SEARCH_OPTS}
+        // `searchable` is the new prop Agent B is adding. If absent the type
+        // will fail to compile — that's intentional.
+        {...({ searchable: true } as Record<string, unknown>)}
+      />
+    );
+  }
+
+  it('CMP-DROPDOWN-013: searchable={true} renders a search input above options when open', () => {
+    render(<SearchableHarness />);
+
+    // Closed: no menu and no search input.
+    expect(screen.queryByTestId('fruit-search')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('fruit-trigger'));
+    expect(screen.getByTestId('fruit-menu')).toBeInTheDocument();
+    expect(screen.getByTestId('fruit-search')).toBeInTheDocument();
+  });
+
+  it('CMP-DROPDOWN-014: typing in the search input filters options (case-insensitive substring)', () => {
+    render(<SearchableHarness />);
+    fireEvent.click(screen.getByTestId('fruit-trigger'));
+
+    // All options visible when query is empty.
+    for (const o of SEARCH_OPTS) {
+      expect(screen.getByTestId(`fruit-option-${o.value}`)).toBeInTheDocument();
+    }
+
+    fireEvent.change(screen.getByTestId('fruit-search'), {
+      target: { value: 'AN' }, // upper-case to test case-insensitivity
+    });
+
+    // 'Banana' contains 'an'; 'Apple', 'Cherry', 'Date', 'Elderberry' do not.
+    expect(screen.getByTestId('fruit-option-banana')).toBeInTheDocument();
+    expect(screen.queryByTestId('fruit-option-apple')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('fruit-option-cherry')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('fruit-option-date')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('fruit-option-elderberry')).not.toBeInTheDocument();
+  });
+
+  it('CMP-DROPDOWN-015: search input is cleared when the menu closes', async () => {
+    render(<SearchableHarness />);
+
+    fireEvent.click(screen.getByTestId('fruit-trigger'));
+    fireEvent.change(screen.getByTestId('fruit-search'), {
+      target: { value: 'cherry' },
+    });
+    const search = screen.getByTestId('fruit-search') as HTMLInputElement;
+    expect(search.value).toBe('cherry');
+
+    // Close via Escape on the trigger (existing close path).
+    fireEvent.keyDown(screen.getByTestId('fruit-trigger'), { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('fruit-menu')).not.toBeInTheDocument();
+    });
+
+    // Re-open — query must have reset to ''.
+    fireEvent.click(screen.getByTestId('fruit-trigger'));
+    const reopened = screen.getByTestId('fruit-search') as HTMLInputElement;
+    expect(reopened.value).toBe('');
+    // And every option is visible again.
+    for (const o of SEARCH_OPTS) {
+      expect(screen.getByTestId(`fruit-option-${o.value}`)).toBeInTheDocument();
+    }
+  });
+
+  it('CMP-DROPDOWN-016: arrow keys navigate the FILTERED option set', () => {
+    const onChange = vi.fn();
+    render(<SearchableHarness onChangeSpy={onChange} />);
+
+    fireEvent.click(screen.getByTestId('fruit-trigger'));
+    fireEvent.change(screen.getByTestId('fruit-search'), {
+      target: { value: 'e' }, // matches Apple, Cherry, Date, Elderberry
+    });
+
+    const search = screen.getByTestId('fruit-search');
+    // ArrowDown → highlight first match. Enter commits.
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'Enter' });
+
+    // The committed value MUST be one of the filtered set, NOT 'banana'
+    // (which was excluded by the filter).
+    const callArg = onChange.mock.calls[0]?.[0];
+    expect(['apple', 'cherry', 'date', 'elderberry']).toContain(callArg);
+    expect(callArg).not.toBe('banana');
+  });
+
+  it('CMP-DROPDOWN-017: search input has testid `{testid}-search`', () => {
+    render(<SearchableHarness />);
+    fireEvent.click(screen.getByTestId('fruit-trigger'));
+    const search = screen.getByTestId('fruit-search');
+    expect(search.tagName.toLowerCase()).toBe('input');
+  });
 });

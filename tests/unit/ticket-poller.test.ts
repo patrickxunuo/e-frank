@@ -7,7 +7,10 @@ import {
   JiraClient,
   type JiraAuth,
 } from '../../src/main/modules/jira-client';
-import { JiraPoller } from '../../src/main/modules/jira-poller';
+// Issue #25 polish: jira-poller is renamed to ticket-poller. The class is
+// renamed `TicketPoller`; legacy `JiraPoller` is kept as an alias for one
+// release for back-compat in the existing JP-CONN tests below.
+import { TicketPoller } from '../../src/main/modules/ticket-poller';
 import { RunHistory } from '../../src/main/modules/run-history';
 import type { ProjectStoreFs } from '../../src/main/modules/project-store';
 import type {
@@ -19,10 +22,11 @@ import type {
   PollerErrorEvent,
   PollerTimers,
   TicketsChangedEvent,
-} from '../../src/main/modules/jira-poller';
+} from '../../src/main/modules/ticket-poller';
 
 /**
- * JiraPoller acceptance tests (POLLER-001..015 + JP-CONN-001..006).
+ * TicketPoller acceptance tests (POLLER-001..015 + JP-CONN-001..006 +
+ * GH-ISSUES-POLLER-001..003).
  *
  * Issue #25: the poller resolves auth at poll time via the project's
  * `tickets.connectionId` instead of `tokenRef`/`email`/`host`. The harness
@@ -363,7 +367,7 @@ interface Harness {
   connections: ConnectionStoreStub;
   secrets: SecretsStub;
   timerCtl: FakeTimerControl;
-  poller: JiraPoller;
+  poller: TicketPoller;
   errors: PollerErrorEvent[];
   changes: TicketsChangedEvent[];
   factoryRecords: FactoryRecord[];
@@ -389,12 +393,16 @@ async function makeHarness(opts?: {
   const timerCtl = createFakeTimers();
   const factoryRecords: FactoryRecord[] = [];
 
-  const poller = new JiraPoller({
+  const poller = new TicketPoller({
     projectStore: store,
     secretsManager: secrets,
     connectionStore: connections,
     runHistory: history,
     jiraClientFactory: makeFactory(http, factoryRecords),
+    // Plumb the FakeHttpClient through so the github-issues source uses
+    // the test double too (the jira path uses jiraClientFactory; the github
+    // path uses httpClient directly).
+    httpClient: http,
     timers: timerCtl.timers,
   });
 
@@ -422,7 +430,7 @@ async function makeHarness(opts?: {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('JiraPoller', () => {
+describe('TicketPoller', () => {
   let h: Harness;
   let project: ProjectInstance;
 
@@ -548,13 +556,15 @@ describe('JiraPoller', () => {
     h.timerCtl.tick();
     h.timerCtl.tick();
 
-    await Promise.resolve();
-    await Promise.resolve();
+    // Drain the strategy chain — it has more `await` boundaries than the
+    // pre-#25 direct-jira-client path (sourceFactory → connectionStore.get
+    // → secretsManager.get → builds client). 8 microtask drains is enough.
+    for (let i = 0; i < 8; i++) await Promise.resolve();
 
     expect(callCount).toBe(1);
 
     resolveFirst(jsonOk(searchResponse([fullIssue('ABC-1')])));
-    for (let i = 0; i < 5; i++) await Promise.resolve();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
     expect(callCount).toBe(1);
   });
 
@@ -564,11 +574,21 @@ describe('JiraPoller', () => {
   it('POLLER-006: per-project isolation — caches do not bleed across projects', async () => {
     const p1 = makeProject({
       id: 'p1',
-      tickets: { ...project.tickets, query: 'project = "AAA"', projectKey: 'AAA' },
+      tickets: {
+        source: 'jira',
+        connectionId: project.tickets.connectionId,
+        projectKey: 'AAA',
+        query: 'project = "AAA"',
+      },
     });
     const p2 = makeProject({
       id: 'p2',
-      tickets: { ...project.tickets, query: 'project = "BBB"', projectKey: 'BBB' },
+      tickets: {
+        source: 'jira',
+        connectionId: project.tickets.connectionId,
+        projectKey: 'BBB',
+        query: 'project = "BBB"',
+      },
     });
     const h2 = await makeHarness({ projects: [p1, p2] });
 
@@ -911,6 +931,191 @@ describe('JiraPoller', () => {
       // runtime check.
       const lastCall = h.http.calls[h.http.calls.length - 1];
       expect(lastCall?.url.startsWith(altHost)).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GH-ISSUES-POLLER-001..003 — issue #25 polish:
+  // TicketPoller dispatches to a per-source strategy. When
+  // `project.tickets.source === 'github-issues'`:
+  //   - The poller hits GitHub's /repos/{slug}/issues endpoint.
+  //   - Auth resolves through the SAME ConnectionStore + SecretsManager flow
+  //     used by Jira (provider must be 'github').
+  //   - PRs are filtered out (the issues endpoint returns both).
+  //
+  // We exercise the dispatch behaviour at a high level — assert on the URL
+  // path and the resulting ticket set. The ticket key format
+  // `${repoSlug}#${number}` is the marker that the GitHub Issues path was
+  // actually used (Jira keys are e.g. `ABC-1`).
+  // -------------------------------------------------------------------------
+  describe('GH-ISSUES-POLLER-001..003 GitHub Issues dispatch', () => {
+    const GH_HOST = 'https://api.github.com';
+    const GH_CONN_ID = 'conn-gh-1';
+    const GH_SECRET_REF = 'connection:conn-gh-1:token';
+    const GH_TOKEN = 'ghp_test_token_xyz';
+    const REPO_SLUG = 'gazhang/foo';
+
+    function makeGithubConnection(over: Partial<Connection> = {}): Connection {
+      return {
+        id: GH_CONN_ID,
+        provider: 'github',
+        label: 'Personal',
+        host: GH_HOST,
+        authMethod: 'pat',
+        secretRef: GH_SECRET_REF,
+        accountIdentity: { kind: 'github', login: 'gazhang', scopes: ['repo'] },
+        lastVerifiedAt: 1_700_000_000_000,
+        verificationStatus: 'verified',
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+        ...over,
+      };
+    }
+
+    function makeGhProject(over: Partial<ProjectInstance> = {}): ProjectInstance {
+      const tickets = {
+        source: 'github-issues' as const,
+        connectionId: GH_CONN_ID,
+        repoSlug: REPO_SLUG,
+      } as unknown as TicketsConfig;
+      return {
+        id: 'p-gh',
+        name: 'GH Project',
+        repo: {
+          type: 'github',
+          localPath: '/abs/repo',
+          baseBranch: 'main',
+          connectionId: GH_CONN_ID,
+          slug: REPO_SLUG,
+        },
+        tickets,
+        workflow: { mode: 'interactive', branchFormat: 'feat/{ticketKey}' },
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+        ...over,
+      };
+    }
+
+    function ghIssue(over: Record<string, unknown> = {}) {
+      return {
+        number: 1,
+        title: 'Some issue',
+        state: 'open',
+        html_url: 'https://github.com/gazhang/foo/issues/1',
+        updated_at: '2026-05-05T10:00:00Z',
+        labels: [],
+        assignee: null,
+        ...over,
+      };
+    }
+
+    const ISSUES_URL_PREFIX = `${GH_HOST}/repos/${REPO_SLUG}/issues`;
+
+    it('GH-ISSUES-POLLER-001: project.tickets.source === "github-issues" → /repos/{slug}/issues is hit (not /search)', async () => {
+      const ghProject = makeGhProject();
+      const harness = await makeHarness({
+        projects: [ghProject],
+        connections: { [GH_CONN_ID]: makeGithubConnection() },
+        secrets: { [GH_SECRET_REF]: GH_TOKEN },
+      });
+      harness.http.expectPrefix(
+        'GET',
+        ISSUES_URL_PREFIX,
+        jsonOk([ghIssue({ number: 1 }), ghIssue({ number: 2 })]),
+      );
+
+      await harness.poller.start(ghProject, 60_000);
+      const refresh = await harness.poller.refreshNow(ghProject.id);
+      expect(refresh.ok).toBe(true);
+      if (!refresh.ok) return;
+
+      // Tickets came from GitHub, not Jira — keys are `slug#number` shaped.
+      const keys = refresh.data.tickets.map((t) => t.key);
+      expect(keys).toEqual(
+        expect.arrayContaining([`${REPO_SLUG}#1`, `${REPO_SLUG}#2`]),
+      );
+
+      // The HTTP layer was hit at the GitHub issues URL prefix at least once,
+      // and never at the Jira /search prefix.
+      const urls = harness.http.calls.map((c) => c.url);
+      expect(urls.some((u) => u.startsWith(ISSUES_URL_PREFIX))).toBe(true);
+      expect(urls.some((u) => u.includes('/rest/api/3/search'))).toBe(false);
+    });
+
+    it('GH-ISSUES-POLLER-002: auth resolves via the connection (ConnectionStore + SecretsManager)', async () => {
+      const ghProject = makeGhProject();
+      const harness = await makeHarness({
+        projects: [ghProject],
+        connections: { [GH_CONN_ID]: makeGithubConnection() },
+        secrets: { [GH_SECRET_REF]: GH_TOKEN },
+      });
+      harness.http.expectPrefix('GET', ISSUES_URL_PREFIX, jsonOk([]));
+
+      await harness.poller.start(ghProject, 60_000);
+      await harness.poller.refreshNow(ghProject.id);
+
+      // Both stores were consulted — same flow as Jira.
+      expect(harness.connections.calls).toContain(GH_CONN_ID);
+    });
+
+    it('GH-ISSUES-POLLER-002: missing GitHub connection → NO_TOKEN, no HTTP call', async () => {
+      const ghProject = makeGhProject({
+        tickets: {
+          source: 'github-issues',
+          connectionId: 'conn-missing',
+          repoSlug: REPO_SLUG,
+        } as unknown as TicketsConfig,
+      });
+      const harness = await makeHarness({
+        projects: [ghProject],
+        connections: {}, // no connections at all
+        secrets: {},
+      });
+
+      await harness.poller.start(ghProject, 60_000);
+      const refresh = await harness.poller.refreshNow(ghProject.id);
+      expect(refresh.ok).toBe(false);
+
+      const noTok = harness.errors.find(
+        (e) => e.code === 'NO_TOKEN' && e.projectId === ghProject.id,
+      );
+      expect(noTok).toBeDefined();
+      expect(harness.http.calls).toHaveLength(0);
+    });
+
+    it('GH-ISSUES-POLLER-003: PRs from /issues endpoint are filtered out (pull_request !== undefined)', async () => {
+      const ghProject = makeGhProject();
+      const harness = await makeHarness({
+        projects: [ghProject],
+        connections: { [GH_CONN_ID]: makeGithubConnection() },
+        secrets: { [GH_SECRET_REF]: GH_TOKEN },
+      });
+
+      // Mix of pure issues + PR-shaped objects. PRs MUST be dropped before
+      // they reach the ticket cache.
+      harness.http.expectPrefix(
+        'GET',
+        ISSUES_URL_PREFIX,
+        jsonOk([
+          ghIssue({ number: 1 }),
+          ghIssue({
+            number: 2,
+            pull_request: { url: 'https://api.github.com/repos/.../pulls/2' },
+          }),
+          ghIssue({ number: 3 }),
+        ]),
+      );
+
+      await harness.poller.start(ghProject, 60_000);
+      const refresh = await harness.poller.refreshNow(ghProject.id);
+      expect(refresh.ok).toBe(true);
+      if (!refresh.ok) return;
+
+      const keys = refresh.data.tickets.map((t) => t.key);
+      expect(keys).toEqual(
+        expect.arrayContaining([`${REPO_SLUG}#1`, `${REPO_SLUG}#3`]),
+      );
+      expect(keys).not.toContain(`${REPO_SLUG}#2`);
     });
   });
 });

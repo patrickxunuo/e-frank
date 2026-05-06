@@ -59,7 +59,8 @@ export type StoreErrorCode =
   | 'VALIDATION_FAILED'
   | 'UNSUPPORTED_SCHEMA_VERSION'
   | 'FILE_CORRUPT'
-  | 'IO_FAILURE';
+  | 'IO_FAILURE'
+  | 'RECOVERED_INCOMPATIBLE';
 
 export type StoreResult<T> =
   | { ok: true; data: T }
@@ -122,9 +123,20 @@ export class ProjectStore {
   /**
    * Reads the file (or initializes empty if missing). MUST be called once
    * before any CRUD operation. Idempotent.
+   *
+   * **Recovery from incompatible files (since #25 schema break):** when the
+   * existing projects.json fails JSON parse, root-shape, schemaVersion, or
+   * per-project validation, we DON'T fail closed. Instead the original
+   * file is renamed to `projects.json.bak-{ts}` and the store starts with
+   * an empty envelope. The result still resolves `ok: true` so the rest
+   * of main process wiring doesn't bail, but `data.recoveredFrom` is set
+   * so the renderer can surface a banner. Pre-MVP this is the safe call —
+   * users are guaranteed to be able to keep using the app, the old data
+   * is preserved on disk for inspection, and the schema break doesn't
+   * brick the app.
    */
-  async init(): Promise<StoreResult<{ count: number }>> {
-    return this.enqueue(async () => {
+  async init(): Promise<StoreResult<{ count: number; recoveredFrom?: string }>> {
+    return this.enqueue<{ count: number; recoveredFrom?: string }>(async () => {
       if (this.initialized) {
         return { ok: true, data: { count: this.envelope.projects.length } };
       }
@@ -141,62 +153,79 @@ export class ProjectStore {
         return { ok: false, error: { code: 'IO_FAILURE', message: errMessage(err) } };
       }
 
-      let parsed: unknown;
+      // Inner parse: returns the parsed envelope or a typed reason.
+      const parseResult = this.parseEnvelope(raw);
+      if (parseResult.ok) {
+        this.envelope = parseResult.envelope;
+        this.initialized = true;
+        return { ok: true, data: { count: parseResult.envelope.projects.length } };
+      }
+
+      // Recovery path: archive the incompatible file and start empty.
+      const reason = parseResult.reason;
       try {
-        parsed = JSON.parse(raw);
-      } catch (err) {
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const backupPath = `${this.filePath}.bak-${ts}`;
+        await this.fs.rename(this.filePath, backupPath);
+        console.warn(
+          `[project-store] projects file at "${this.filePath}" is incompatible (${reason}); archived to "${backupPath}" and starting fresh`,
+        );
+        this.envelope = { schemaVersion: SCHEMA_VERSION, projects: [] };
+        this.initialized = true;
+        return {
+          ok: true,
+          data: { count: 0, recoveredFrom: backupPath },
+        };
+      } catch (renameErr) {
+        // If we can't even rename, return a hard error so the user sees
+        // it and can intervene manually.
         return {
           ok: false,
           error: {
-            code: 'FILE_CORRUPT',
-            message: `projects file is not valid JSON: ${errMessage(err)}`,
+            code: 'IO_FAILURE',
+            message: `incompatible projects file (${reason}); failed to archive: ${errMessage(renameErr)}`,
           },
         };
       }
-
-      if (!isPlainObject(parsed)) {
-        return {
-          ok: false,
-          error: { code: 'FILE_CORRUPT', message: 'projects file root must be an object' },
-        };
-      }
-      if (parsed['schemaVersion'] !== SCHEMA_VERSION) {
-        return {
-          ok: false,
-          error: {
-            code: 'UNSUPPORTED_SCHEMA_VERSION',
-            message: `unsupported schemaVersion: expected ${SCHEMA_VERSION}, got ${String(parsed['schemaVersion'])}`,
-          },
-        };
-      }
-      const projectsRaw = parsed['projects'];
-      if (!Array.isArray(projectsRaw)) {
-        return {
-          ok: false,
-          error: { code: 'FILE_CORRUPT', message: 'projects must be an array' },
-        };
-      }
-
-      const projects: ProjectInstance[] = [];
-      for (let i = 0; i < projectsRaw.length; i++) {
-        const res = validateProjectInstance(projectsRaw[i]);
-        if (!res.ok) {
-          return {
-            ok: false,
-            error: {
-              code: 'FILE_CORRUPT',
-              message: `projects[${i}] failed schema validation`,
-              details: res.errors,
-            },
-          };
-        }
-        projects.push(res.value);
-      }
-
-      this.envelope = { schemaVersion: SCHEMA_VERSION, projects };
-      this.initialized = true;
-      return { ok: true, data: { count: projects.length } };
     });
+  }
+
+  /**
+   * Parse + validate the envelope text. Returns `ok: true` with the
+   * envelope on success, or `ok: false` with a short reason for the
+   * recovery path.
+   */
+  private parseEnvelope(
+    raw: string,
+  ): { ok: true; envelope: StoreEnvelope } | { ok: false; reason: string } {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      return { ok: false, reason: `not valid JSON: ${errMessage(err)}` };
+    }
+    if (!isPlainObject(parsed)) {
+      return { ok: false, reason: 'root must be an object' };
+    }
+    if (parsed['schemaVersion'] !== SCHEMA_VERSION) {
+      return {
+        ok: false,
+        reason: `unsupported schemaVersion: expected ${SCHEMA_VERSION}, got ${String(parsed['schemaVersion'])}`,
+      };
+    }
+    const projectsRaw = parsed['projects'];
+    if (!Array.isArray(projectsRaw)) {
+      return { ok: false, reason: 'projects must be an array' };
+    }
+    const projects: ProjectInstance[] = [];
+    for (let i = 0; i < projectsRaw.length; i++) {
+      const res = validateProjectInstance(projectsRaw[i]);
+      if (!res.ok) {
+        return { ok: false, reason: `projects[${i}] failed schema validation` };
+      }
+      projects.push(res.value);
+    }
+    return { ok: true, envelope: { schemaVersion: SCHEMA_VERSION, projects } };
   }
 
   async list(): Promise<StoreResult<ProjectInstance[]>> {

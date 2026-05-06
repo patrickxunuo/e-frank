@@ -51,6 +51,11 @@ export interface GithubRepoSummary {
   private: boolean;
 }
 
+export interface GithubBranchSummary {
+  name: string;
+  protected: boolean;
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -248,6 +253,127 @@ export class GithubClient {
       repos.push({ fullName, defaultBranch, private: isPrivate });
     }
     return { ok: true, data: repos };
+  }
+
+  /**
+   * GET /repos/{slug}/branches?per_page=100 — list branches on a repo. Same
+   * sanitization rules as listRepos: never echo the token in errors.
+   */
+  async listBranches(slug: string): Promise<GithubResult<GithubBranchSummary[]>> {
+    const url = `${this.host}/repos/${slug}/branches?per_page=100`;
+    const httpReq: HttpRequest = {
+      method: 'GET',
+      url,
+      headers: this.headers(),
+    };
+
+    let httpRes: HttpResult;
+    try {
+      httpRes = await this.httpClient.request(httpReq);
+    } catch {
+      return { ok: false, error: { code: 'NETWORK', message: 'network error' } };
+    }
+
+    if (!httpRes.ok) {
+      return liftHttpError<GithubBranchSummary[]>(httpRes.error);
+    }
+
+    const { status, body } = httpRes.response;
+    if (status < 200 || status >= 300) {
+      return {
+        ok: false,
+        error: { code: statusToGithubCode(status), message: `GitHub returned ${status}`, status },
+      };
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      return {
+        ok: false,
+        error: { code: 'INVALID_RESPONSE', message: 'response body was not valid JSON', status },
+      };
+    }
+    if (!Array.isArray(parsed)) {
+      return {
+        ok: false,
+        error: { code: 'INVALID_RESPONSE', message: 'response body did not match expected shape', status },
+      };
+    }
+
+    const branches: GithubBranchSummary[] = [];
+    for (const item of parsed) {
+      if (!isPlainObject(item)) continue;
+      const nameRaw = item['name'];
+      const protectedRaw = item['protected'];
+      if (typeof nameRaw !== 'string' || typeof protectedRaw !== 'boolean') {
+        continue;
+      }
+      branches.push({ name: nameRaw, protected: protectedRaw });
+    }
+    return { ok: true, data: branches };
+  }
+
+  /**
+   * GET /repos/{slug}/issues — returns the raw GitHub issue array. The
+   * source strategy filters out PRs (`pull_request` field present) and
+   * maps the survivors to `Ticket` via `ticketFromGithubIssue`. We
+   * deliberately keep the array untyped here (`unknown[]`) so the
+   * mapping stays in one place upstream.
+   */
+  async listIssues(
+    slug: string,
+    opts: { state?: 'open' | 'closed' | 'all'; labels?: string; perPage?: number } = {},
+  ): Promise<GithubResult<unknown[]>> {
+    const state = opts.state ?? 'open';
+    const perPage = opts.perPage ?? 100;
+    const labelsParam =
+      opts.labels !== undefined && opts.labels !== ''
+        ? `&labels=${encodeURIComponent(opts.labels)}`
+        : '';
+    const url = `${this.host}/repos/${slug}/issues?state=${state}&per_page=${perPage}${labelsParam}`;
+    const httpReq: HttpRequest = {
+      method: 'GET',
+      url,
+      headers: this.headers(),
+    };
+
+    let httpRes: HttpResult;
+    try {
+      httpRes = await this.httpClient.request(httpReq);
+    } catch {
+      return { ok: false, error: { code: 'NETWORK', message: 'network error' } };
+    }
+
+    if (!httpRes.ok) {
+      return liftHttpError<unknown[]>(httpRes.error);
+    }
+
+    const { status, body } = httpRes.response;
+    if (status < 200 || status >= 300) {
+      return {
+        ok: false,
+        error: { code: statusToGithubCode(status), message: `GitHub returned ${status}`, status },
+      };
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      return {
+        ok: false,
+        error: { code: 'INVALID_RESPONSE', message: 'response body was not valid JSON', status },
+      };
+    }
+    if (!Array.isArray(parsed)) {
+      return {
+        ok: false,
+        error: { code: 'INVALID_RESPONSE', message: 'response body did not match expected shape', status },
+      };
+    }
+    return { ok: true, data: parsed };
   }
 
   // -- Internals -----------------------------------------------------------

@@ -136,6 +136,14 @@ function makeIpcApiStub(
       listJiraProjects: vi
         .fn<IpcApi['connections']['listJiraProjects']>()
         .mockResolvedValue(unusedErr()),
+      listBranches: vi
+        .fn<IpcApi['connections']['listBranches']>()
+        .mockResolvedValue(unusedErr()),
+    },
+    dialog: {
+      selectFolder: vi
+        .fn<IpcApi['dialog']['selectFolder']>()
+        .mockResolvedValue({ ok: true, data: { path: null } }),
     },
   };
 }
