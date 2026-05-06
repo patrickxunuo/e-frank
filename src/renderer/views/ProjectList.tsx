@@ -82,15 +82,12 @@ function ticketLabelFor(source: ProjectInstanceDto['tickets']['source']): string
 }
 
 /**
- * Extract a short, displayable identifier from the JQL `query` so the table
- * has a familiar "AI-TEAM" / "PROJ-123" feel without re-parsing JQL.
- * Falls back to the raw query (truncated) if no `project = X` clause is found.
+ * Returns the ticket-source identifier for the row. As of #25, this is
+ * `tickets.projectKey` directly; pre-#25 records are migrated by the
+ * schema break in the same PR so we never see a `query`-only record.
  */
-function extractTicketKey(query: string): string {
-  const trimmed = query.trim();
-  const projectMatch = trimmed.match(/project\s*=\s*"?([A-Z0-9_-]+)"?/i);
-  if (projectMatch?.[1]) return projectMatch[1].toUpperCase();
-  return trimmed.length > 28 ? `${trimmed.slice(0, 28)}…` : trimmed;
+function ticketSourceLabel(projectKey: string): string {
+  return projectKey || 'Jira';
 }
 
 function basenameOf(p: string): string {
@@ -147,7 +144,7 @@ export function ProjectList({
           <span className={styles.providerBadge}>{ticketIconFor(row.tickets.source)}</span>
           <div className={styles.cellText}>
             <span className={styles.cellPrimary}>{ticketLabelFor(row.tickets.source)}</span>
-            <span className={styles.cellSecondary}>{extractTicketKey(row.tickets.query)}</span>
+            <span className={styles.cellSecondary}>{ticketSourceLabel(row.tickets.projectKey)}</span>
           </div>
         </div>
       ),

@@ -140,6 +140,8 @@ function installApi(opts: {
       update: vi.fn() as unknown as IpcApi['connections']['update'],
       delete: vi.fn() as unknown as IpcApi['connections']['delete'],
       test: vi.fn() as unknown as IpcApi['connections']['test'],
+      listRepos: vi.fn() as unknown as IpcApi['connections']['listRepos'],
+      listJiraProjects: vi.fn() as unknown as IpcApi['connections']['listJiraProjects'],
     },
     // Cast so we can install `runs` even though IpcApi['runs'] is a typed
     // interface — Agent B is responsible for the schema, we just need the

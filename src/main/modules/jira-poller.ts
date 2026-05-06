@@ -33,6 +33,7 @@ import {
 } from './jira-client.js';
 import type { RunHistory } from './run-history.js';
 import type { ProjectInstance } from '../../shared/schema/project-instance.js';
+import type { Connection } from '../../shared/schema/connection.js';
 import type { Ticket } from '../../shared/schema/ticket.js';
 
 export interface PollerTimers {
@@ -50,15 +51,34 @@ interface SecretsManagerLike {
   ): Promise<{ ok: true; data: { plaintext: string } } | { ok: false; error: unknown }>;
 }
 
+export interface ConnectionStoreLike {
+  get(
+    id: string,
+  ): Promise<{ ok: true; data: Connection } | { ok: false; error: unknown }>;
+}
+
+/**
+ * Per-poll context passed to the JiraClient factory. We pass the resolved
+ * `host` separately (rather than rely on the caller knowing how to read it
+ * off the project) because as of #25 the host lives on the Connection, not
+ * the project.
+ */
+export interface JiraClientFactoryContext {
+  project: ProjectInstance;
+  host: string;
+  auth: JiraAuth;
+}
+
 export interface JiraPollerOptions {
   projectStore: ProjectStoreLike;
+  connectionStore: ConnectionStoreLike;
   secretsManager: SecretsManagerLike;
   runHistory: RunHistory;
   /**
    * Build a JiraClient for a given project. Default uses `FetchHttpClient`.
    * Tests can override to inject a `FakeHttpClient`.
    */
-  jiraClientFactory?: (project: ProjectInstance, auth: JiraAuth) => JiraClient;
+  jiraClientFactory?: (ctx: JiraClientFactoryContext) => JiraClient;
   /** Test injection for setInterval / clearInterval. Default uses globalThis. */
   timers?: PollerTimers;
 }
@@ -111,12 +131,12 @@ function defaultTimers(): PollerTimers {
   };
 }
 
-function defaultJiraClientFactory(project: ProjectInstance, auth: JiraAuth): JiraClient {
-  // `tickets.host` is the validated Jira base URL (added in #4's schema
-  // extension; required at runtime — the poller will surface a NETWORK error
-  // via testConnection/search if it's missing).
-  const host = project.tickets.host ?? '';
-  return new JiraClient({ httpClient: new FetchHttpClient(), host, auth });
+function defaultJiraClientFactory(ctx: JiraClientFactoryContext): JiraClient {
+  return new JiraClient({
+    httpClient: new FetchHttpClient(),
+    host: ctx.host,
+    auth: ctx.auth,
+  });
 }
 
 /**
@@ -175,9 +195,10 @@ function ticketsDiffer(a: ReadonlyArray<Ticket>, b: ReadonlyArray<Ticket>): bool
 
 export class JiraPoller extends EventEmitter {
   private readonly projectStore: ProjectStoreLike;
+  private readonly connectionStore: ConnectionStoreLike;
   private readonly secretsManager: SecretsManagerLike;
   private readonly runHistory: RunHistory;
-  private readonly jiraClientFactory: (project: ProjectInstance, auth: JiraAuth) => JiraClient;
+  private readonly jiraClientFactory: (ctx: JiraClientFactoryContext) => JiraClient;
   private readonly timers: PollerTimers;
 
   private readonly states: Map<string, ProjectPollState> = new Map();
@@ -185,6 +206,7 @@ export class JiraPoller extends EventEmitter {
   constructor(options: JiraPollerOptions) {
     super();
     this.projectStore = options.projectStore;
+    this.connectionStore = options.connectionStore;
     this.secretsManager = options.secretsManager;
     this.runHistory = options.runHistory;
     this.jiraClientFactory = options.jiraClientFactory ?? defaultJiraClientFactory;
@@ -328,30 +350,38 @@ export class JiraPoller extends EventEmitter {
 
   /**
    * Verifies credentials without storing anything. Builds a transient
-   * JiraClient via the same factory and calls `/myself`.
+   * JiraClient via the same factory and calls `/myself`. The synthetic
+   * project's connectionId / projectKey are placeholders — the factory
+   * uses the explicit `host` and `auth` we pass in.
    */
   async testConnection(opts: {
     host: string;
     auth: JiraAuth;
   }): Promise<JiraResult<JiraSelfResponse>> {
-    // Build a synthetic project just to drive the factory — the factory
-    // will read its `host` from us. Most factories (including the test
-    // factory) ignore the project arg entirely.
-    const tickets = {
-      source: 'jira' as const,
-      query: '',
-      host: opts.host,
-    };
     const synthetic: ProjectInstance = {
       id: '__test_connection__',
       name: '',
-      repo: { type: 'github', localPath: '/', baseBranch: 'main' },
-      tickets: tickets as unknown as ProjectInstance['tickets'],
+      repo: {
+        type: 'github',
+        localPath: '/',
+        baseBranch: 'main',
+        connectionId: '__test_connection__',
+        slug: 'test/test',
+      },
+      tickets: {
+        source: 'jira',
+        connectionId: '__test_connection__',
+        projectKey: 'TEST',
+      },
       workflow: { mode: 'interactive', branchFormat: '{ticketKey}' },
       createdAt: 0,
       updatedAt: 0,
     };
-    const client = this.jiraClientFactory(synthetic, opts.auth);
+    const client = this.jiraClientFactory({
+      project: synthetic,
+      host: opts.host,
+      auth: opts.auth,
+    });
     return client.testConnection();
   }
 
@@ -451,26 +481,30 @@ export class JiraPoller extends EventEmitter {
       }
       state.project = project;
 
-      // Resolve auth: tokenRef + email.
-      const tokenRef = project.tickets.tokenRef;
-      const email = (project.tickets as { email?: string }).email;
-      if (tokenRef === undefined || tokenRef === '') {
+      // Resolve auth via the project's tickets.connectionId.
+      const connectionId = project.tickets.connectionId;
+      if (connectionId === undefined || connectionId === '') {
         return this.handleError(
           state,
           'NO_TOKEN',
-          'project has no tickets.tokenRef configured',
+          'project has no tickets.connectionId configured',
           skipBackoff,
         );
       }
-      if (email === undefined || email === '') {
+      const connectionRes = await this.connectionStore.get(connectionId);
+      if (!stillTracked()) {
+        return { ok: false, error: { code: 'NETWORK', message: 'poll aborted' } };
+      }
+      if (!connectionRes.ok) {
         return this.handleError(
           state,
           'NO_TOKEN',
-          'project has no tickets.email configured',
+          `connection "${connectionId}" could not be resolved`,
           skipBackoff,
         );
       }
-      const tokenRes = await this.secretsManager.get(tokenRef);
+      const connection = connectionRes.data;
+      const tokenRes = await this.secretsManager.get(connection.secretRef);
       if (!stillTracked()) {
         return { ok: false, error: { code: 'NETWORK', message: 'poll aborted' } };
       }
@@ -478,23 +512,44 @@ export class JiraPoller extends EventEmitter {
         return this.handleError(
           state,
           'NO_TOKEN',
-          `secret "${tokenRef}" could not be resolved`,
+          `secret "${connection.secretRef}" could not be resolved`,
           skipBackoff,
         );
       }
-      const apiToken = tokenRes.data.plaintext;
-      if (apiToken === '') {
+      const plaintext = tokenRes.data.plaintext;
+      if (plaintext === '') {
         return this.handleError(
           state,
           'NO_TOKEN',
-          `secret "${tokenRef}" is empty`,
+          `secret "${connection.secretRef}" is empty`,
           skipBackoff,
         );
       }
+      // Jira `api-token` connections store the secret as `email\ntoken`.
+      // Defense-in-depth fallback: if no newline is present, treat the whole
+      // value as the token and email as ''. testConnection / search will
+      // surface AUTH on the next round-trip in that pathological case.
+      let email: string;
+      let apiToken: string;
+      const nl = plaintext.indexOf('\n');
+      if (nl < 0) {
+        email = '';
+        apiToken = plaintext;
+      } else {
+        email = plaintext.slice(0, nl);
+        apiToken = plaintext.slice(nl + 1);
+      }
 
-      // Build the client and run the search.
-      const client = this.jiraClientFactory(project, { email, apiToken });
-      const searchRes = await client.search(project.tickets.query);
+      // Build the client and run the search. Default the JQL to
+      // `project = "{key}"` when the project has no explicit override.
+      const jql =
+        project.tickets.query ?? `project = "${project.tickets.projectKey}"`;
+      const client = this.jiraClientFactory({
+        project,
+        host: connection.host,
+        auth: { email, apiToken },
+      });
+      const searchRes = await client.search(jql);
       if (!stillTracked()) {
         return { ok: false, error: { code: 'NETWORK', message: 'poll aborted' } };
       }

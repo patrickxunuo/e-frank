@@ -36,6 +36,10 @@ import {
   type ConnectionsUpdateRequest,
   type ConnectionsTestRequest,
   type ConnectionsTestResponse,
+  type ConnectionsListReposRequest,
+  type ConnectionsListReposResponse,
+  type ConnectionsListJiraProjectsRequest,
+  type ConnectionsListJiraProjectsResponse,
 } from '../shared/ipc.js';
 import type { Run, RunStateEvent, RunMode, RunLogEntry } from '../shared/schema/run.js';
 import type {
@@ -446,6 +450,30 @@ function validateConnectionsUpdateRequest(
     ok: true,
     data: { id: raw['id'], input: raw['input'] as ConnectionsUpdateRequest['input'] },
   };
+}
+
+function validateConnectionsListReposRequest(
+  raw: unknown,
+): IpcResult<ConnectionsListReposRequest> {
+  if (!isPlainObject(raw) || typeof raw['connectionId'] !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'connectionId must be a string' },
+    };
+  }
+  return { ok: true, data: { connectionId: raw['connectionId'] } };
+}
+
+function validateConnectionsListJiraProjectsRequest(
+  raw: unknown,
+): IpcResult<ConnectionsListJiraProjectsRequest> {
+  if (!isPlainObject(raw) || typeof raw['connectionId'] !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'connectionId must be a string' },
+    };
+  }
+  return { ok: true, data: { connectionId: raw['connectionId'] } };
 }
 
 function validateConnectionsTestRequest(
@@ -997,6 +1025,118 @@ function registerIpcHandlers(): void {
     },
   );
 
+  ipcMain.handle(
+    IPC_CHANNELS.CONNECTIONS_LIST_REPOS,
+    async (_event, raw): Promise<IpcResult<ConnectionsListReposResponse>> => {
+      const validated = validateConnectionsListReposRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (connectionStore === null || secretsManager === null) {
+        return notInitialized('ConnectionStore');
+      }
+      const got = await connectionStore.get(validated.data.connectionId);
+      if (!got.ok) {
+        return { ok: false, error: { code: got.error.code, message: got.error.message } };
+      }
+      const conn = got.data;
+      if (conn.provider !== 'github') {
+        return {
+          ok: false,
+          error: {
+            code: 'INVALID_PROVIDER',
+            message: 'connection provider mismatch',
+          },
+        };
+      }
+      const secret = await secretsManager.get(conn.secretRef);
+      if (!secret.ok) {
+        return {
+          ok: false,
+          error: { code: secret.error.code, message: secret.error.message },
+        };
+      }
+      const client = new GithubClient({
+        httpClient: new FetchHttpClient(),
+        host: conn.host,
+        auth: { token: secret.data.plaintext },
+      });
+      const res = await client.listRepos();
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return {
+        ok: true,
+        data: {
+          repos: res.data.map((r) => ({
+            slug: r.fullName,
+            defaultBranch: r.defaultBranch,
+            private: r.private,
+          })),
+        },
+      };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.CONNECTIONS_LIST_JIRA_PROJECTS,
+    async (
+      _event,
+      raw,
+    ): Promise<IpcResult<ConnectionsListJiraProjectsResponse>> => {
+      const validated = validateConnectionsListJiraProjectsRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (connectionStore === null || secretsManager === null) {
+        return notInitialized('ConnectionStore');
+      }
+      const got = await connectionStore.get(validated.data.connectionId);
+      if (!got.ok) {
+        return { ok: false, error: { code: got.error.code, message: got.error.message } };
+      }
+      const conn = got.data;
+      if (conn.provider !== 'jira') {
+        return {
+          ok: false,
+          error: {
+            code: 'INVALID_PROVIDER',
+            message: 'connection provider mismatch',
+          },
+        };
+      }
+      const secret = await secretsManager.get(conn.secretRef);
+      if (!secret.ok) {
+        return {
+          ok: false,
+          error: { code: secret.error.code, message: secret.error.message },
+        };
+      }
+      // Jira `api-token` connections store `email\ntoken`. Fall back to
+      // treating the whole value as the token if there's no `\n` (matches
+      // the JiraPoller's defense-in-depth pairing).
+      const value = secret.data.plaintext;
+      const nl = value.indexOf('\n');
+      const email = nl < 0 ? '' : value.slice(0, nl);
+      const apiToken = nl < 0 ? value : value.slice(nl + 1);
+      const client = new JiraClient({
+        httpClient: new FetchHttpClient(),
+        host: conn.host,
+        auth: { email, apiToken },
+      });
+      const res = await client.listProjects();
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return {
+        ok: true,
+        data: {
+          projects: res.data.map((p) => ({ key: p.key, name: p.name })),
+        },
+      };
+    },
+  );
+
   // -- Jira poller -----------------------------------------------------------
 
   ipcMain.handle(
@@ -1265,15 +1405,26 @@ async function initStores(): Promise<void> {
     }
     secretsManager = secrets;
 
-    // -- Connection store (issue #24) --
-    // Independent of the project store / poller — it just needs the
-    // SecretsManager to set/cascade the connection's token. The
-    // `getReferencingProjectIds` callback returns [] for now; #25 wires
-    // projects' connection refs through here.
+    // -- Connection store (issue #24, finished in #25) --
+    // The `getReferencingProjectIds` callback scans the live ProjectStore
+    // (captured via the module-level `projectStore` reference, which is
+    // assigned a few statements below — the callback only runs lazily,
+    // when a delete is attempted).
     const connections = new ConnectionStore({
       filePath: join(userData, 'connections.json'),
       secretsManager: secrets,
-      getReferencingProjectIds: async () => [],
+      getReferencingProjectIds: async (connectionId) => {
+        if (projectStore === null) return [];
+        const list = await projectStore.list();
+        if (!list.ok) return [];
+        return list.data
+          .filter(
+            (p) =>
+              p.repo.connectionId === connectionId ||
+              p.tickets.connectionId === connectionId,
+          )
+          .map((p) => p.id);
+      },
     });
     const connectionsInit = await connections.init();
     if (!connectionsInit.ok) {
@@ -1287,7 +1438,6 @@ async function initStores(): Promise<void> {
 
     const store = new ProjectStore({
       filePath: join(userData, 'projects.json'),
-      secretsManager: secrets,
     });
     const storeInit = await store.init();
     if (!storeInit.ok) {
@@ -1318,6 +1468,7 @@ async function initStores(): Promise<void> {
 
     const poller = new JiraPoller({
       projectStore: store,
+      connectionStore: connections,
       secretsManager: secrets,
       runHistory: history,
     });

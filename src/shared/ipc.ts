@@ -107,6 +107,9 @@ export const IPC_CHANNELS = {
   CONNECTIONS_UPDATE: 'connections:update',
   CONNECTIONS_DELETE: 'connections:delete',
   CONNECTIONS_TEST: 'connections:test',
+  // -- Connection-driven resource pickers (issue #25) --
+  CONNECTIONS_LIST_REPOS: 'connections:list-repos',
+  CONNECTIONS_LIST_JIRA_PROJECTS: 'connections:list-jira-projects',
   // -- Workflow Runner (issue #7) --
   RUNS_START: 'runs:start',
   RUNS_CANCEL: 'runs:cancel',
@@ -353,6 +356,22 @@ export interface ConnectionsTestResponse {
   verifiedAt: number;
 }
 
+// -- Connection-driven resource pickers (issue #25) --
+
+export interface ConnectionsListReposRequest {
+  connectionId: string;
+}
+export interface ConnectionsListReposResponse {
+  repos: Array<{ slug: string; defaultBranch: string; private: boolean }>;
+}
+
+export interface ConnectionsListJiraProjectsRequest {
+  connectionId: string;
+}
+export interface ConnectionsListJiraProjectsResponse {
+  projects: Array<{ key: string; name: string }>;
+}
+
 /**
  * Discriminated-union result returned over IPC. `code` is a string (rather
  * than a literal-union of manager error codes) to keep the renderer
@@ -406,6 +425,12 @@ export interface IpcApi {
     update: (req: ConnectionsUpdateRequest) => Promise<IpcResult<Connection>>;
     delete: (req: ConnectionsDeleteRequest) => Promise<IpcResult<{ id: string }>>;
     test: (req: ConnectionsTestRequest) => Promise<IpcResult<ConnectionsTestResponse>>;
+    listRepos: (
+      req: ConnectionsListReposRequest,
+    ) => Promise<IpcResult<ConnectionsListReposResponse>>;
+    listJiraProjects: (
+      req: ConnectionsListJiraProjectsRequest,
+    ) => Promise<IpcResult<ConnectionsListJiraProjectsResponse>>;
   };
   runs: {
     start: (req: RunsStartRequest) => Promise<IpcResult<RunsStartResponse>>;

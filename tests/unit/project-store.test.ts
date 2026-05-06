@@ -135,10 +135,13 @@ function validInput(overrides?: Partial<ProjectInstanceInput>): ProjectInstanceI
       type: 'github',
       localPath: '/abs/repo',
       baseBranch: 'main',
+      connectionId: 'conn-gh-1',
+      slug: 'gazhang/frontend-app',
     },
     tickets: {
       source: 'jira',
-      query: 'project = ABC',
+      connectionId: 'conn-jr-1',
+      projectKey: 'PROJ',
     },
     workflow: {
       mode: 'interactive',
@@ -156,8 +159,18 @@ function makeProject(over: Partial<ProjectInstance>): ProjectInstance {
   return {
     id: '11111111-2222-4333-8444-555555555555',
     name: 'Existing',
-    repo: { type: 'github', localPath: '/abs/repo', baseBranch: 'main' },
-    tickets: { source: 'jira', query: 'project = ABC' },
+    repo: {
+      type: 'github',
+      localPath: '/abs/repo',
+      baseBranch: 'main',
+      connectionId: 'conn-gh-1',
+      slug: 'gazhang/frontend-app',
+    },
+    tickets: {
+      source: 'jira',
+      connectionId: 'conn-jr-1',
+      projectKey: 'PROJ',
+    },
     workflow: { mode: 'interactive', branchFormat: 'feat/{ticketKey}' },
     createdAt: 1_700_000_000_000,
     updatedAt: 1_700_000_000_000,
@@ -179,7 +192,6 @@ describe('ProjectStore', () => {
     secrets = createSecretsStub();
     store = new ProjectStore({
       filePath: FILE_PATH,
-      secretsManager: secrets,
       fs,
     });
   });
@@ -266,12 +278,15 @@ describe('ProjectStore', () => {
 
     it('PS-006: create() invalid input → VALIDATION_FAILED with details', async () => {
       await store.init();
-      const result = await store.create({
+      // Cast through `unknown` because we're deliberately violating the type
+      // contract — the validator is the unit under test here.
+      const badInput = {
         name: '',
         repo: { type: 'gitlab', localPath: './rel', baseBranch: '' },
-        tickets: { source: 'foo', query: '' },
+        tickets: { source: 'foo' },
         workflow: { mode: 'turbo', branchFormat: 'no-placeholder' },
-      });
+      } as unknown as ProjectInstanceInput;
+      const result = await store.create(badInput);
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.code).toBe('VALIDATION_FAILED');
@@ -370,71 +385,67 @@ describe('ProjectStore', () => {
   });
 
   // -------------------------------------------------------------------------
-  // PS-011..012 — delete() + cascade
+  // PS-DEL-NO-CASCADE — issue #25: project records no longer carry secret
+  // refs (secrets belong to Connections), so delete() must NOT call
+  // secretsManager.delete. The cascade tests (PS-011/PS-012) are gone.
   // -------------------------------------------------------------------------
-  describe('PS-011..012 delete() cascade', () => {
-    it('PS-011: delete() cascades to secrets for non-empty tokenRefs', async () => {
+  describe('PS-DEL-NO-CASCADE delete() does not cascade to secrets', () => {
+    it('PS-DEL-NO-CASCADE: delete() never calls secretsManager.delete (no project-side refs)', async () => {
       await store.init();
-      const created = await store.create(
-        validInput({
-          repo: {
-            type: 'github',
-            localPath: '/abs/repo',
-            baseBranch: 'main',
-            tokenRef: 'github-default',
-          },
-          tickets: {
-            source: 'jira',
-            query: 'project = ABC',
-            tokenRef: 'jira-default',
-          },
-        }),
-      );
+      const created = await store.create(validInput());
       expect(created.ok).toBe(true);
       if (!created.ok) return;
 
       const result = await store.delete(created.data.id);
       expect(result.ok).toBe(true);
-
-      expect(secrets.deletedRefs).toContain('github-default');
-      expect(secrets.deletedRefs).toContain('jira-default');
-    });
-
-    it('PS-011: delete() does NOT call secrets.delete for missing/undefined tokenRefs', async () => {
-      await store.init();
-      const created = await store.create(validInput()); // no tokenRefs at all
-      expect(created.ok).toBe(true);
-      if (!created.ok) return;
-
-      const result = await store.delete(created.data.id);
-      expect(result.ok).toBe(true);
+      // Cascade is gone — no secrets calls under any circumstances.
       expect(secrets.deletedRefs).toHaveLength(0);
     });
 
-    it('PS-012: delete() proceeds even when secrets.delete rejects', async () => {
+    it('PS-DEL-NO-CASCADE: delete() succeeds even if secretsManager would have rejected (proves it is not called)', async () => {
       await store.init();
-      const created = await store.create(
-        validInput({
-          repo: {
-            type: 'github',
-            localPath: '/abs/repo',
-            baseBranch: 'main',
-            tokenRef: 'will-fail',
-          },
-        }),
-      );
+      const created = await store.create(validInput());
       expect(created.ok).toBe(true);
       if (!created.ok) return;
 
+      // If the store wrongly cascades, the rejection would surface — by
+      // observing a clean delete() we confirm secretsManager.delete is not
+      // touched.
       secrets.rejectWith = new Error('keychain offline');
       const result = await store.delete(created.data.id);
       expect(result.ok).toBe(true);
+      expect(secrets.deletedRefs).toHaveLength(0);
 
-      // Project really gone.
       const after = await store.get(created.data.id);
       expect(after.ok).toBe(false);
       if (after.ok) return;
       expect(after.error.code).toBe('NOT_FOUND');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // PS-CREATE-NEW-FIELDS — create() accepts the new RepoConfig + TicketsConfig
+  // shape end-to-end (validates, persists, round-trips with the new fields).
+  // -------------------------------------------------------------------------
+  describe('PS-CREATE-NEW-FIELDS create() accepts new connection-ref shape', () => {
+    it('PS-CREATE-NEW-FIELDS: stored project carries connectionId + slug + projectKey, no removed credential fields', async () => {
+      await store.init();
+      const created = await store.create(validInput());
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      const p = created.data;
+      expect(p.repo.connectionId).toBe('conn-gh-1');
+      expect(p.repo.slug).toBe('gazhang/frontend-app');
+      expect(p.tickets.connectionId).toBe('conn-jr-1');
+      expect(p.tickets.projectKey).toBe('PROJ');
+      // Removed fields must not be present.
+      const repoUnknown = p.repo as unknown as Record<string, unknown>;
+      const ticketsUnknown = p.tickets as unknown as Record<string, unknown>;
+      expect(repoUnknown['host']).toBeUndefined();
+      expect(repoUnknown['tokenRef']).toBeUndefined();
+      expect(ticketsUnknown['host']).toBeUndefined();
+      expect(ticketsUnknown['email']).toBeUndefined();
+      expect(ticketsUnknown['tokenRef']).toBeUndefined();
     });
   });
 
@@ -477,13 +488,10 @@ describe('ProjectStore', () => {
       if (!a.ok || !b.ok) return;
 
       // The fs stub now has the latest envelope at FILE_PATH. Spin up a new
-      // ProjectStore against the SAME backing fs and re-init. (We deliberately
-      // do not share `secrets` either — the new store has fresh stubs.)
+      // ProjectStore against the SAME backing fs and re-init.
       const fs2 = fs;
-      const secrets2 = createSecretsStub();
       const store2 = new ProjectStore({
         filePath: FILE_PATH,
-        secretsManager: secrets2,
         fs: fs2,
       });
       const init2 = await store2.init();

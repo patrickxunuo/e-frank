@@ -5,9 +5,10 @@
  * File envelope:
  *   { schemaVersion: 1, projects: ProjectInstance[] }
  *
- * The store cascades token-ref deletion to a `SecretsManager` on `delete()`
- * (business rule 9). Validation runs through the schema's hand-rolled
- * validator; the store assigns id / createdAt / updatedAt itself.
+ * As of #25 the store does NOT cascade-delete secrets — secrets belong to
+ * Connections (issue #24), not projects. Validation runs through the
+ * schema's hand-rolled validator; the store assigns id / createdAt /
+ * updatedAt itself.
  */
 
 import { promises as fs } from 'node:fs';
@@ -19,7 +20,6 @@ import {
   type ProjectInstance,
   type ValidationError,
 } from '../../shared/schema/project-instance.js';
-import type { SecretsManager } from './secrets-manager.js';
 
 // -- fs surface -------------------------------------------------------------
 
@@ -50,8 +50,6 @@ function defaultFs(): ProjectStoreFs {
 export interface ProjectStoreOptions {
   /** Absolute path to projects.json. */
   filePath: string;
-  /** Used to cascade-delete tokens when a project is removed. */
-  secretsManager: Pick<SecretsManager, 'delete'>;
   /** Override fs for tests. Defaults to node:fs/promises. */
   fs?: ProjectStoreFs;
 }
@@ -108,7 +106,6 @@ function notInitialized<T>(): StoreResult<T> {
 
 export class ProjectStore {
   private readonly filePath: string;
-  private readonly secretsManager: Pick<SecretsManager, 'delete'>;
   private readonly fs: ProjectStoreFs;
 
   private envelope: StoreEnvelope = { schemaVersion: SCHEMA_VERSION, projects: [] };
@@ -119,7 +116,6 @@ export class ProjectStore {
 
   constructor(options: ProjectStoreOptions) {
     this.filePath = options.filePath;
-    this.secretsManager = options.secretsManager;
     this.fs = options.fs ?? defaultFs();
   }
 
@@ -302,9 +298,9 @@ export class ProjectStore {
   }
 
   /**
-   * Cascade-deletes any tokenRef on the project from the secrets manager
-   * BEFORE removing the project. Failures in the cascade are logged but do
-   * NOT block the project deletion (rule 9).
+   * Removes the project record. As of #25, no cascade — secrets belong to
+   * Connections (issue #24), and the connection cascade is gated by
+   * `getReferencingProjectIds` over in `ConnectionStore.delete`.
    */
   async delete(id: string): Promise<StoreResult<{ id: string }>> {
     return this.enqueue(async () => {
@@ -315,29 +311,6 @@ export class ProjectStore {
           ok: false,
           error: { code: 'NOT_FOUND', message: `no project with id "${id}"` },
         };
-      }
-      const target = this.envelope.projects[idx]!;
-
-      // Cascade — best-effort, never blocks the project deletion.
-      // Dedup so we don't call secretsManager.delete twice when the project
-      // points repo and tickets at the same tokenRef.
-      const refsToDelete = new Set<string>();
-      if (target.repo.tokenRef !== undefined && target.repo.tokenRef !== '') {
-        refsToDelete.add(target.repo.tokenRef);
-      }
-      if (target.tickets.tokenRef !== undefined && target.tickets.tokenRef !== '') {
-        refsToDelete.add(target.tickets.tokenRef);
-      }
-      for (const ref of refsToDelete) {
-        try {
-          await this.secretsManager.delete(ref);
-        } catch (err) {
-          // Log only — never block the user-facing delete.
-           
-          console.warn(
-            `[project-store] cascade-delete of secret "${ref}" failed: ${errMessage(err)}`,
-          );
-        }
       }
 
       const projects = this.envelope.projects.filter((p) => p.id !== id);

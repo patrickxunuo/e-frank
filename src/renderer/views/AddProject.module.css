@@ -17,6 +17,19 @@
   line-height: 1.5;
 }
 
+.warningBanner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--warning-border);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .bannerIcon {
   flex: 0 0 auto;
   margin-top: 2px;
@@ -41,108 +54,25 @@
   }
 }
 
-.modePicker {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-3);
-}
-
-@media (max-width: 720px) {
-  .modePicker {
-    grid-template-columns: 1fr;
-  }
-}
-
-.modeCard {
-  position: relative;
+/*
+ * The repo / Jira-project pickers have a label-row with an inline Refresh
+ * button to the right. Used in place of the regular Dropdown `label` prop
+ * so the button can sit next to the heading.
+ */
+.fieldHeaderRow {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-4);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-default);
-  background: var(--bg-input);
-  text-align: left;
-  cursor: pointer;
-  transition:
-    border-color var(--duration-fast) var(--ease-out),
-    background-color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-base) var(--ease-out);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: -2px;
+}
+
+.miniLabel {
   font-family: var(--font-display);
-}
-
-.modeCard:hover {
-  border-color: var(--border-emphasis);
-}
-
-.modeCard[data-selected='true'] {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: var(--shadow-glow-accent);
-}
-
-.modeName {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: -0.005em;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.modeBadge {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-radius: var(--radius-pill);
-  padding: 2px 8px;
-  border: 1px solid var(--accent-border);
-}
-
-.modeDescription {
-  font-size: 12.5px;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--text-secondary);
-  line-height: 1.55;
-}
-
-.testRow {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
-
-.testPill {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 4px 10px;
-  border-radius: var(--radius-pill);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  letter-spacing: 0.02em;
-}
-
-.testPill[data-state='success'] {
-  background: var(--success-soft);
-  color: var(--success);
-  border: 1px solid var(--success-border);
-}
-
-.testPill[data-state='error'] {
-  background: var(--danger-soft);
-  color: var(--danger);
-  border: 1px solid var(--danger-border);
-}
-
-.testPill[data-state='loading'] {
-  background: var(--surface-overlay-low);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-default);
+  letter-spacing: 0.01em;
 }
 
 .actions {

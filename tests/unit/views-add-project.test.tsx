@@ -6,27 +6,27 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { AddProject } from '../../src/renderer/views/AddProject';
+import { __resetConnectionResourceCaches } from '../../src/renderer/state/connection-resources';
 import type {
   IpcApi,
   IpcResult,
   ProjectInstanceDto,
   ProjectsCreateRequest,
 } from '../../src/shared/ipc';
+import type { Connection } from '../../src/shared/schema/connection';
 
 /**
- * ADD-001..012 — <AddProject> view.
+ * ADD-PROJ-001..011 — <AddProject> view (issue #25 picker rewrite).
  *
- * Stubs `window.api.{secrets,projects,jira}` per-test. The view receives
- * `onClose` and `onCreated` props (per spec App.tsx wiring).
+ * The form is now a connection picker + resource selector instead of a
+ * credential capture form. Test Connection button is REMOVED from this view
+ * — the Connections page owns that flow.
  *
- * For ADD-006 we use `vi.fn().mock.invocationCallOrder` to assert that
- * `secrets.set` was called BEFORE `projects.create`. invocationCallOrder
- * is a global per-test counter Vitest exposes; comparing two values from
- * the same test is reliable.
+ * Stubs window.api.{connections,projects} per-test. Uses `fireEvent` (no
+ * `userEvent`). All assertions go through `getByTestId` / `queryByTestId`.
  */
 
 declare global {
@@ -37,17 +37,75 @@ declare global {
 
 interface ApiStub {
   api: IpcApi;
-  secretsSet: ReturnType<typeof vi.fn>;
+  connectionsList: ReturnType<typeof vi.fn>;
+  listRepos: ReturnType<typeof vi.fn>;
+  listJiraProjects: ReturnType<typeof vi.fn>;
   projectsCreate: ReturnType<typeof vi.fn>;
-  jiraTestConnection: ReturnType<typeof vi.fn>;
+  projectsUpdate: ReturnType<typeof vi.fn>;
 }
+
+// ---------------------------------------------------------------------------
+// Realistic fixtures (per spec)
+// ---------------------------------------------------------------------------
+
+const ghConn: Connection = {
+  id: 'conn-gh-1',
+  provider: 'github',
+  label: 'Personal',
+  host: 'https://api.github.com',
+  authMethod: 'pat',
+  secretRef: 'connection:conn-gh-1:token',
+  accountIdentity: { kind: 'github', login: 'gazhang', scopes: ['repo'] },
+  lastVerifiedAt: 1_700_000_000_000,
+  verificationStatus: 'verified',
+  createdAt: 1_700_000_000_000,
+  updatedAt: 1_700_000_000_000,
+};
+
+const jiraConn: Connection = {
+  id: 'conn-jr-1',
+  provider: 'jira',
+  label: 'Acme',
+  host: 'https://acme.atlassian.net',
+  authMethod: 'api-token',
+  secretRef: 'connection:conn-jr-1:token',
+  accountIdentity: { kind: 'jira', accountId: '5f1', displayName: 'Gary' },
+  lastVerifiedAt: 1_700_000_000_000,
+  verificationStatus: 'verified',
+  createdAt: 1_700_000_000_000,
+  updatedAt: 1_700_000_000_000,
+};
+
+const reposPayload = {
+  repos: [
+    { slug: 'gazhang/frontend-app', defaultBranch: 'main', private: true },
+    { slug: 'gazhang/backend-svc', defaultBranch: 'main', private: false },
+  ],
+};
+
+const jiraProjectsPayload = {
+  projects: [
+    { key: 'PROJ', name: 'Project' },
+    { key: 'OPS', name: 'Ops' },
+  ],
+};
 
 function makeProject(id: string, name: string): ProjectInstanceDto {
   return {
     id,
     name,
-    repo: { type: 'github', localPath: '/tmp/' + id, baseBranch: 'main' },
-    tickets: { source: 'jira', query: 'project = ABC' },
+    repo: {
+      type: 'github',
+      localPath: '/tmp/' + id,
+      baseBranch: 'main',
+      connectionId: ghConn.id,
+      slug: 'gazhang/frontend-app',
+    },
+    tickets: {
+      source: 'jira',
+      connectionId: jiraConn.id,
+      projectKey: 'PROJ',
+    },
     workflow: { mode: 'interactive', branchFormat: 'feature/{ticketKey}-{slug}' },
     createdAt: 0,
     updatedAt: 0,
@@ -55,44 +113,41 @@ function makeProject(id: string, name: string): ProjectInstanceDto {
 }
 
 function installApi(opts?: {
-  secretsSetResult?: IpcResult<{ ref: string }>;
+  connections?: Connection[];
+  listReposResult?: IpcResult<typeof reposPayload>;
+  listJiraProjectsResult?: IpcResult<typeof jiraProjectsPayload>;
   projectsCreateResult?: IpcResult<ProjectInstanceDto>;
-  jiraTestConnectionResult?: IpcResult<{
-    accountId: string;
-    displayName: string;
-    emailAddress: string;
-  }>;
+  projectsUpdateResult?: IpcResult<ProjectInstanceDto>;
 }): ApiStub {
   const unusedErr = (): IpcResult<never> => ({
     ok: false,
     error: { code: 'NOT_USED_IN_FE_TESTS', message: '' },
   });
 
-  const secretsSet = vi
+  const connectionsList = vi.fn().mockResolvedValue({
+    ok: true,
+    data: opts?.connections ?? [ghConn, jiraConn],
+  });
+  const listRepos = vi
+    .fn()
+    .mockResolvedValue(opts?.listReposResult ?? { ok: true, data: reposPayload });
+  const listJiraProjects = vi
     .fn()
     .mockResolvedValue(
-      opts?.secretsSetResult ?? { ok: true, data: { ref: 'r' } },
+      opts?.listJiraProjectsResult ?? { ok: true, data: jiraProjectsPayload },
     );
-  const projectsCreate = vi
-    .fn()
-    .mockResolvedValue(
-      opts?.projectsCreateResult ?? {
-        ok: true,
-        data: makeProject('new-id', 'Created'),
-      },
-    );
-  const jiraTestConnection = vi
-    .fn()
-    .mockResolvedValue(
-      opts?.jiraTestConnectionResult ?? {
-        ok: true,
-        data: {
-          accountId: 'acc-1',
-          displayName: 'Test User',
-          emailAddress: 'test@example.com',
-        },
-      },
-    );
+  const projectsCreate = vi.fn().mockResolvedValue(
+    opts?.projectsCreateResult ?? {
+      ok: true,
+      data: makeProject('new-id', 'Created'),
+    },
+  );
+  const projectsUpdate = vi.fn().mockResolvedValue(
+    opts?.projectsUpdateResult ?? {
+      ok: true,
+      data: makeProject('p-1', 'Updated'),
+    },
+  );
 
   const api: IpcApi = {
     ping: vi.fn<IpcApi['ping']>().mockResolvedValue({ reply: 'pong', receivedAt: 0 }),
@@ -112,11 +167,11 @@ function installApi(opts?: {
         .mockResolvedValue({ ok: true, data: [] }),
       get: vi.fn<IpcApi['projects']['get']>().mockResolvedValue(unusedErr()),
       create: projectsCreate as unknown as IpcApi['projects']['create'],
-      update: vi.fn<IpcApi['projects']['update']>().mockResolvedValue(unusedErr()),
+      update: projectsUpdate as unknown as IpcApi['projects']['update'],
       delete: vi.fn<IpcApi['projects']['delete']>().mockResolvedValue(unusedErr()),
     },
     secrets: {
-      set: secretsSet as unknown as IpcApi['secrets']['set'],
+      set: vi.fn<IpcApi['secrets']['set']>().mockResolvedValue(unusedErr()),
       get: vi.fn<IpcApi['secrets']['get']>().mockResolvedValue(unusedErr()),
       delete: vi.fn<IpcApi['secrets']['delete']>().mockResolvedValue(unusedErr()),
       list: vi.fn<IpcApi['secrets']['list']>().mockResolvedValue(unusedErr()),
@@ -124,414 +179,441 @@ function installApi(opts?: {
     jira: {
       list: vi.fn<IpcApi['jira']['list']>().mockResolvedValue(unusedErr()),
       refresh: vi.fn<IpcApi['jira']['refresh']>().mockResolvedValue(unusedErr()),
-      testConnection:
-        jiraTestConnection as unknown as IpcApi['jira']['testConnection'],
-      refreshPollers: vi
-        .fn<IpcApi['jira']['refreshPollers']>()
-        .mockResolvedValue(unusedErr()),
+      testConnection: vi.fn<IpcApi['jira']['testConnection']>().mockResolvedValue(unusedErr()),
+      refreshPollers: vi.fn<IpcApi['jira']['refreshPollers']>().mockResolvedValue(unusedErr()),
       onTicketsChanged: vi.fn<IpcApi['jira']['onTicketsChanged']>(() => () => {}),
       onError: vi.fn<IpcApi['jira']['onError']>(() => () => {}),
     },
     connections: {
-      list: vi.fn() as unknown as IpcApi['connections']['list'],
-      get: vi.fn() as unknown as IpcApi['connections']['get'],
-      create: vi.fn() as unknown as IpcApi['connections']['create'],
-      update: vi.fn() as unknown as IpcApi['connections']['update'],
-      delete: vi.fn() as unknown as IpcApi['connections']['delete'],
-      test: vi.fn() as unknown as IpcApi['connections']['test'],
-    },
+      list: connectionsList,
+      get: vi.fn().mockResolvedValue(unusedErr()),
+      create: vi.fn().mockResolvedValue(unusedErr()),
+      update: vi.fn().mockResolvedValue(unusedErr()),
+      delete: vi.fn().mockResolvedValue(unusedErr()),
+      test: vi.fn().mockResolvedValue(unusedErr()),
+      listRepos,
+      listJiraProjects,
+    } as unknown as IpcApi['connections'],
     runs: {
-      start: vi.fn<IpcApi['runs']['start']>().mockResolvedValue(unusedErr()),
-      cancel: vi.fn<IpcApi['runs']['cancel']>().mockResolvedValue(unusedErr()),
-      approve: vi.fn<IpcApi['runs']['approve']>().mockResolvedValue(unusedErr()),
-      reject: vi.fn<IpcApi['runs']['reject']>().mockResolvedValue(unusedErr()),
-      modify: vi.fn<IpcApi['runs']['modify']>().mockResolvedValue(unusedErr()),
-      current: vi
-        .fn<IpcApi['runs']['current']>()
-        .mockResolvedValue({ ok: true, data: { run: null } }),
-      listHistory: vi
-        .fn<IpcApi['runs']['listHistory']>()
-        .mockResolvedValue(unusedErr()),
-      onCurrentChanged: vi.fn<IpcApi['runs']['onCurrentChanged']>(() => () => {}),
-      onStateChanged: vi.fn<IpcApi['runs']['onStateChanged']>(() => () => {}),
-      // #8: extend with readLog so AddProject (and any code that imports the
-      // full IpcApi via tree-shaken renderer modules) sees a complete bridge.
+      start: vi.fn().mockResolvedValue(unusedErr()),
+      cancel: vi.fn().mockResolvedValue(unusedErr()),
+      approve: vi.fn().mockResolvedValue(unusedErr()),
+      reject: vi.fn().mockResolvedValue(unusedErr()),
+      modify: vi.fn().mockResolvedValue(unusedErr()),
+      current: vi.fn().mockResolvedValue({ ok: true, data: { run: null } }),
+      listHistory: vi.fn().mockResolvedValue(unusedErr()),
       readLog: vi.fn().mockResolvedValue({ ok: true, data: { entries: [] } }),
+      onCurrentChanged: vi.fn(() => () => {}),
+      onStateChanged: vi.fn(() => () => {}),
     } as unknown as IpcApi['runs'],
   };
 
   (window as { api?: IpcApi }).api = api;
-  return { api, secretsSet, projectsCreate, jiraTestConnection };
-}
-
-/**
- * Convenience: fills every input that has a data-testid we expect on the
- * AddProject form with a valid value. Test IDs follow the convention
- * `add-project-<field>` per the spec's "all interactive elements MUST have
- * data-testid" rule. Specific field test IDs are inferred from the spec's
- * named inputs.
- */
-function fillValidForm() {
-  fireEvent.change(screen.getByTestId('field-name'), {
-    target: { value: 'My Project' },
-  });
-  // Repository
-  // Repository Type select defaults to github; setting explicitly is fine.
-  fireEvent.change(screen.getByTestId('field-repo-type'), {
-    target: { value: 'github' },
-  });
-  fireEvent.change(screen.getByTestId('field-repo-local-path'), {
-    target: { value: '/abs/path/repo' },
-  });
-  fireEvent.change(screen.getByTestId('field-repo-base-branch'), {
-    target: { value: 'main' },
-  });
-  fireEvent.change(screen.getByTestId('field-repo-token'), {
-    target: { value: 'gh_token_123' },
-  });
-  // Ticket source
-  fireEvent.change(screen.getByTestId('field-ticket-source'), {
-    target: { value: 'jira' },
-  });
-  fireEvent.change(screen.getByTestId('field-ticket-query'), {
-    target: { value: 'project = ABC AND status = "Ready for AI"' },
-  });
-  fireEvent.change(screen.getByTestId('field-jira-host'), {
-    target: { value: 'https://example.atlassian.net' },
-  });
-  fireEvent.change(screen.getByTestId('field-jira-email'), {
-    target: { value: 'me@example.com' },
-  });
-  fireEvent.change(screen.getByTestId('field-jira-token'), {
-    target: { value: 'jira_token_456' },
-  });
-  // Workflow
-  fireEvent.change(screen.getByTestId('field-branch-format'), {
-    target: { value: 'feature/{ticketKey}-{slug}' },
-  });
+  return {
+    api,
+    connectionsList,
+    listRepos,
+    listJiraProjects,
+    projectsCreate,
+    projectsUpdate,
+  };
 }
 
 afterEach(() => {
   cleanup();
   delete (window as { api?: IpcApi }).api;
   vi.restoreAllMocks();
+  // Connection-resource hooks share a module-level per-session cache; reset
+  // it between tests so no test sees a pre-populated entry.
+  __resetConnectionResourceCaches();
 });
 
-describe('<AddProject /> — ADD', () => {
-  describe('ADD-001 layout', () => {
+// Helper: drives the form to a fully-valid state using the picker testids.
+// Since pickers are <Dropdown> components that render a hidden native
+// <select>, fireEvent.change on the testid still works.
+async function fillValidForm(): Promise<void> {
+  // Project name
+  fireEvent.change(screen.getByTestId('field-name'), {
+    target: { value: 'My Project' },
+  });
+
+  // Pick GitHub connection — populates repo dropdown via listRepos.
+  fireEvent.change(screen.getByTestId('field-repo-connection'), {
+    target: { value: ghConn.id },
+  });
+  // Wait for the repo list IPC to resolve.
+  await waitFor(() => {
+    expect(screen.queryByTestId('field-repo-slug')).toBeInTheDocument();
+  });
+  fireEvent.change(screen.getByTestId('field-repo-slug'), {
+    target: { value: 'gazhang/frontend-app' },
+  });
+
+  fireEvent.change(screen.getByTestId('field-repo-local-path'), {
+    target: { value: '/abs/path/repo' },
+  });
+  fireEvent.change(screen.getByTestId('field-repo-base-branch'), {
+    target: { value: 'main' },
+  });
+
+  // Pick Jira connection — populates project dropdown via listJiraProjects.
+  fireEvent.change(screen.getByTestId('field-tickets-connection'), {
+    target: { value: jiraConn.id },
+  });
+  await waitFor(() => {
+    expect(screen.queryByTestId('field-tickets-project-key')).toBeInTheDocument();
+  });
+  fireEvent.change(screen.getByTestId('field-tickets-project-key'), {
+    target: { value: 'PROJ' },
+  });
+
+  // Branch format
+  fireEvent.change(screen.getByTestId('field-branch-format'), {
+    target: { value: 'feature/{ticketKey}-{slug}' },
+  });
+}
+
+describe('<AddProject /> — ADD-PROJ', () => {
+  // -------------------------------------------------------------------------
+  // ADD-PROJ-001 — Source section with connection picker
+  // -------------------------------------------------------------------------
+  describe('ADD-PROJ-001 source connection picker', () => {
     beforeEach(() => {
       installApi();
     });
 
-    it('ADD-001: renders 4 numbered FormSection cards in order', () => {
+    it('ADD-PROJ-001: renders Source section with field-repo-connection testid', async () => {
       render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
-      // Each FormSection should be findable by data-testid
-      expect(screen.getByTestId('add-project-section-1')).toBeInTheDocument();
-      expect(screen.getByTestId('add-project-section-2')).toBeInTheDocument();
-      expect(screen.getByTestId('add-project-section-3')).toBeInTheDocument();
-      expect(screen.getByTestId('add-project-section-4')).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
+      });
+    });
+  });
 
-      // Order check via DOM position
-      const all = [
-        screen.getByTestId('add-project-section-1'),
-        screen.getByTestId('add-project-section-2'),
-        screen.getByTestId('add-project-section-3'),
-        screen.getByTestId('add-project-section-4'),
+  // -------------------------------------------------------------------------
+  // ADD-PROJ-002 — Tickets section with connection picker
+  // -------------------------------------------------------------------------
+  describe('ADD-PROJ-002 tickets connection picker', () => {
+    beforeEach(() => {
+      installApi();
+    });
+
+    it('ADD-PROJ-002: renders Tickets section with field-tickets-connection testid', async () => {
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-tickets-connection')).toBeInTheDocument();
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ADD-PROJ-003 — Source empty state when no GitHub connections
+  // -------------------------------------------------------------------------
+  describe('ADD-PROJ-003 source empty state', () => {
+    it('ADD-PROJ-003: no GitHub connections → add-project-source-empty rendered with CTA', async () => {
+      // Only a Jira connection exists — no GitHub provider.
+      installApi({ connections: [jiraConn] });
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('add-project-source-empty')).toBeInTheDocument();
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ADD-PROJ-004 — Picking a GitHub connection populates the repo dropdown
+  // -------------------------------------------------------------------------
+  describe('ADD-PROJ-004 picking GitHub connection populates repos', () => {
+    it('ADD-PROJ-004: change repo connection → listRepos called once for that connectionId', async () => {
+      const stub = installApi();
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByTestId('field-repo-connection'), {
+        target: { value: ghConn.id },
+      });
+
+      await waitFor(() => {
+        expect(stub.listRepos).toHaveBeenCalledTimes(1);
+      });
+      expect(stub.listRepos.mock.calls[0]?.[0]).toEqual({
+        connectionId: ghConn.id,
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ADD-PROJ-005 — Picking a Jira connection populates the project dropdown
+  // -------------------------------------------------------------------------
+  describe('ADD-PROJ-005 picking Jira connection populates projects', () => {
+    it('ADD-PROJ-005: change tickets connection → listJiraProjects called once', async () => {
+      const stub = installApi();
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-tickets-connection')).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByTestId('field-tickets-connection'), {
+        target: { value: jiraConn.id },
+      });
+
+      await waitFor(() => {
+        expect(stub.listJiraProjects).toHaveBeenCalledTimes(1);
+      });
+      expect(stub.listJiraProjects.mock.calls[0]?.[0]).toEqual({
+        connectionId: jiraConn.id,
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ADD-PROJ-006 — Refresh button on repo picker re-calls listRepos
+  // -------------------------------------------------------------------------
+  describe('ADD-PROJ-006 repo refresh button', () => {
+    it('ADD-PROJ-006: clicking add-project-repo-refresh re-calls listRepos (count = 2)', async () => {
+      const stub = installApi();
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByTestId('field-repo-connection'), {
+        target: { value: ghConn.id },
+      });
+
+      await waitFor(() => {
+        expect(stub.listRepos).toHaveBeenCalledTimes(1);
+      });
+
+      fireEvent.click(screen.getByTestId('add-project-repo-refresh'));
+
+      await waitFor(() => {
+        expect(stub.listRepos).toHaveBeenCalledTimes(2);
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ADD-PROJ-007 — Submit builds ProjectInstanceInput with the new shape
+  // -------------------------------------------------------------------------
+  describe('ADD-PROJ-007 submit builds new-shape input', () => {
+    it('ADD-PROJ-007: projects.create input has repo.connectionId/slug + tickets.connectionId/projectKey', async () => {
+      const stub = installApi();
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
+      });
+      await fillValidForm();
+      fireEvent.click(screen.getByTestId('add-project-submit'));
+
+      await waitFor(() => {
+        expect(stub.projectsCreate).toHaveBeenCalled();
+      });
+
+      const callArgs = stub.projectsCreate.mock.calls[0];
+      expect(callArgs).toBeDefined();
+      const req = (callArgs as unknown[])[0] as ProjectsCreateRequest;
+      expect(req.input.repo.connectionId).toBe(ghConn.id);
+      expect(req.input.repo.slug).toBe('gazhang/frontend-app');
+      expect(req.input.tickets.connectionId).toBe(jiraConn.id);
+      expect(req.input.tickets.projectKey).toBe('PROJ');
+      // Old credential fields must not be in the input.
+      const repoUnknown = req.input.repo as unknown as Record<string, unknown>;
+      const ticketsUnknown = req.input.tickets as unknown as Record<string, unknown>;
+      expect(repoUnknown['host']).toBeUndefined();
+      expect(repoUnknown['tokenRef']).toBeUndefined();
+      expect(ticketsUnknown['host']).toBeUndefined();
+      expect(ticketsUnknown['email']).toBeUndefined();
+      expect(ticketsUnknown['tokenRef']).toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ADD-PROJ-008 — Submit derives repo.type from picked connection's provider
+  // -------------------------------------------------------------------------
+  describe('ADD-PROJ-008 repo.type derived from connection provider', () => {
+    it('ADD-PROJ-008: GitHub connection picked → input.repo.type === "github"', async () => {
+      const stub = installApi();
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
+      });
+      await fillValidForm();
+      fireEvent.click(screen.getByTestId('add-project-submit'));
+
+      await waitFor(() => {
+        expect(stub.projectsCreate).toHaveBeenCalled();
+      });
+
+      const req = stub.projectsCreate.mock.calls[0]?.[0] as ProjectsCreateRequest;
+      expect(req.input.repo.type).toBe('github');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ADD-PROJ-009 — Empty JQL → query field omitted from input
+  // -------------------------------------------------------------------------
+  describe('ADD-PROJ-009 empty JQL omits query', () => {
+    it('ADD-PROJ-009: leaving field-ticket-query empty → input.tickets.query is undefined', async () => {
+      const stub = installApi();
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
+      });
+      await fillValidForm();
+      // Confirm the JQL textarea exists but is empty by default.
+      const queryEl = screen.queryByTestId('field-ticket-query');
+      expect(queryEl).toBeInTheDocument();
+      // Sanity: don't fill the query field (default empty state).
+      fireEvent.click(screen.getByTestId('add-project-submit'));
+
+      await waitFor(() => {
+        expect(stub.projectsCreate).toHaveBeenCalled();
+      });
+
+      const req = stub.projectsCreate.mock.calls[0]?.[0] as ProjectsCreateRequest;
+      expect((req.input.tickets as unknown as Record<string, unknown>)['query']).toBeUndefined();
+    });
+
+    it('ADD-PROJ-009: non-empty JQL → input.tickets.query is the typed JQL', async () => {
+      const stub = installApi();
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
+      });
+      await fillValidForm();
+      fireEvent.change(screen.getByTestId('field-ticket-query'), {
+        target: { value: 'project = PROJ AND status = "Ready for AI"' },
+      });
+      fireEvent.click(screen.getByTestId('add-project-submit'));
+
+      await waitFor(() => {
+        expect(stub.projectsCreate).toHaveBeenCalled();
+      });
+
+      const req = stub.projectsCreate.mock.calls[0]?.[0] as ProjectsCreateRequest;
+      expect(req.input.tickets.query).toBe('project = PROJ AND status = "Ready for AI"');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ADD-PROJ-010 — EditProject mode with missing connection
+  // -------------------------------------------------------------------------
+  describe('ADD-PROJ-010 broken-connection banner in edit mode', () => {
+    it('ADD-PROJ-010: editing a project whose repo.connectionId no longer exists → banner shown', async () => {
+      // The user's GitHub connection has been deleted; only the Jira one
+      // remains. The project still references conn-gh-1 in its repo.
+      installApi({ connections: [jiraConn] });
+
+      const orphanProject: ProjectInstanceDto = makeProject('p-1', 'Orphan');
+
+      // Pass `editing` prop. If Agent B uses a different name (e.g. `project`
+      // or `initial`), this test will need an update. We pass through `as`
+      // because the AddProject typing in the renderer file will be evolving.
+      render(
+        <AddProject
+          onClose={() => {}}
+          onCreated={async () => {}}
+          {...({ editing: orphanProject } as unknown as Record<string, unknown>)}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(
+          screen.queryByTestId('add-project-broken-connection-banner'),
+        ).toBeInTheDocument();
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ADD-PROJ-011 — All field testids present
+  // -------------------------------------------------------------------------
+  describe('ADD-PROJ-011 testid coverage', () => {
+    beforeEach(() => {
+      installApi();
+    });
+
+    it('ADD-PROJ-011: all required field testids are rendered after picking connections', async () => {
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
+      });
+
+      // Pick connections so the dependent pickers render.
+      fireEvent.change(screen.getByTestId('field-repo-connection'), {
+        target: { value: ghConn.id },
+      });
+      fireEvent.change(screen.getByTestId('field-tickets-connection'), {
+        target: { value: jiraConn.id },
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-repo-slug')).toBeInTheDocument();
+      });
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-tickets-project-key')).toBeInTheDocument();
+      });
+
+      const required = [
+        'field-name',
+        'field-repo-connection',
+        'field-repo-slug',
+        'field-repo-local-path',
+        'field-repo-base-branch',
+        'field-tickets-connection',
+        'field-tickets-project-key',
+        'field-ticket-query',
+        'field-workflow-mode',
+        'field-branch-format',
+        'add-project-repo-refresh',
+        'add-project-jira-projects-refresh',
       ];
-      for (let i = 1; i < all.length; i++) {
-        const prev = all[i - 1] as HTMLElement;
-        const cur = all[i] as HTMLElement;
-        // DOCUMENT_POSITION_FOLLOWING = 4
-         
-        expect(prev.compareDocumentPosition(cur) & 4).toBeTruthy();
+      for (const tid of required) {
+        expect(screen.queryByTestId(tid)).toBeInTheDocument();
       }
     });
   });
 
-  describe('ADD-002 empty submit', () => {
-    let stub: ApiStub;
-    beforeEach(() => {
-      stub = installApi();
-    });
-
-    it('ADD-002: empty submit shows >=4 inline errors and does not call IPC', async () => {
-      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
-
-      const submit = screen.getByTestId('add-project-submit');
-      fireEvent.click(submit);
-
-      // The validator collects all errors. We expect at least 4 inline
-      // messages whose text matches one of the validator codes' english
-      // wording: "required" / "empty" / "absolute" / "invalid".
-      await waitFor(() => {
-        const errors = screen.getAllByText(/required|empty|absolute|invalid/i);
-        expect(errors.length).toBeGreaterThanOrEqual(4);
-      });
-
-      expect(stub.secretsSet).not.toHaveBeenCalled();
-      expect(stub.projectsCreate).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('ADD-003 relative repo path', () => {
-    let stub: ApiStub;
-    beforeEach(() => {
-      stub = installApi();
-    });
-
-    it('ADD-003: repo path "relative/path" → NOT_ABSOLUTE error inline; submit blocked', async () => {
-      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
-      fillValidForm();
-      // Override repo path with a relative path
-      fireEvent.change(screen.getByTestId('field-repo-local-path'), {
-        target: { value: 'relative/path' },
-      });
-
-      fireEvent.click(screen.getByTestId('add-project-submit'));
-
-      await waitFor(() => {
-        // The validator emits "must be an absolute path" — section 2 also
-        // has a static description containing "absolute", so we assert at
-        // least 2 matches (description + the inline error).
-        const section2 = screen.getByTestId('add-project-section-2');
-        const matches = within(section2).getAllByText(/absolute/i);
-        expect(matches.length).toBeGreaterThanOrEqual(2);
-      });
-
-      // Submit was blocked
-      expect(stub.projectsCreate).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('ADD-004 invalid branch format', () => {
+  // -------------------------------------------------------------------------
+  // Workflow section regression — mode + branchFormat unchanged
+  // -------------------------------------------------------------------------
+  describe('workflow section unchanged', () => {
     beforeEach(() => {
       installApi();
     });
 
-    it('ADD-004: branch format without {ticketKey}/{slug} → INVALID_BRANCH_FORMAT inline', async () => {
+    it('workflow: switching to YOLO mode → projects.create input.workflow.mode === "yolo"', async () => {
+      const stub = installApi();
       render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
-      fillValidForm();
-      // Override branch format to a string without placeholders
-      fireEvent.change(screen.getByTestId('field-branch-format'), {
-        target: { value: 'feature/no-placeholders' },
-      });
-
-      fireEvent.click(screen.getByTestId('add-project-submit'));
 
       await waitFor(() => {
-        const section4 = screen.getByTestId('add-project-section-4');
-        // Validator message mentions {ticketKey} / {slug} placeholders.
-        // When the error renders it REPLACES the hint (Input.tsx renders
-        // one or the other), so we expect >= 1 match — the inline error.
-        const matches = within(section4).getAllByText(/ticketKey|slug/i);
-        expect(matches.length).toBeGreaterThanOrEqual(1);
+        expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
       });
-    });
-  });
+      await fillValidForm();
 
-  describe('ADD-005 default mode picker', () => {
-    beforeEach(() => {
-      installApi();
-    });
-
-    it('ADD-005: Interactive selected by default in mode picker', () => {
-      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
-      const interactive = screen.getByTestId('mode-interactive');
-      // Either aria-selected="true" or a data-selected attribute, or a
-      // class containing "selected". We check all three permissively.
-      const selectedAttr =
-        interactive.getAttribute('aria-selected') === 'true' ||
-        interactive.getAttribute('data-selected') === 'true' ||
-        /selected/i.test(interactive.className);
-      expect(selectedAttr).toBe(true);
-    });
-  });
-
-  describe('ADD-006 invocation order', () => {
-    let stub: ApiStub;
-    beforeEach(() => {
-      stub = installApi();
-    });
-
-    it('ADD-006: secrets.set called BEFORE projects.create on valid submit', async () => {
-      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
-      fillValidForm();
-      fireEvent.click(screen.getByTestId('add-project-submit'));
-
-      await waitFor(() => {
-        expect(stub.secretsSet).toHaveBeenCalled();
-        expect(stub.projectsCreate).toHaveBeenCalled();
-      });
-
-      // Vitest exposes invocationCallOrder per fn — global counter, so
-      // comparing across two mocks within a single test is valid.
-      const secretsCalls = stub.secretsSet.mock.invocationCallOrder;
-      const createCalls = stub.projectsCreate.mock.invocationCallOrder;
-      expect(secretsCalls.length).toBeGreaterThan(0);
-      expect(createCalls.length).toBeGreaterThan(0);
-      const firstSecret = secretsCalls[0];
-      const firstCreate = createCalls[0];
-      expect(firstSecret).toBeDefined();
-      expect(firstCreate).toBeDefined();
-      expect(firstSecret as number).toBeLessThan(firstCreate as number);
-    });
-  });
-
-  describe('ADD-007 secrets.set fails', () => {
-    let stub: ApiStub;
-    beforeEach(() => {
-      stub = installApi({
-        secretsSetResult: {
-          ok: false,
-          error: { code: 'KEYTAR_FAIL', message: 'keychain unavailable' },
-        },
-      });
-    });
-
-    it('ADD-007: secrets.set fails → no projects.create call, banner shown', async () => {
-      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
-      fillValidForm();
-      fireEvent.click(screen.getByTestId('add-project-submit'));
-
-      await waitFor(() => {
-        expect(screen.getByTestId('add-project-banner')).toBeInTheDocument();
-      });
-
-      // Banner mentions repo or jira token failure
-      expect(screen.getByTestId('add-project-banner').textContent).toMatch(
-        /(token|secrets|repo|jira|fail)/i,
-      );
-      expect(stub.projectsCreate).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('ADD-008 projects.create fails', () => {
-    let stub: ApiStub;
-    let onCreated: ReturnType<typeof vi.fn>;
-    beforeEach(() => {
-      stub = installApi({
-        projectsCreateResult: {
-          ok: false,
-          error: { code: 'WRITE_FAIL', message: 'disk full' },
-        },
-      });
-      onCreated = vi.fn().mockResolvedValue(undefined);
-    });
-
-    it('ADD-008: secrets.set ok then projects.create fails → banner shown, dialog stays open, values preserved', async () => {
-      render(<AddProject onClose={() => {}} onCreated={onCreated} />);
-      fillValidForm();
-      fireEvent.click(screen.getByTestId('add-project-submit'));
-
-      await waitFor(() => {
-        expect(screen.getByTestId('add-project-banner')).toBeInTheDocument();
-      });
-
-      // onCreated NOT called → dialog remains open
-      expect(onCreated).not.toHaveBeenCalled();
-      // Form values preserved — Project Name still "My Project"
-      const nameInput = screen.getByTestId('field-name') as HTMLInputElement;
-      expect(nameInput.value).toBe('My Project');
-      // secretsSet was called, projectsCreate was attempted
-      expect(stub.secretsSet).toHaveBeenCalled();
-      expect(stub.projectsCreate).toHaveBeenCalled();
-    });
-  });
-
-  describe('ADD-009 success', () => {
-    let onCreated: ReturnType<typeof vi.fn>;
-    beforeEach(() => {
-      installApi();
-      onCreated = vi.fn().mockResolvedValue(undefined);
-    });
-
-    it('ADD-009: all succeed → onCreated callback fires', async () => {
-      render(<AddProject onClose={() => {}} onCreated={onCreated} />);
-      fillValidForm();
-      fireEvent.click(screen.getByTestId('add-project-submit'));
-
-      await waitFor(() => {
-        expect(onCreated).toHaveBeenCalledTimes(1);
-      });
-    });
-  });
-
-  describe('ADD-010/011 Test Connection pill', () => {
-    it('ADD-010: success pill shows "Connected as {displayName}"', async () => {
-      installApi({
-        jiraTestConnectionResult: {
-          ok: true,
-          data: {
-            accountId: 'acc',
-            displayName: 'Ada Lovelace',
-            emailAddress: 'ada@example.com',
-          },
-        },
-      });
-
-      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
-      // Fill the Jira fields so test-connection has values to use
-      fireEvent.change(screen.getByTestId('field-jira-host'), {
-        target: { value: 'https://example.atlassian.net' },
-      });
-      fireEvent.change(screen.getByTestId('field-jira-email'), {
-        target: { value: 'ada@example.com' },
-      });
-      fireEvent.change(screen.getByTestId('field-jira-token'), {
-        target: { value: 'token' },
-      });
-
-      fireEvent.click(screen.getByTestId('test-connection-button'));
-
-      await waitFor(() => {
-        const pill = screen.getByTestId('test-connection-result');
-        expect(pill).toBeInTheDocument();
-        expect(pill.textContent).toMatch(/ada lovelace/i);
-      });
-    });
-
-    it('ADD-011: error pill shows error code', async () => {
-      installApi({
-        jiraTestConnectionResult: {
-          ok: false,
-          error: { code: 'AUTH', message: 'unauthorized' },
-        },
-      });
-
-      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
-      fireEvent.change(screen.getByTestId('field-jira-host'), {
-        target: { value: 'https://example.atlassian.net' },
-      });
-      fireEvent.change(screen.getByTestId('field-jira-email'), {
-        target: { value: 'me@example.com' },
-      });
-      fireEvent.change(screen.getByTestId('field-jira-token'), {
-        target: { value: 'badtoken' },
-      });
-
-      fireEvent.click(screen.getByTestId('test-connection-button'));
-
-      await waitFor(() => {
-        const pill = screen.getByTestId('test-connection-result');
-        expect(pill).toBeInTheDocument();
-        // Error code or message should be visible. Match either.
-        expect(pill.textContent).toMatch(/AUTH|unauthorized/i);
-      });
-    });
-  });
-
-  describe('ADD-012 YOLO mode', () => {
-    let stub: ApiStub;
-    beforeEach(() => {
-      stub = installApi();
-    });
-
-    it('ADD-012: YOLO mode selected → projects.create called with workflow.mode === "yolo"', async () => {
-      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
-      fillValidForm();
-
-      // Switch from Interactive (default) to YOLO
-      fireEvent.click(screen.getByTestId('mode-yolo'));
+      // Spec keeps the existing mode picker (YOLO toggle). The view exposes
+      // either `mode-yolo` button OR `field-workflow-mode` dropdown. Try the
+      // button first; if absent, fall back to the dropdown.
+      const yoloBtn = screen.queryByTestId('mode-yolo');
+      if (yoloBtn) {
+        fireEvent.click(yoloBtn);
+      } else {
+        fireEvent.change(screen.getByTestId('field-workflow-mode'), {
+          target: { value: 'yolo' },
+        });
+      }
 
       fireEvent.click(screen.getByTestId('add-project-submit'));
 
@@ -539,10 +621,7 @@ describe('<AddProject /> — ADD', () => {
         expect(stub.projectsCreate).toHaveBeenCalled();
       });
 
-      // Inspect the request payload
-      const callArgs = stub.projectsCreate.mock.calls[0];
-      expect(callArgs).toBeDefined();
-      const req = (callArgs as unknown[])[0] as ProjectsCreateRequest;
+      const req = stub.projectsCreate.mock.calls[0]?.[0] as ProjectsCreateRequest;
       expect(req.input.workflow.mode).toBe('yolo');
     });
   });

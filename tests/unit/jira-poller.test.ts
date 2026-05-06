@@ -14,6 +14,7 @@ import type {
   ProjectInstance,
   TicketsConfig,
 } from '../../src/shared/schema/project-instance';
+import type { Connection } from '../../src/shared/schema/connection';
 import type {
   PollerErrorEvent,
   PollerTimers,
@@ -21,20 +22,25 @@ import type {
 } from '../../src/main/modules/jira-poller';
 
 /**
- * JiraPoller acceptance tests (POLLER-001 .. POLLER-015).
+ * JiraPoller acceptance tests (POLLER-001..015 + JP-CONN-001..006).
  *
- * Most complex test file. Strategy:
- *  - Inject `FakeHttpClient` via a `jiraClientFactory` that builds a real
- *    `JiraClient` over the fake.
- *  - Inject `FakeTimers` (a `PollerTimers` impl) instead of using
- *    `vi.useFakeTimers`. Lets each test deterministically tick intervals.
- *  - Stub `projectStore.list()` and `secretsManager.get()` directly so the
- *    poller has narrow, mockable interfaces.
- *  - For mutex tests, use a manually-resolved Promise to delay the response.
+ * Issue #25: the poller resolves auth at poll time via the project's
+ * `tickets.connectionId` instead of `tokenRef`/`email`/`host`. The harness
+ * now wires:
+ *   - `connectionStore.get(id)` mock
+ *   - `secretsManager.get(secretRef)` returning `"<email>\n<token>"` for Jira
+ *   - JiraClientFactory called with the CONNECTION's host (not project's)
+ *
+ * Strategy:
+ *  - Inject `FakeHttpClient` via `jiraClientFactory`.
+ *  - Inject `FakeTimers` (a `PollerTimers` impl) — deterministic ticking.
+ *  - Stub `projectStore.list()`, `connectionStore.get()`, and
+ *    `secretsManager.get()` directly so the poller has narrow, mockable
+ *    interfaces.
  */
 
 // ---------------------------------------------------------------------------
-// Helpers — fake timers, fs, project/secrets stubs
+// Helpers — fake timers, fs, project/connection/secrets stubs
 // ---------------------------------------------------------------------------
 
 interface TimerHandle {
@@ -156,6 +162,47 @@ function createProjectStoreStub(initial: ProjectInstance[] = []): ProjectStoreSt
   };
 }
 
+// Connection store stub (poller only needs `get(id)`).
+interface ConnectionStoreStub {
+  get: (
+    id: string,
+  ) => Promise<
+    | { ok: true; data: Connection }
+    | { ok: false; error: { code: string; message: string } }
+  >;
+  setConnection: (id: string, conn: Connection) => void;
+  failWith: (id: string, err: { code: string; message: string }) => void;
+  /** Recorded ids passed to `get`, in order. */
+  calls: string[];
+}
+
+function createConnectionStoreStub(
+  initial: Record<string, Connection> = {},
+): ConnectionStoreStub {
+  const conns = new Map<string, Connection>(Object.entries(initial));
+  const failures = new Map<string, { code: string; message: string }>();
+  const calls: string[] = [];
+  return {
+    calls,
+    get: async (id: string) => {
+      calls.push(id);
+      const fail = failures.get(id);
+      if (fail) return { ok: false, error: fail };
+      const c = conns.get(id);
+      if (c === undefined) {
+        return {
+          ok: false,
+          error: { code: 'NOT_FOUND', message: `no connection for ${id}` },
+        };
+      }
+      return { ok: true, data: c };
+    },
+    setConnection: (id: string, conn: Connection) => conns.set(id, conn),
+    failWith: (id: string, err: { code: string; message: string }) =>
+      failures.set(id, err),
+  };
+}
+
 // Secrets manager stub (poller only needs `get(ref)`).
 interface SecretsStub {
   get: (
@@ -164,7 +211,7 @@ interface SecretsStub {
     | { ok: true; data: { plaintext: string } }
     | { ok: false; error: unknown }
   >;
-  setToken: (ref: string, token: string) => void;
+  setSecret: (ref: string, plaintext: string) => void;
   failWith: (ref: string, err: { code: string; message: string }) => void;
 }
 
@@ -181,7 +228,7 @@ function createSecretsStub(initial: Record<string, string> = {}): SecretsStub {
       }
       return { ok: true, data: { plaintext: t } };
     },
-    setToken: (ref: string, token: string) => tokens.set(ref, token),
+    setSecret: (ref: string, plaintext: string) => tokens.set(ref, plaintext),
     failWith: (ref: string, err: { code: string; message: string }) =>
       failures.set(ref, err),
   };
@@ -192,24 +239,48 @@ function createSecretsStub(initial: Record<string, string> = {}): SecretsStub {
 // ---------------------------------------------------------------------------
 
 const HOST = 'https://example.atlassian.net';
-const TOKEN_REF = 'jira-default';
+const JIRA_CONN_ID = 'conn-jr-1';
+const JIRA_SECRET_REF = 'connection:conn-jr-1:token';
 const TOKEN = 'super-secret-token';
 const EMAIL = 'me@example.com';
+/** SecretsManager stores Jira plaintext as `"<email>\n<token>"` (per Connections API). */
+const JIRA_SECRET_PLAINTEXT = `${EMAIL}\n${TOKEN}`;
 const RUN_HISTORY_PATH = '/userData/run-history.json';
+
+function makeConnection(over: Partial<Connection> = {}): Connection {
+  return {
+    id: JIRA_CONN_ID,
+    provider: 'jira',
+    label: 'Acme',
+    host: HOST,
+    authMethod: 'api-token',
+    secretRef: JIRA_SECRET_REF,
+    accountIdentity: { kind: 'jira', accountId: '5f1', displayName: 'Gary' },
+    lastVerifiedAt: 1_700_000_000_000,
+    verificationStatus: 'verified',
+    createdAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_000_000,
+    ...over,
+  };
+}
 
 function makeProject(over: Partial<ProjectInstance> = {}): ProjectInstance {
   const tickets: TicketsConfig = {
     source: 'jira',
+    connectionId: JIRA_CONN_ID,
+    projectKey: 'ABC',
     query: 'project = "ABC"',
-    tokenRef: TOKEN_REF,
-    // Email is the new optional TicketsConfig field added by issue #4.
-    // We cast through Partial to avoid breaking older schemas during reconciliation.
-    ...({ email: EMAIL } as Partial<TicketsConfig>),
   };
   return {
     id: 'p1',
     name: 'Project One',
-    repo: { type: 'github', localPath: '/abs/repo', baseBranch: 'main' },
+    repo: {
+      type: 'github',
+      localPath: '/abs/repo',
+      baseBranch: 'main',
+      connectionId: 'conn-gh-1',
+      slug: 'gazhang/frontend-app',
+    },
     tickets,
     workflow: { mode: 'interactive', branchFormat: 'feat/{ticketKey}' },
     createdAt: 1_700_000_000_000,
@@ -262,14 +333,20 @@ function fullIssue(key: string) {
 const SEARCH_PREFIX = `${HOST}/rest/api/3/search`;
 const MYSELF_URL = `${HOST}/rest/api/3/myself`;
 
-// jiraClientFactory that always wires the fixed `FakeHttpClient`.
-function makeFactory(http: FakeHttpClient) {
-  return (_project: ProjectInstance, auth: JiraAuth) => {
+interface FactoryRecord {
+  host: string;
+  auth: JiraAuth;
+}
+
+// jiraClientFactory that records every context the poller passed so tests can
+// assert the poller used the connection's host (not the project's).
+function makeFactory(http: FakeHttpClient, records: FactoryRecord[]) {
+  return (ctx: { project: ProjectInstance; host: string; auth: JiraAuth }) => {
+    records.push({ host: ctx.host, auth: ctx.auth });
     return new JiraClient({
       httpClient: http,
-      // Resolve host from project config — for tests we just use the global HOST.
-      host: HOST,
-      auth,
+      host: ctx.host,
+      auth: ctx.auth,
     });
   };
 }
@@ -283,16 +360,19 @@ interface Harness {
   fs: MemFs;
   history: RunHistory;
   store: ProjectStoreStub;
+  connections: ConnectionStoreStub;
   secrets: SecretsStub;
   timerCtl: FakeTimerControl;
   poller: JiraPoller;
   errors: PollerErrorEvent[];
   changes: TicketsChangedEvent[];
+  factoryRecords: FactoryRecord[];
 }
 
 async function makeHarness(opts?: {
   projects?: ProjectInstance[];
-  tokens?: Record<string, string>;
+  connections?: Record<string, Connection>;
+  secrets?: Record<string, string>;
 }): Promise<Harness> {
   const http = new FakeHttpClient();
   const fs = createMemFs();
@@ -300,14 +380,21 @@ async function makeHarness(opts?: {
   await history.init();
 
   const store = createProjectStoreStub(opts?.projects ?? []);
-  const secrets = createSecretsStub(opts?.tokens ?? { [TOKEN_REF]: TOKEN });
+  const connections = createConnectionStoreStub(
+    opts?.connections ?? { [JIRA_CONN_ID]: makeConnection() },
+  );
+  const secrets = createSecretsStub(
+    opts?.secrets ?? { [JIRA_SECRET_REF]: JIRA_SECRET_PLAINTEXT },
+  );
   const timerCtl = createFakeTimers();
+  const factoryRecords: FactoryRecord[] = [];
 
   const poller = new JiraPoller({
     projectStore: store,
     secretsManager: secrets,
+    connectionStore: connections,
     runHistory: history,
-    jiraClientFactory: makeFactory(http),
+    jiraClientFactory: makeFactory(http, factoryRecords),
     timers: timerCtl.timers,
   });
 
@@ -316,7 +403,19 @@ async function makeHarness(opts?: {
   poller.on('error', (e) => errors.push(e));
   poller.on('tickets-changed', (e) => changes.push(e));
 
-  return { http, fs, history, store, secrets, timerCtl, poller, errors, changes };
+  return {
+    http,
+    fs,
+    history,
+    store,
+    connections,
+    secrets,
+    timerCtl,
+    poller,
+    errors,
+    changes,
+    factoryRecords,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -396,7 +495,6 @@ describe('JiraPoller', () => {
     expect(keys).not.toContain('ABC-1');
     expect(keys).toContain('ABC-2');
 
-    // Cache (list()) reflects the same filtered set.
     const cached = h.poller.list(project.id);
     expect(cached.map((t) => t.key)).not.toContain('ABC-1');
     expect(cached.map((t) => t.key)).toContain('ABC-2');
@@ -426,17 +524,11 @@ describe('JiraPoller', () => {
   // POLLER-005 — per-project mutex: overlapping tick is dropped (not queued)
   // -------------------------------------------------------------------------
   it('POLLER-005: a tick that fires while a previous poll is in-flight is dropped', async () => {
-    // Build a manually-resolved HttpResult so the first poll's response is
-    // pending while we tick the timer again.
     let resolveFirst!: (r: HttpResult) => void;
     const firstResponse = new Promise<HttpResult>((r) => {
       resolveFirst = r;
     });
     let callCount = 0;
-    // Replace expect with a custom request override by intercepting the
-    // FakeHttpClient via a wrapper. But FakeHttpClient handles this via
-    // expectPrefix; instead we register a result that's promise-typed via
-    // a custom `request` proxy by subclassing.
     const originalRequest = h.http.request.bind(h.http);
     h.http.request = async (req) => {
       callCount += 1;
@@ -445,8 +537,6 @@ describe('JiraPoller', () => {
       }
       return originalRequest(req);
     };
-    // Pre-register a response for any later (non-dropped) calls, so that if
-    // the mutex DOES leak we'd see a second matched call.
     h.http.expectPrefix(
       'GET',
       SEARCH_PREFIX,
@@ -454,23 +544,16 @@ describe('JiraPoller', () => {
     );
 
     await h.poller.start(project, 60_000);
-    // First tick — kicks off the in-flight first poll.
     h.timerCtl.tick();
-    // Second tick — should be silently skipped while #1 is pending.
     h.timerCtl.tick();
-    // Third tick — same.
     h.timerCtl.tick();
 
-    // Allow microtasks to settle so any queued work would have fired.
     await Promise.resolve();
     await Promise.resolve();
 
     expect(callCount).toBe(1);
 
-    // Now resolve the first poll. After it lands, callCount stays at 1 — no
-    // queued ticks were drained.
     resolveFirst(jsonOk(searchResponse([fullIssue('ABC-1')])));
-    // Settle promise chain.
     for (let i = 0; i < 5; i++) await Promise.resolve();
     expect(callCount).toBe(1);
   });
@@ -479,16 +562,16 @@ describe('JiraPoller', () => {
   // POLLER-006 — per-project isolation
   // -------------------------------------------------------------------------
   it('POLLER-006: per-project isolation — caches do not bleed across projects', async () => {
-    const p1 = makeProject({ id: 'p1', tickets: { ...project.tickets, query: 'project = "AAA"' } });
-    const p2 = makeProject({ id: 'p2', tickets: { ...project.tickets, query: 'project = "BBB"' } });
-    h.store.setProjects([p1, p2]);
-
-    // Use fresh harness so its store has both projects.
+    const p1 = makeProject({
+      id: 'p1',
+      tickets: { ...project.tickets, query: 'project = "AAA"', projectKey: 'AAA' },
+    });
+    const p2 = makeProject({
+      id: 'p2',
+      tickets: { ...project.tickets, query: 'project = "BBB"', projectKey: 'BBB' },
+    });
     const h2 = await makeHarness({ projects: [p1, p2] });
 
-    // Stub responses by JQL — FakeHttpClient.expectPrefix matches any URL
-    // that begins with the prefix, so we register two separate prefixes.
-    // Easiest: distinguish by JQL substring inside the URL.
     const url1 = `${SEARCH_PREFIX}?jql=${encodeURIComponent('project = "AAA"')}`;
     const url2 = `${SEARCH_PREFIX}?jql=${encodeURIComponent('project = "BBB"')}`;
     h2.http.expectPrefix('GET', url1, jsonOk(searchResponse([fullIssue('AAA-1')])));
@@ -522,8 +605,6 @@ describe('JiraPoller', () => {
     const refresh = await h.poller.refreshNow(project.id);
     expect(refresh.ok).toBe(false);
 
-    // Per spec rule 11: auth errors short-circuit scheduling for that
-    // project. The interval handle for THIS project must be cleared.
     expect(h.timerCtl.count()).toBeLessThan(beforeCount);
 
     expect(h.errors.some((e) => e.code === 'AUTH' && e.projectId === project.id)).toBe(true);
@@ -545,9 +626,6 @@ describe('JiraPoller', () => {
 
     const serverErrors = h.errors.filter((e) => e.code === 'SERVER_ERROR');
     expect(serverErrors.length).toBeGreaterThanOrEqual(3);
-    // Counter strictly increases (back-off counter exposed via
-    // `consecutiveErrors`). Cap at 16x is exercised in spec, here we just
-    // verify monotonic growth.
     const counters = serverErrors.map((e) => e.consecutiveErrors);
     for (let i = 1; i < counters.length; i++) {
       expect(counters[i]).toBeGreaterThan(counters[i - 1]!);
@@ -558,7 +636,6 @@ describe('JiraPoller', () => {
   // POLLER-009 — back-off resets on success
   // -------------------------------------------------------------------------
   it('POLLER-009: a successful poll resets consecutiveErrors to 0', async () => {
-    // First call: 500. Second call: 200. Third call: 500 again.
     let n = 0;
     const original = h.http.request.bind(h.http);
     h.http.request = async (req) => {
@@ -570,14 +647,12 @@ describe('JiraPoller', () => {
     };
     await h.poller.start(project, 1_000);
 
-    await h.poller.refreshNow(project.id); // 500 → counter=1
-    await h.poller.refreshNow(project.id); // 200 → reset
-    await h.poller.refreshNow(project.id); // 500 → counter back to 1
+    await h.poller.refreshNow(project.id);
+    await h.poller.refreshNow(project.id);
+    await h.poller.refreshNow(project.id);
 
     const serverErrors = h.errors.filter((e) => e.code === 'SERVER_ERROR');
     expect(serverErrors).toHaveLength(2);
-    // After reset, the second 500's counter should be back to 1 — i.e. NOT
-    // greater than the first 500's counter.
     expect(serverErrors[1]!.consecutiveErrors).toBeLessThanOrEqual(
       serverErrors[0]!.consecutiveErrors,
     );
@@ -598,7 +673,6 @@ describe('JiraPoller', () => {
     h.poller.stop(project.id);
     expect(h.timerCtl.count()).toBe(0);
 
-    // Tick — nothing scheduled, so no calls made.
     const callsBefore = h.http.calls.length;
     h.timerCtl.tick();
     await Promise.resolve();
@@ -608,9 +682,7 @@ describe('JiraPoller', () => {
   it('POLLER-010: stop() is idempotent', async () => {
     await h.poller.start(project, 1_000);
     h.poller.stop(project.id);
-    // Should not throw on second call.
     expect(() => h.poller.stop(project.id)).not.toThrow();
-    // Still also tolerant for unknown id.
     expect(() => h.poller.stop('never-started')).not.toThrow();
   });
 
@@ -645,7 +717,6 @@ describe('JiraPoller', () => {
       jsonOk(searchResponse([fullIssue('ABC-1')])),
     );
 
-    // Note: store.list() must return the project so the poller can find it.
     h.store.setProjects([project]);
 
     const res = await h.poller.refreshNow(project.id);
@@ -655,7 +726,7 @@ describe('JiraPoller', () => {
   });
 
   // -------------------------------------------------------------------------
-  // POLLER-013 — testConnection
+  // POLLER-013 — testConnection (still uses host + JiraAuth directly)
   // -------------------------------------------------------------------------
   it('POLLER-013: testConnection returns the JiraSelfResponse from /myself', async () => {
     h.http.expect(
@@ -680,42 +751,6 @@ describe('JiraPoller', () => {
   });
 
   // -------------------------------------------------------------------------
-  // POLLER-014 — NO_TOKEN error path
-  // -------------------------------------------------------------------------
-  it('POLLER-014: NO_TOKEN error fires when project has no tokenRef', async () => {
-    const noTokenProject = makeProject({
-      id: 'no-token',
-      tickets: {
-        source: 'jira',
-        query: 'project = "X"',
-        // tokenRef intentionally omitted.
-      },
-    });
-    h.store.setProjects([noTokenProject]);
-
-    await h.poller.start(noTokenProject, 60_000);
-    const refresh = await h.poller.refreshNow(noTokenProject.id);
-    expect(refresh.ok).toBe(false);
-
-    const noToken = h.errors.find(
-      (e) => e.code === 'NO_TOKEN' && e.projectId === noTokenProject.id,
-    );
-    expect(noToken).toBeDefined();
-    // No HTTP call should have been issued — secret resolution failed first.
-    expect(h.http.calls).toHaveLength(0);
-  });
-
-  it('POLLER-014: NO_TOKEN also fires when secrets backend returns error for the ref', async () => {
-    h.secrets.failWith(TOKEN_REF, { code: 'BACKEND_UNAVAILABLE', message: 'no keyring' });
-    await h.poller.start(project, 60_000);
-    const refresh = await h.poller.refreshNow(project.id);
-    expect(refresh.ok).toBe(false);
-
-    expect(h.errors.some((e) => e.code === 'NO_TOKEN' && e.projectId === project.id)).toBe(true);
-    expect(h.http.calls).toHaveLength(0);
-  });
-
-  // -------------------------------------------------------------------------
   // POLLER-015 — PROJECT_NOT_FOUND when project deleted between ticks
   // -------------------------------------------------------------------------
   it('POLLER-015: PROJECT_NOT_FOUND emitted + scheduling stops when project disappears', async () => {
@@ -728,7 +763,6 @@ describe('JiraPoller', () => {
     const beforeCount = h.timerCtl.count();
     expect(beforeCount).toBeGreaterThanOrEqual(1);
 
-    // Project removed from store between ticks.
     h.store.setProjects([]);
 
     const refresh = await h.poller.refreshNow(project.id);
@@ -739,7 +773,144 @@ describe('JiraPoller', () => {
         (e) => e.code === 'PROJECT_NOT_FOUND' && e.projectId === project.id,
       ),
     ).toBe(true);
-    // Scheduling stopped for that id.
     expect(h.timerCtl.count()).toBeLessThan(beforeCount);
+  });
+
+  // -------------------------------------------------------------------------
+  // JP-CONN-001..006 — issue #25: auth resolution via ConnectionStore
+  // -------------------------------------------------------------------------
+  describe('JP-CONN-001..006 connection-based auth resolution', () => {
+    it('JP-CONN-001: auth resolved via project.tickets.connectionId → ConnectionStore.get(id)', async () => {
+      h.http.expectPrefix(
+        'GET',
+        SEARCH_PREFIX,
+        jsonOk(searchResponse([fullIssue('ABC-1')])),
+      );
+
+      await h.poller.start(project, 60_000);
+      const refresh = await h.poller.refreshNow(project.id);
+      expect(refresh.ok).toBe(true);
+
+      // ConnectionStore.get() must have been invoked with the project's
+      // tickets.connectionId.
+      expect(h.connections.calls).toContain(JIRA_CONN_ID);
+    });
+
+    it('JP-CONN-002: connection not found → NO_TOKEN error event, no HTTP call', async () => {
+      // Project references a connection id that doesn't exist in the store.
+      const orphaned = makeProject({
+        id: 'orphan',
+        tickets: { ...project.tickets, connectionId: 'conn-missing' },
+      });
+      h.store.setProjects([orphaned]);
+
+      await h.poller.start(orphaned, 60_000);
+      const refresh = await h.poller.refreshNow(orphaned.id);
+      expect(refresh.ok).toBe(false);
+
+      const noTokenErr = h.errors.find(
+        (e) => e.code === 'NO_TOKEN' && e.projectId === orphaned.id,
+      );
+      expect(noTokenErr).toBeDefined();
+      // Auth resolution failed before any HTTP call could be made.
+      expect(h.http.calls).toHaveLength(0);
+    });
+
+    it('JP-CONN-003: secret not found → NO_TOKEN, no HTTP call', async () => {
+      // Connection points at a secret ref the secrets backend doesn't have.
+      h.connections.setConnection(
+        JIRA_CONN_ID,
+        makeConnection({ secretRef: 'connection:missing:token' }),
+      );
+
+      await h.poller.start(project, 60_000);
+      const refresh = await h.poller.refreshNow(project.id);
+      expect(refresh.ok).toBe(false);
+
+      expect(
+        h.errors.some(
+          (e) => e.code === 'NO_TOKEN' && e.projectId === project.id,
+        ),
+      ).toBe(true);
+      expect(h.http.calls).toHaveLength(0);
+    });
+
+    it('JP-CONN-004: secret with no "\\n" treats whole as token + email="" and fails on AUTH eventually', async () => {
+      // Plaintext stored without the email\ntoken split. The poller's
+      // defense-in-depth fallback should still attempt the request.
+      h.secrets.setSecret(JIRA_SECRET_REF, 'just-a-bare-token-without-email');
+      // Jira will respond 401 to a request with empty email.
+      h.http.expectPrefix('GET', SEARCH_PREFIX, jsonStatus(401, {}));
+
+      await h.poller.start(project, 60_000);
+      const refresh = await h.poller.refreshNow(project.id);
+      expect(refresh.ok).toBe(false);
+
+      // Either NO_TOKEN (if the poller is strict) OR AUTH (if it tries) — the
+      // spec calls for "still tries". Assert on AUTH.
+      expect(
+        h.errors.some((e) => e.code === 'AUTH' && e.projectId === project.id),
+      ).toBe(true);
+      // And exactly one HTTP call was made (the attempted search).
+      expect(h.http.calls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('JP-CONN-005: tickets.query undefined → JQL falls back to project = "{projectKey}"', async () => {
+      const noQueryProject = makeProject({
+        id: 'no-query',
+        tickets: {
+          source: 'jira',
+          connectionId: JIRA_CONN_ID,
+          projectKey: 'XYZ',
+          // query intentionally omitted
+        },
+      });
+      h.store.setProjects([noQueryProject]);
+
+      // Pre-register a response keyed off the EXPECTED default JQL.
+      const expectedJql = 'project = "XYZ"';
+      const expectedUrl = `${SEARCH_PREFIX}?jql=${encodeURIComponent(expectedJql)}`;
+      h.http.expectPrefix(
+        'GET',
+        expectedUrl,
+        jsonOk(searchResponse([fullIssue('XYZ-1')])),
+      );
+
+      await h.poller.start(noQueryProject, 60_000);
+      const refresh = await h.poller.refreshNow(noQueryProject.id);
+      expect(refresh.ok).toBe(true);
+
+      // Confirm the URL the poller actually sent contains the encoded
+      // default JQL.
+      const lastCall = h.http.calls[h.http.calls.length - 1];
+      expect(lastCall?.url).toContain(encodeURIComponent(expectedJql));
+    });
+
+    it('JP-CONN-006: host comes from connection.host, not project.tickets.host', async () => {
+      // Connection at a different host than the global HOST. The factory is
+      // expected to be wired with that host.
+      const altHost = 'https://other.atlassian.net';
+      h.connections.setConnection(
+        JIRA_CONN_ID,
+        makeConnection({ host: altHost }),
+      );
+      // Pre-register at the alt host so the request matches.
+      h.http.expectPrefix(
+        'GET',
+        `${altHost}/rest/api/3/search`,
+        jsonOk(searchResponse([fullIssue('ABC-1')])),
+      );
+
+      await h.poller.start(project, 60_000);
+      const refresh = await h.poller.refreshNow(project.id);
+      expect(refresh.ok).toBe(true);
+
+      // The actual outgoing URL must use the connection's host, not the
+      // (now-removed) project-side host. Since the project no longer carries
+      // host at all, this is doubly guaranteed by the type system + this
+      // runtime check.
+      const lastCall = h.http.calls[h.http.calls.length - 1];
+      expect(lastCall?.url.startsWith(altHost)).toBe(true);
+    });
   });
 });

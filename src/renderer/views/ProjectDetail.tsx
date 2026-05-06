@@ -116,11 +116,13 @@ function basenameOf(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
-function extractTicketKey(query: string): string {
-  const trimmed = query.trim();
-  const projectMatch = trimmed.match(/project\s*=\s*"?([A-Z0-9_-]+)"?/i);
-  if (projectMatch?.[1]) return projectMatch[1].toUpperCase();
-  return 'Jira';
+/**
+ * Returns the human-facing ticket-source identifier. As of #25 the source
+ * is captured as `tickets.projectKey` directly; we keep this helper as a
+ * thin wrapper so callers can drop in without churn.
+ */
+function ticketProjectLabel(projectKey: string): string {
+  return projectKey || 'Jira';
 }
 
 function priorityVariant(p: PriorityBucket): BadgeVariant {
@@ -548,7 +550,7 @@ export function ProjectDetail({
                 </span>
                 Ticket Source
                 <span className={styles.pillMono}>
-                  {extractTicketKey(project.tickets.query)}
+                  {ticketProjectLabel(project.tickets.projectKey)}
                 </span>
               </span>
               <span className={styles.pill}>

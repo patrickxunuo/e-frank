@@ -59,8 +59,19 @@ function makeProject(
   return {
     id,
     name,
-    repo: { type: 'github', localPath: '/tmp/' + id, baseBranch: 'main' },
-    tickets: { source: 'jira', query: 'project = ABC' },
+    repo: {
+      type: 'github',
+      localPath: '/tmp/' + id,
+      baseBranch: 'main',
+      connectionId: 'conn-gh-1',
+      slug: 'gazhang/repo',
+    },
+    tickets: {
+      source: 'jira',
+      connectionId: 'conn-jr-1',
+      projectKey: 'ABC',
+      query: 'project = ABC',
+    },
     workflow: { mode: 'interactive', branchFormat: 'feature/{ticketKey}-{slug}' },
     createdAt: 0,
     updatedAt: 0,
@@ -171,6 +182,8 @@ function installApi(opts?: {
       update: vi.fn() as unknown as IpcApi['connections']['update'],
       delete: vi.fn() as unknown as IpcApi['connections']['delete'],
       test: vi.fn() as unknown as IpcApi['connections']['test'],
+      listRepos: vi.fn() as unknown as IpcApi['connections']['listRepos'],
+      listJiraProjects: vi.fn() as unknown as IpcApi['connections']['listJiraProjects'],
     },
     runs: {
       start: vi.fn<IpcApi['runs']['start']>().mockResolvedValue(unusedErr()),

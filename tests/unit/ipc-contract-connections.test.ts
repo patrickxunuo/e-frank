@@ -35,6 +35,13 @@ type ConnectionsDeleteRequest = import('../../src/shared/ipc').ConnectionsDelete
 type ConnectionsTestRequest = import('../../src/shared/ipc').ConnectionsTestRequest;
 type ConnectionsTestResponse = import('../../src/shared/ipc').ConnectionsTestResponse;
 
+// Issue #25: two new channels for fetching repo + Jira-project lists scoped
+// to a connection. Schemas live in `shared/ipc`.
+type ConnectionsListReposRequest = import('../../src/shared/ipc').ConnectionsListReposRequest;
+type ConnectionsListReposResponse = import('../../src/shared/ipc').ConnectionsListReposResponse;
+type ConnectionsListJiraProjectsRequest = import('../../src/shared/ipc').ConnectionsListJiraProjectsRequest;
+type ConnectionsListJiraProjectsResponse = import('../../src/shared/ipc').ConnectionsListJiraProjectsResponse;
+
 describe('src/shared/ipc.ts — Connection model + Connections settings extension', () => {
   // -----------------------------------------------------------------
   // IPC-CONN-001 — channel-string contract
@@ -256,6 +263,92 @@ describe('src/shared/ipc.ts — Connection model + Connections settings extensio
       expectTypeOf<IpcApi>().toHaveProperty('secrets');
       expectTypeOf<IpcApi>().toHaveProperty('jira');
       expectTypeOf<IpcApi>().toHaveProperty('runs');
+    });
+  });
+
+  // -----------------------------------------------------------------
+  // IPC-CONN-LR-001..002 / IPC-CONN-LJP-001..002 — issue #25 channels
+  // -----------------------------------------------------------------
+  describe('IPC-CONN-LR-001..002 listRepos channel + IpcApi shape', () => {
+    it('IPC-CONN-LR-001: CONNECTIONS_LIST_REPOS === "connections:list-repos"', () => {
+      expect(IPC_CHANNELS.CONNECTIONS_LIST_REPOS).toBe('connections:list-repos');
+    });
+
+    it('IPC-CONN-LR-001: CONNECTIONS_LIST_REPOS keeps its literal-string type (compile-time)', () => {
+      expectTypeOf(
+        IPC_CHANNELS.CONNECTIONS_LIST_REPOS,
+      ).toEqualTypeOf<'connections:list-repos'>();
+    });
+
+    it('IPC-CONN-LR-001: CONNECTIONS_LIST_REPOS key is present on IPC_CHANNELS', () => {
+      expect(Object.keys(IPC_CHANNELS)).toContain('CONNECTIONS_LIST_REPOS');
+    });
+
+    it('IPC-CONN-LR-002: IpcApi.connections.listRepos signature', () => {
+      expectTypeOf<IpcApi['connections']>().toHaveProperty('listRepos');
+      expectTypeOf<IpcApi['connections']['listRepos']>().toEqualTypeOf<
+        (
+          req: ConnectionsListReposRequest,
+        ) => Promise<IpcResult<ConnectionsListReposResponse>>
+      >();
+    });
+
+    it('IPC-CONN-LR-002: ConnectionsListReposRequest carries `connectionId` string', () => {
+      expectTypeOf<ConnectionsListReposRequest>().toHaveProperty('connectionId');
+      expectTypeOf<ConnectionsListReposRequest['connectionId']>().toEqualTypeOf<string>();
+    });
+
+    it('IPC-CONN-LR-002: ConnectionsListReposResponse.repos has slug/defaultBranch/private', () => {
+      expectTypeOf<ConnectionsListReposResponse>().toHaveProperty('repos');
+      // Each repo entry has slug + defaultBranch + private (compile-time).
+      type RepoEntry = ConnectionsListReposResponse['repos'][number];
+      expectTypeOf<RepoEntry>().toHaveProperty('slug');
+      expectTypeOf<RepoEntry['slug']>().toEqualTypeOf<string>();
+      expectTypeOf<RepoEntry>().toHaveProperty('defaultBranch');
+      expectTypeOf<RepoEntry['defaultBranch']>().toEqualTypeOf<string>();
+      expectTypeOf<RepoEntry>().toHaveProperty('private');
+      expectTypeOf<RepoEntry['private']>().toEqualTypeOf<boolean>();
+    });
+  });
+
+  describe('IPC-CONN-LJP-001..002 listJiraProjects channel + IpcApi shape', () => {
+    it('IPC-CONN-LJP-001: CONNECTIONS_LIST_JIRA_PROJECTS === "connections:list-jira-projects"', () => {
+      expect(IPC_CHANNELS.CONNECTIONS_LIST_JIRA_PROJECTS).toBe(
+        'connections:list-jira-projects',
+      );
+    });
+
+    it('IPC-CONN-LJP-001: CONNECTIONS_LIST_JIRA_PROJECTS keeps its literal-string type', () => {
+      expectTypeOf(
+        IPC_CHANNELS.CONNECTIONS_LIST_JIRA_PROJECTS,
+      ).toEqualTypeOf<'connections:list-jira-projects'>();
+    });
+
+    it('IPC-CONN-LJP-001: CONNECTIONS_LIST_JIRA_PROJECTS key is present on IPC_CHANNELS', () => {
+      expect(Object.keys(IPC_CHANNELS)).toContain('CONNECTIONS_LIST_JIRA_PROJECTS');
+    });
+
+    it('IPC-CONN-LJP-002: IpcApi.connections.listJiraProjects signature', () => {
+      expectTypeOf<IpcApi['connections']>().toHaveProperty('listJiraProjects');
+      expectTypeOf<IpcApi['connections']['listJiraProjects']>().toEqualTypeOf<
+        (
+          req: ConnectionsListJiraProjectsRequest,
+        ) => Promise<IpcResult<ConnectionsListJiraProjectsResponse>>
+      >();
+    });
+
+    it('IPC-CONN-LJP-002: ConnectionsListJiraProjectsRequest carries `connectionId` string', () => {
+      expectTypeOf<ConnectionsListJiraProjectsRequest>().toHaveProperty('connectionId');
+      expectTypeOf<ConnectionsListJiraProjectsRequest['connectionId']>().toEqualTypeOf<string>();
+    });
+
+    it('IPC-CONN-LJP-002: ConnectionsListJiraProjectsResponse.projects has key + name', () => {
+      expectTypeOf<ConnectionsListJiraProjectsResponse>().toHaveProperty('projects');
+      type ProjEntry = ConnectionsListJiraProjectsResponse['projects'][number];
+      expectTypeOf<ProjEntry>().toHaveProperty('key');
+      expectTypeOf<ProjEntry['key']>().toEqualTypeOf<string>();
+      expectTypeOf<ProjEntry>().toHaveProperty('name');
+      expectTypeOf<ProjEntry['name']>().toEqualTypeOf<string>();
     });
   });
 });
