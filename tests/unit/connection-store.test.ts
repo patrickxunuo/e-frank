@@ -542,9 +542,48 @@ describe('ConnectionStore', () => {
 
       expect(r.data.lastVerifiedAt).toBeGreaterThanOrEqual(created.data.createdAt);
       expect(r.data.accountIdentity).toEqual(identity);
+      expect(r.data.verificationStatus).toBe('verified');
       expect(r.data.updatedAt).toBeGreaterThanOrEqual(created.data.updatedAt);
       expect(r.data.id).toBe(created.data.id);
       expect(r.data.createdAt).toBe(created.data.createdAt);
+    });
+
+    it('CONN-STORE-014b: markVerificationFailed() sets verificationStatus="auth-failed" and bumps updatedAt', async () => {
+      await store.init();
+      const created = await store.create(ghInput());
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+
+      // First verify it, so we can confirm the field flips back.
+      const identity: ConnectionIdentity = {
+        kind: 'github',
+        login: 'gazhang',
+        scopes: ['repo'],
+      };
+      const verified = await store.recordVerification(created.data.id, identity);
+      expect(verified.ok).toBe(true);
+      if (!verified.ok) return;
+      expect(verified.data.verificationStatus).toBe('verified');
+
+      await new Promise<void>((r) => setImmediate(r));
+
+      const failed = await store.markVerificationFailed(created.data.id);
+      expect(failed.ok).toBe(true);
+      if (!failed.ok) return;
+      expect(failed.data.verificationStatus).toBe('auth-failed');
+      // accountIdentity + lastVerifiedAt are preserved so the UI can show
+      // "this WAS @gazhang, but the token is no longer valid".
+      expect(failed.data.accountIdentity).toEqual(identity);
+      expect(failed.data.lastVerifiedAt).toBe(verified.data.lastVerifiedAt);
+      expect(failed.data.updatedAt).toBeGreaterThanOrEqual(verified.data.updatedAt);
+    });
+
+    it('CONN-STORE-014c: markVerificationFailed() returns NOT_FOUND for an unknown id', async () => {
+      await store.init();
+      const r = await store.markVerificationFailed('nope');
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('NOT_FOUND');
     });
   });
 

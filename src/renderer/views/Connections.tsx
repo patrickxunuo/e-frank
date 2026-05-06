@@ -1,5 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Connection, Provider } from '@shared/ipc';
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import type { Connection, ConnectionIdentity, Provider } from '@shared/ipc';
 import { AddConnectionDialog } from '../components/AddConnectionDialog';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
@@ -25,19 +33,6 @@ export interface ConnectionsProps {
   initialAdd?: boolean;
 }
 
-interface RowTestState {
-  kind: 'success';
-  summary: string;
-}
-
-interface RowErrorState {
-  kind: 'error';
-  code: string;
-  message: string;
-}
-
-type RowFeedback = RowTestState | RowErrorState | undefined;
-
 function providerIconFor(provider: Provider): JSX.Element {
   switch (provider) {
     case 'github':
@@ -60,16 +55,9 @@ function providerLabelFor(provider: Provider): string {
   }
 }
 
-function identityDisplay(c: Connection): string {
-  const id = c.accountIdentity;
-  if (!id) return 'Not verified';
-  if (id.kind === 'github') return id.name ? `${id.name} (@${id.login})` : `@${id.login}`;
-  if (id.kind === 'jira') {
-    if (id.displayName && id.emailAddress) {
-      return `${id.displayName} <${id.emailAddress}>`;
-    }
-    return id.displayName ?? id.accountId;
-  }
+function identitySummary(id: ConnectionIdentity): string {
+  if (id.kind === 'github') return `@${id.login}`;
+  if (id.kind === 'jira') return id.displayName || id.accountId;
   return id.displayName ?? id.username;
 }
 
@@ -77,6 +65,98 @@ function lastVerifiedDisplay(epochMs: number | undefined): string {
   if (typeof epochMs !== 'number' || !Number.isFinite(epochMs)) return '—';
   return formatRelative(new Date(epochMs).toISOString());
 }
+
+/**
+ * Test in-flight state. We use a Context (rather than threading the id
+ * through every cell render via the columns memo) so the columns array
+ * reference is stable across test clicks — DataTable doesn't re-render
+ * unrelated rows. Only the ActionsCell subscribes to this context, so
+ * only ActionsCells re-render when a test starts/finishes.
+ */
+const TestingIdContext = createContext<string | null>(null);
+
+interface ActionsCellProps {
+  row: Connection;
+  onTest: (c: Connection) => void;
+  onEdit: (c: Connection) => void;
+  onDelete: (c: Connection) => void;
+}
+
+const ActionsCell = memo(function ActionsCell({
+  row,
+  onTest,
+  onEdit,
+  onDelete,
+}: ActionsCellProps): JSX.Element {
+  const testingId = useContext(TestingIdContext);
+  const isTesting = testingId === row.id;
+  const otherTesting = testingId !== null && testingId !== row.id;
+  return (
+    <div className={styles.actionsCell}>
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={isTesting || otherTesting}
+        onClick={(e) => {
+          e.stopPropagation();
+          onTest(row);
+        }}
+        data-testid={`connection-test-${row.id}`}
+      >
+        {isTesting ? 'Testing…' : 'Test'}
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={(e) => {
+          e.stopPropagation();
+          onEdit(row);
+        }}
+        data-testid={`connection-edit-${row.id}`}
+      >
+        Edit
+      </Button>
+      <Button
+        variant="destructive"
+        size="sm"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete(row);
+        }}
+        data-testid={`connection-delete-${row.id}`}
+      >
+        Delete
+      </Button>
+    </div>
+  );
+});
+
+/**
+ * Identity cell — pure derivation from row data. Memoized so a row update
+ * elsewhere in the table doesn't force this cell to re-render. The pill is
+ * persistent across navigations because `verificationStatus` lives on the
+ * server-side connection record (see ConnectionStore.recordVerification /
+ * markVerificationFailed).
+ */
+const IdentityCell = memo(function IdentityCell({ row }: { row: Connection }): JSX.Element {
+  if (row.verificationStatus === 'auth-failed') {
+    return (
+      <span className={styles.testPill} data-state="error">
+        <IconClose size={12} />
+        Auth expired — re-test
+      </span>
+    );
+  }
+  if (row.verificationStatus === 'verified' && row.accountIdentity) {
+    return (
+      <span className={styles.testPill} data-state="success">
+        <IconCheck size={12} />
+        {identitySummary(row.accountIdentity)}
+      </span>
+    );
+  }
+  return <span className={styles.cellTertiary}>Not verified</span>;
+});
 
 export function Connections({ initialAdd = false }: ConnectionsProps): JSX.Element {
   const { connections, loading, error, refresh } = useConnections();
@@ -86,7 +166,8 @@ export function Connections({ initialAdd = false }: ConnectionsProps): JSX.Eleme
   const [deleteError, setDeleteError] = useState<{ message: string; referencedBy?: string[] } | undefined>(
     undefined,
   );
-  const [rowFeedback, setRowFeedback] = useState<Record<string, RowFeedback>>({});
+  /** Single in-flight test at a time — disables the corresponding Test button. */
+  const [testingId, setTestingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (initialAdd) {
@@ -94,30 +175,46 @@ export function Connections({ initialAdd = false }: ConnectionsProps): JSX.Eleme
     }
   }, [initialAdd]);
 
-  const handleTest = useCallback(
-    async (c: Connection): Promise<void> => {
+  const handleTestRow = useCallback(
+    (c: Connection): void => {
       if (typeof window === 'undefined' || !window.api) return;
-      setRowFeedback((prev) => ({ ...prev, [c.id]: undefined }));
-      const result = await window.api.connections.test({ mode: 'existing', id: c.id });
-      if (result.ok) {
-        const id = result.data.identity;
-        const summary =
-          id.kind === 'github'
-            ? `@${id.login}`
-            : id.kind === 'jira'
-              ? id.displayName
-              : id.username;
-        setRowFeedback((prev) => ({ ...prev, [c.id]: { kind: 'success', summary } }));
-        await refresh();
-      } else {
-        setRowFeedback((prev) => ({
-          ...prev,
-          [c.id]: { kind: 'error', code: result.error.code, message: result.error.message },
-        }));
-      }
+      const api = window.api;
+      void (async () => {
+        // Reads testingId via the setState updater — no need to add it to
+        // deps and break the stable callback identity.
+        let alreadyTesting = false;
+        setTestingId((prev) => {
+          if (prev !== null) {
+            alreadyTesting = true;
+            return prev;
+          }
+          return c.id;
+        });
+        if (alreadyTesting) return;
+        try {
+          // Pill state lives on the server-side connection record. After
+          // the test the main process has already called recordVerification
+          // (success) or markVerificationFailed (HTTP 401), so refresh()
+          // surfaces the new state with no transient local feedback needed.
+          await api.connections.test({ mode: 'existing', id: c.id });
+          await refresh();
+        } finally {
+          setTestingId(null);
+        }
+      })();
     },
     [refresh],
   );
+
+  const handleEditRow = useCallback((c: Connection): void => {
+    setEditing(c);
+    setAddOpen(true);
+  }, []);
+
+  const handleDeleteRow = useCallback((c: Connection): void => {
+    setConfirmDelete(c);
+    setDeleteError(undefined);
+  }, []);
 
   const handleDeleteConfirm = async (): Promise<void> => {
     if (!confirmDelete) return;
@@ -176,35 +273,7 @@ export function Connections({ initialAdd = false }: ConnectionsProps): JSX.Eleme
       {
         key: 'identity',
         header: 'Identity',
-        render: (row) => {
-          const fb = rowFeedback[row.id];
-          if (fb?.kind === 'error') {
-            return (
-              <span className={styles.testPill} data-state="error">
-                <IconClose size={12} />
-                {fb.code}
-              </span>
-            );
-          }
-          if (fb?.kind === 'success') {
-            return (
-              <span className={styles.testPill} data-state="success">
-                <IconCheck size={12} />
-                {fb.summary}
-              </span>
-            );
-          }
-          const display = identityDisplay(row);
-          return (
-            <span
-              className={
-                row.accountIdentity ? styles.cellPrimary : styles.cellTertiary
-              }
-            >
-              {display}
-            </span>
-          );
-        },
+        render: (row) => <IdentityCell row={row} />,
       },
       {
         key: 'lastVerifiedAt',
@@ -219,47 +288,16 @@ export function Connections({ initialAdd = false }: ConnectionsProps): JSX.Eleme
         align: 'right',
         width: '260px',
         render: (row) => (
-          <div className={styles.actionsCell}>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleTest(row);
-              }}
-              data-testid={`connection-test-${row.id}`}
-            >
-              Test
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                setEditing(row);
-                setAddOpen(true);
-              }}
-              data-testid={`connection-edit-${row.id}`}
-            >
-              Edit
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                setConfirmDelete(row);
-                setDeleteError(undefined);
-              }}
-              data-testid={`connection-delete-${row.id}`}
-            >
-              Delete
-            </Button>
-          </div>
+          <ActionsCell
+            row={row}
+            onTest={handleTestRow}
+            onEdit={handleEditRow}
+            onDelete={handleDeleteRow}
+          />
         ),
       },
     ],
-    [rowFeedback, handleTest],
+    [handleTestRow, handleEditRow, handleDeleteRow],
   );
 
   const showSkeleton = loading && connections.length === 0;
@@ -343,13 +381,15 @@ export function Connections({ initialAdd = false }: ConnectionsProps): JSX.Eleme
       )}
 
       {showTable && (
-        <DataTable
-          columns={columns}
-          rows={connections}
-          rowKey={(row) => row.id}
-          rowTestId={(row) => `connections-row-${row.id}`}
-          data-testid="connections-table"
-        />
+        <TestingIdContext.Provider value={testingId}>
+          <DataTable
+            columns={columns}
+            rows={connections}
+            rowKey={(row) => row.id}
+            rowTestId={(row) => `connections-row-${row.id}`}
+            data-testid="connections-table"
+          />
+        </TestingIdContext.Provider>
       )}
 
       <AddConnectionDialog

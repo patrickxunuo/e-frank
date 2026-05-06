@@ -551,7 +551,47 @@ export class ConnectionStore {
         ...existing,
         accountIdentity: identity,
         lastVerifiedAt: now,
+        verificationStatus: 'verified',
         updatedAt: now,
+      };
+      const connections = [...this.envelope.connections];
+      connections[idx] = updated;
+      const next: StoreEnvelope = { schemaVersion: SCHEMA_VERSION, connections };
+      const writeRes = await this.atomicWrite(next);
+      if (!writeRes.ok) {
+        return writeRes;
+      }
+      this.envelope = next;
+      return { ok: true, data: { ...updated } };
+    });
+  }
+
+  /**
+   * Flip `verificationStatus` to `'auth-failed'` after a Test Connection
+   * returned HTTP 401. Other failures (network, 5xx, 403, timeouts) MUST NOT
+   * call this — only an explicit 401 invalidates the cached "this token
+   * works" state.
+   *
+   * Preserves the existing `accountIdentity` + `lastVerifiedAt` so the UI
+   * can still show "this WAS @gazhang, but the token is no longer valid".
+   */
+  async markVerificationFailed(
+    id: string,
+  ): Promise<ConnectionStoreResult<Connection>> {
+    return this.enqueue(async () => {
+      if (!this.initialized) return notInitialized();
+      const idx = this.envelope.connections.findIndex((c) => c.id === id);
+      if (idx === -1) {
+        return {
+          ok: false,
+          error: { code: 'NOT_FOUND', message: `no connection with id "${id}"` },
+        };
+      }
+      const existing = this.envelope.connections[idx]!;
+      const updated: Connection = {
+        ...existing,
+        verificationStatus: 'auth-failed',
+        updatedAt: Date.now(),
       };
       const connections = [...this.envelope.connections];
       connections[idx] = updated;

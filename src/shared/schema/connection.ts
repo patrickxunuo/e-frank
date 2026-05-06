@@ -36,6 +36,20 @@ export type ConnectionIdentity =
   | { kind: 'jira'; accountId: string; displayName: string; emailAddress?: string }
   | { kind: 'bitbucket'; username: string; displayName?: string };
 
+/**
+ * Last-known verification state of the stored token. Drives the persistent
+ * green/red pill in the renderer.
+ *
+ *  - 'verified'    — most recent test succeeded; identity + lastVerifiedAt are present
+ *  - 'auth-failed' — most recent test returned HTTP 401 (invalid credentials).
+ *                    Note: 403 (insufficient scope), 5xx, network errors, timeouts
+ *                    do NOT flip to auth-failed — only an explicit 401 invalidates
+ *                    the cached "this token works" state.
+ *  - undefined     — never tested
+ */
+export const VERIFICATION_STATUSES = ['verified', 'auth-failed'] as const;
+export type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];
+
 export interface Connection {
   /** UUID v4 — assigned by the store. */
   id: string;
@@ -53,6 +67,12 @@ export interface Connection {
   accountIdentity?: ConnectionIdentity;
   /** Epoch ms of last successful test, or `undefined` if never verified. */
   lastVerifiedAt?: number;
+  /**
+   * Last-known verification state. Persistent across sessions; drives the
+   * pill in the Connections list. Only flips to `auth-failed` on an explicit
+   * HTTP 401 from a `connections:test` call.
+   */
+  verificationStatus?: VerificationStatus;
   /** Epoch ms — set on create. */
   createdAt: number;
   /** Epoch ms — bumped on every update. */
@@ -287,6 +307,29 @@ export function validateConnection(input: unknown): ValidationResult {
     }
   }
 
+  // verificationStatus is optional; if present must be a known enum value.
+  let verificationStatus: VerificationStatus | undefined;
+  const verificationStatusRaw = input['verificationStatus'];
+  if (verificationStatusRaw !== undefined && verificationStatusRaw !== null) {
+    if (typeof verificationStatusRaw !== 'string') {
+      errors.push({
+        path: 'verificationStatus',
+        code: 'NOT_STRING',
+        message: 'verificationStatus must be a string',
+      });
+    } else if (
+      !(VERIFICATION_STATUSES as ReadonlyArray<string>).includes(verificationStatusRaw)
+    ) {
+      errors.push({
+        path: 'verificationStatus',
+        code: 'INVALID_ENUM',
+        message: `verificationStatus must be one of: ${VERIFICATION_STATUSES.join(', ')}`,
+      });
+    } else {
+      verificationStatus = verificationStatusRaw as VerificationStatus;
+    }
+  }
+
   if (errors.length > 0) {
     return { ok: false, errors };
   }
@@ -306,6 +349,9 @@ export function validateConnection(input: unknown): ValidationResult {
   }
   if (accountIdentity !== undefined) {
     value.accountIdentity = accountIdentity;
+  }
+  if (verificationStatus !== undefined) {
+    value.verificationStatus = verificationStatus;
   }
   return { ok: true, value };
 }

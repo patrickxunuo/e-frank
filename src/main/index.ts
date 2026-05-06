@@ -605,6 +605,17 @@ async function runConnectionTest(
     });
     const res = await client.testConnection();
     if (!res.ok) {
+      // Only an explicit HTTP 401 invalidates a stored connection's
+      // verified state. 403/network/5xx leave the cached "verified" bit
+      // alone — the token may still be valid, this call just couldn't
+      // confirm it.
+      if (
+        existingId !== undefined &&
+        res.error.code === 'AUTH' &&
+        res.error.status === 401
+      ) {
+        await connectionStore.markVerificationFailed(existingId);
+      }
       return { ok: false, error: { code: res.error.code, message: res.error.message } };
     }
     const identity: ConnectionIdentity = {
@@ -634,6 +645,13 @@ async function runConnectionTest(
     });
     const res = await client.testConnection();
     if (!res.ok) {
+      if (
+        existingId !== undefined &&
+        res.error.code === 'AUTH' &&
+        res.error.status === 401
+      ) {
+        await connectionStore.markVerificationFailed(existingId);
+      }
       return { ok: false, error: { code: res.error.code, message: res.error.message } };
     }
     const identity: ConnectionIdentity = {

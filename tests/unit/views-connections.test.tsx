@@ -47,6 +47,7 @@ const githubConn: Connection = {
   secretRef: 'connection:conn-gh-1:token',
   accountIdentity: { kind: 'github', login: 'gazhang', scopes: ['repo', 'read:user'] },
   lastVerifiedAt: 1700000000000,
+  verificationStatus: 'verified',
   createdAt: 1700000000000,
   updatedAt: 1700000000000,
 };
@@ -65,6 +66,7 @@ const jiraConn: Connection = {
     emailAddress: 'gazhang@emonster.tech',
   },
   lastVerifiedAt: 1700000000000,
+  verificationStatus: 'verified',
   createdAt: 1700000000000,
   updatedAt: 1700000000000,
 };
@@ -225,20 +227,51 @@ describe('<Connections /> — VIEW-CONN', () => {
   });
 
   // -------------------------------------------------------------------------
-  // VIEW-CONN-004 — "Not verified" pill when accountIdentity absent
+  // VIEW-CONN-004 — "Not verified" pill when verificationStatus is undefined
   // -------------------------------------------------------------------------
-  it('VIEW-CONN-004: row shows "Not verified" when accountIdentity is absent', async () => {
+  it('VIEW-CONN-004: row shows "Not verified" when verificationStatus is undefined', async () => {
     const unverified: Connection = {
       ...githubConn,
       id: 'conn-unv',
       accountIdentity: undefined,
       lastVerifiedAt: undefined,
+      verificationStatus: undefined,
     };
     installApi({ listResult: { ok: true, data: [unverified] } });
     render(<Connections />);
 
     const row = await screen.findByTestId('connections-row-conn-unv');
     expect(within(row).getByText(/not verified/i)).toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // VIEW-CONN-004b — Persistent green pill when verificationStatus='verified'
+  // -------------------------------------------------------------------------
+  it('VIEW-CONN-004b: row shows the @login pill when verificationStatus=verified', async () => {
+    installApi({ listResult: { ok: true, data: [githubConn] } });
+    render(<Connections />);
+
+    const row = await screen.findByTestId('connections-row-conn-gh-1');
+    // Persistent green pill — derived from server-side `verificationStatus`,
+    // so navigating away and back leaves it visible.
+    expect(within(row).getByText(/@gazhang/i)).toBeInTheDocument();
+    expect(within(row).queryByText(/not verified/i)).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // VIEW-CONN-004c — auth-failed pill when verificationStatus='auth-failed'
+  // -------------------------------------------------------------------------
+  it('VIEW-CONN-004c: row shows the auth-failed pill when verificationStatus=auth-failed', async () => {
+    const expired: Connection = {
+      ...githubConn,
+      id: 'conn-expired',
+      verificationStatus: 'auth-failed',
+    };
+    installApi({ listResult: { ok: true, data: [expired] } });
+    render(<Connections />);
+
+    const row = await screen.findByTestId('connections-row-conn-expired');
+    expect(within(row).getByText(/auth expired/i)).toBeInTheDocument();
   });
 
   // -------------------------------------------------------------------------
