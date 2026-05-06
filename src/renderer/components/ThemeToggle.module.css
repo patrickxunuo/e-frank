@@ -1,0 +1,25 @@
+/*
+ * ThemeToggle wraps a Button (variant="icon" size="sm"). The button
+ * already supplies the focus ring + hover chrome; this module only
+ * positions the toggle and gives the icon a subtle theme-aware tint.
+ */
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 var(--space-1) var(--space-3);
+  align-self: flex-start;
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.toggle:hover .icon {
+  color: var(--text-primary);
+}

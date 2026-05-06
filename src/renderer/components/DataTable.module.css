@@ -24,7 +24,7 @@
   color: var(--text-tertiary);
   padding: 14px var(--space-5);
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.015);
+  background: var(--surface-overlay-subtle);
   white-space: nowrap;
 }
 
@@ -60,7 +60,7 @@
 }
 
 .row:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--surface-overlay-subtle);
 }
 
 .empty {

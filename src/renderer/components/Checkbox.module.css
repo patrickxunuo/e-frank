@@ -47,7 +47,7 @@
 .row[data-indeterminate='true'] .box {
   background: var(--accent);
   border-color: var(--accent);
-  box-shadow: 0 0 12px -3px rgba(77, 124, 255, 0.6);
+  box-shadow: 0 0 12px -3px var(--accent-glow);
 }
 
 .tick {

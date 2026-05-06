@@ -10,7 +10,7 @@
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
-  border: 1px solid rgba(240, 111, 111, 0.3);
+  border: 1px solid var(--danger-border);
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 13px;
@@ -53,13 +53,13 @@
 .testPill[data-state='success'] {
   color: var(--success);
   background: var(--success-soft);
-  border-color: rgba(74, 217, 138, 0.3);
+  border-color: var(--success-border);
 }
 
 .testPill[data-state='error'] {
   color: var(--danger);
   background: var(--danger-soft);
-  border-color: rgba(240, 111, 111, 0.3);
+  border-color: var(--danger-border);
 }
 
 .actions {

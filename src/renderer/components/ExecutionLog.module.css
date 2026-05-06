@@ -57,7 +57,7 @@
 
 .row[data-status='running']::before {
   background: var(--accent);
-  box-shadow: 0 0 12px -2px rgba(77, 124, 255, 0.55);
+  box-shadow: 0 0 12px -2px var(--accent-glow);
 }
 
 .row[data-status='done']::before {
@@ -73,11 +73,11 @@
 }
 
 .row[data-status='running'] {
-  border-color: rgba(77, 124, 255, 0.35);
+  border-color: var(--accent-border);
   background: linear-gradient(
     180deg,
-    rgba(77, 124, 255, 0.05),
-    rgba(77, 124, 255, 0)
+    var(--accent-soft),
+    transparent
   );
 }
 
@@ -107,7 +107,7 @@
 
 .toggle:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface-overlay-low);
 }
 
 .toggle:focus-visible {
@@ -132,33 +132,33 @@
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface-overlay-low);
   border: 1px solid var(--border-subtle);
   color: var(--text-tertiary);
 }
 
 .row[data-status='running'] .statusIcon {
   color: var(--accent);
-  background: rgba(77, 124, 255, 0.15);
-  border-color: rgba(77, 124, 255, 0.4);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
 }
 
 .row[data-status='done'] .statusIcon {
   color: var(--success);
   background: var(--success-soft);
-  border-color: rgba(74, 217, 138, 0.35);
+  border-color: var(--success-border);
 }
 
 .row[data-status='failed'] .statusIcon {
   color: var(--danger);
   background: var(--danger-soft);
-  border-color: rgba(240, 111, 111, 0.35);
+  border-color: var(--danger-border);
 }
 
 .row[data-status='cancelled'] .statusIcon {
   color: var(--warning);
   background: var(--warning-soft);
-  border-color: rgba(240, 185, 92, 0.35);
+  border-color: var(--warning-border);
 }
 
 .statusDot {
@@ -175,10 +175,10 @@
 @keyframes pulseDot {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(77, 124, 255, 0.5);
+    box-shadow: 0 0 0 0 var(--accent-glow);
   }
   50% {
-    box-shadow: 0 0 0 5px rgba(77, 124, 255, 0);
+    box-shadow: 0 0 0 5px transparent;
   }
 }
 

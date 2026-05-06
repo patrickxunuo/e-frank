@@ -1,5 +1,6 @@
 import styles from './Sidebar.module.css';
 import { IconKey, IconLogo, IconProjects, IconSettings } from './icons';
+import { ThemeToggle } from './ThemeToggle';
 
 export type SidebarNavId = 'projects' | 'connections' | 'settings';
 
@@ -70,6 +71,8 @@ export function Sidebar({ activeNav, user, onNavigate }: SidebarProps): JSX.Elem
       </nav>
 
       <div className={styles.spacer} />
+
+      <ThemeToggle />
 
       {user && (
         <div className={styles.user} data-testid="sidebar-user">

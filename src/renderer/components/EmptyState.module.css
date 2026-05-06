@@ -12,8 +12,8 @@
   width: 64px;
   height: 64px;
   border-radius: var(--radius-lg);
-  background: rgba(77, 124, 255, 0.08);
-  border: 1px solid rgba(77, 124, 255, 0.2);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-soft-strong);
   display: inline-flex;
   align-items: center;
   justify-content: center;

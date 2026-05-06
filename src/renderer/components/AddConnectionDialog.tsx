@@ -8,9 +8,9 @@ import type {
 } from '@shared/ipc';
 import { Button } from './Button';
 import { Dialog } from './Dialog';
+import { Dropdown } from './Dropdown';
 import { FormSection } from './FormSection';
 import { Input } from './Input';
-import { Select } from './Select';
 import { IconAlert, IconCheck, IconClose, IconRefresh } from './icons';
 import styles from './AddConnectionDialog.module.css';
 
@@ -300,21 +300,20 @@ export function AddConnectionDialog({
           description="Pick the service this connection authenticates against."
           data-testid="add-connection-section-1"
         >
-          <Select
+          <Dropdown
             label="Provider"
             required
             value={form.provider}
-            onChange={(e) => onProviderChange(e.target.value as Provider)}
+            onChange={(value) => onProviderChange(value as Provider)}
             disabled={isEdit}
+            options={[
+              { value: 'github', label: 'GitHub' },
+              { value: 'jira', label: 'Jira' },
+              { value: 'bitbucket', label: 'Bitbucket (coming soon)', disabled: true },
+            ]}
             data-testid="connection-provider-select"
             name="provider"
-          >
-            <option value="github">GitHub</option>
-            <option value="jira">Jira</option>
-            <option value="bitbucket" disabled>
-              Bitbucket (coming soon)
-            </option>
-          </Select>
+          />
         </FormSection>
 
         <FormSection

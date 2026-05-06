@@ -36,7 +36,7 @@
 
 .shell:focus-within {
   border-color: var(--accent);
-  box-shadow: var(--shadow-glow-accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .shell.error {
@@ -44,7 +44,7 @@
 }
 
 .shell.error:focus-within {
-  box-shadow: 0 0 0 1px rgba(240, 111, 111, 0.4), 0 8px 24px rgba(240, 111, 111, 0.18);
+  box-shadow: 0 0 0 3px var(--danger-soft);
 }
 
 .leadingIcon {
