@@ -1,0 +1,89 @@
+/*
+ * <CodeDiff> — unified-diff renderer with hand-rolled syntax highlighting.
+ *
+ * Each line is a 3-column grid: remove gutter | add gutter | content. The
+ * content is a sequence of token spans whose colors come from the global
+ * `tk-*` classes (kept global via :global(...) so the consumer's tokenizer
+ * output doesn't need to know about CSS-Modules hashing).
+ */
+
+.root {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 320px;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.line {
+  display: grid;
+  grid-template-columns: 36px 36px 1fr;
+  gap: 0;
+  white-space: pre;
+}
+
+.line[data-line-kind='add'] {
+  background: var(--success-soft);
+}
+
+.line[data-line-kind='remove'] {
+  background: var(--danger-soft);
+}
+
+.line[data-line-kind='hunk'] {
+  color: var(--text-tertiary);
+}
+
+.line[data-line-kind='meta'] {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.gutter {
+  color: var(--text-tertiary);
+  padding: 0 var(--space-2);
+  user-select: none;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.text {
+  color: var(--text-primary);
+  white-space: pre;
+}
+
+:global(.tk-keyword) {
+  color: var(--accent-hover);
+}
+
+:global(.tk-string) {
+  color: var(--success);
+}
+
+:global(.tk-comment) {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+:global(.tk-number) {
+  color: var(--warning);
+}
+
+:global(.tk-punct) {
+  color: var(--text-secondary);
+}
+
+:global(.tk-ident) {
+  color: var(--text-primary);
+}
+
+:global(.tk-whitespace) {
+  /* No styling — the span exists only to preserve exact alignment. */
+}

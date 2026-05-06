@@ -3,7 +3,8 @@
  *
  * Layout (top → bottom):
  *   1. Sticky header  (back / title / progress / autoscroll / pause / cancel)
- *   2. Two-column body: left log (~60%), right placeholder (~40%)
+ *   2. Two-column body: left log (~60%), right approval panel (~40%);
+ *      right pane collapses when no approval is pending (single-column).
  *   3. Sticky bottom prompt composer
  *
  * The whole page fills the viewport so the scroll regions live INSIDE the
@@ -151,6 +152,10 @@
   gap: 0;
 }
 
+.body[data-has-panel='false'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .leftPane {
   display: flex;
   flex-direction: column;
@@ -158,66 +163,15 @@
   border-right: 1px solid var(--border-default);
 }
 
+.body[data-has-panel='false'] .leftPane {
+  border-right: none;
+}
+
 .rightPane {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: var(--space-5);
   overflow-y: auto;
-}
-
-.placeholderCard {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  align-items: flex-start;
-  padding: var(--space-5);
-  border-radius: var(--radius-lg);
-  border: 1px dashed var(--border-default);
-  background: rgba(255, 255, 255, 0.015);
-  color: var(--text-secondary);
-}
-
-.placeholderHeader {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.placeholderIcon {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--accent-soft, rgba(77, 124, 255, 0.12));
-  border: 1px solid rgba(77, 124, 255, 0.32);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--accent);
-  flex: 0 0 auto;
-}
-
-.placeholderTitle {
-  font-family: var(--font-display);
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
-  line-height: 1.2;
-}
-
-.placeholderBody {
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--text-secondary);
-  max-width: 36ch;
-}
-
-.placeholderHint {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
 }
 
 .errorPanel {

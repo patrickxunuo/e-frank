@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,6 +11,7 @@ import {
 import '@testing-library/jest-dom/vitest';
 import { ExecutionView } from '../../src/renderer/views/ExecutionView';
 import type {
+  ApprovalRequest,
   IpcApi,
   IpcResult,
   ProjectInstanceDto,
@@ -364,24 +366,8 @@ describe('<ExecutionView /> — EXEC', () => {
   });
 
   // -------------------------------------------------------------------------
-  // EXEC-007 — Right pane shows "Approval panel lands in #9"
-  // -------------------------------------------------------------------------
-  it('EXEC-007: right-pane placeholder renders with the #9 hand-off note', async () => {
-    installApi({
-      current: {
-        ok: true,
-        data: { run: makeRun({ id: 'r-1', projectId: 'p-1' }) },
-      },
-    });
-
-    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
-
-    const placeholder = await screen.findByTestId('execution-approval-placeholder');
-    expect(placeholder).toBeInTheDocument();
-    expect(placeholder.textContent ?? '').toMatch(/approval panel/i);
-    expect(placeholder.textContent ?? '').toMatch(/#9/);
-  });
-
+  // EXEC-007 — REMOVED in #9: the right-pane placeholder is replaced by
+  // <ApprovalPanel>. See EXEC-APPROVAL-001..008 below.
   // -------------------------------------------------------------------------
   // EXEC-008 — PromptInput onSubmit → claude.write with id from claude.status()
   // -------------------------------------------------------------------------
@@ -515,5 +501,336 @@ describe('<ExecutionView /> — EXEC', () => {
 
     const send = screen.getByTestId('log-send-button') as HTMLButtonElement;
     expect(send.disabled).toBe(true);
+  });
+});
+
+/**
+ * EXEC-APPROVAL-001..008 — <ExecutionView> + <ApprovalPanel> integration.
+ *
+ * The right pane is now driven by `Run.pendingApproval`:
+ *   - null  → no <aside> rendered, body data-has-panel="false"
+ *   - set   → <ApprovalPanel> rendered, body data-has-panel="true"
+ *
+ * The placeholder testid `execution-approval-placeholder` is removed.
+ *
+ * Modify uses runs.modify (NOT claude.write); the page-bottom PromptInput
+ * (`log-prompt-input` at the page footer) still calls claude.write.
+ */
+
+function makeApproval(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
+  return {
+    plan: 'Add validation to the foo function.',
+    filesToModify: ['src/foo.ts', 'src/bar.py', 'src/baz.go'],
+    diff:
+      'diff --git a/src/foo.ts b/src/foo.ts\n' +
+      '--- a/src/foo.ts\n' +
+      '+++ b/src/foo.ts\n' +
+      '@@ -1,3 +1,4 @@\n' +
+      ' const x = 1;\n' +
+      '+const y = 2;\n' +
+      ' const z = 3;\n',
+    options: ['approve', 'reject'],
+    raw: { kind: 'approval' },
+    ...over,
+  };
+}
+
+/** Find the `.body` container by walking from the page testid. */
+function bodyOf(): HTMLElement {
+  const page = screen.getByTestId('execution-view-page');
+  // Per acceptance spec: body is the element carrying data-has-panel.
+  const body = page.querySelector<HTMLElement>('[data-has-panel]');
+  if (!body) {
+    throw new Error('expected an element with [data-has-panel] inside execution-view-page');
+  }
+  return body;
+}
+
+describe('<ExecutionView /> — EXEC-APPROVAL', () => {
+  // -------------------------------------------------------------------------
+  // EXEC-APPROVAL-001 — pendingApproval === null → no panel, data-has-panel="false"
+  // -------------------------------------------------------------------------
+  it('EXEC-APPROVAL-001: pendingApproval === null → no approval-panel-root, body data-has-panel="false"', async () => {
+    installApi({
+      current: {
+        ok: true,
+        data: {
+          run: makeRun({
+            id: 'r-1',
+            projectId: 'p-1',
+            pendingApproval: null,
+          }),
+        },
+      },
+    });
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+
+    await screen.findByTestId('execution-view-page');
+
+    expect(screen.queryByTestId('approval-panel-root')).not.toBeInTheDocument();
+    const body = bodyOf();
+    expect(body.getAttribute('data-has-panel')).toBe('false');
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-APPROVAL-002 — populated pendingApproval → panel + data-has-panel="true"
+  // -------------------------------------------------------------------------
+  it('EXEC-APPROVAL-002: populated pendingApproval → approval-panel-root rendered, body data-has-panel="true"', async () => {
+    installApi({
+      current: {
+        ok: true,
+        data: {
+          run: makeRun({
+            id: 'r-1',
+            projectId: 'p-1',
+            state: 'awaitingApproval',
+            pendingApproval: makeApproval(),
+          }),
+        },
+      },
+    });
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+
+    await screen.findByTestId('approval-panel-root');
+    const body = bodyOf();
+    expect(body.getAttribute('data-has-panel')).toBe('true');
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-APPROVAL-003 — placeholder removed
+  // -------------------------------------------------------------------------
+  it('EXEC-APPROVAL-003: execution-approval-placeholder is removed entirely', async () => {
+    installApi({
+      current: {
+        ok: true,
+        data: { run: makeRun({ id: 'r-1', projectId: 'p-1' }) },
+      },
+    });
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+    await screen.findByTestId('execution-view-page');
+
+    expect(
+      screen.queryByTestId('execution-approval-placeholder'),
+    ).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-APPROVAL-004 — Approve → window.api.runs.approve({ runId })
+  // -------------------------------------------------------------------------
+  it('EXEC-APPROVAL-004: clicking Approve calls window.api.runs.approve({ runId })', async () => {
+    const stub = installApi({
+      current: {
+        ok: true,
+        data: {
+          run: makeRun({
+            id: 'r-42',
+            projectId: 'p-1',
+            state: 'awaitingApproval',
+            pendingApproval: makeApproval(),
+          }),
+        },
+      },
+    });
+    const approveSpy = vi.fn().mockResolvedValue({ ok: true, data: { runId: 'r-42' } });
+    (stub.api.runs as unknown as { approve: typeof approveSpy }).approve = approveSpy;
+
+    render(<ExecutionView runId="r-42" projectId="p-1" onBack={noop} />);
+
+    const btn = await screen.findByTestId('approve-button');
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      expect(approveSpy).toHaveBeenCalledWith({ runId: 'r-42' });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-APPROVAL-005 — Reject → window.api.runs.reject({ runId })
+  // -------------------------------------------------------------------------
+  it('EXEC-APPROVAL-005: clicking Reject calls window.api.runs.reject({ runId })', async () => {
+    const stub = installApi({
+      current: {
+        ok: true,
+        data: {
+          run: makeRun({
+            id: 'r-7',
+            projectId: 'p-1',
+            state: 'awaitingApproval',
+            pendingApproval: makeApproval(),
+          }),
+        },
+      },
+    });
+    const rejectSpy = vi.fn().mockResolvedValue({ ok: true, data: { runId: 'r-7' } });
+    (stub.api.runs as unknown as { reject: typeof rejectSpy }).reject = rejectSpy;
+
+    render(<ExecutionView runId="r-7" projectId="p-1" onBack={noop} />);
+
+    const btn = await screen.findByTestId('reject-button');
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      expect(rejectSpy).toHaveBeenCalledWith({ runId: 'r-7' });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-APPROVAL-006 — Modify text + Send → runs.modify; claude.write NOT called
+  // -------------------------------------------------------------------------
+  it('EXEC-APPROVAL-006: Modify text + Send calls runs.modify; claude.write NOT called', async () => {
+    const stub = installApi({
+      current: {
+        ok: true,
+        data: {
+          run: makeRun({
+            id: 'r-99',
+            projectId: 'p-1',
+            state: 'awaitingApproval',
+            pendingApproval: makeApproval({ plan: 'starting plan' }),
+          }),
+        },
+      },
+    });
+    const modifySpy = vi.fn().mockResolvedValue({ ok: true, data: { runId: 'r-99' } });
+    (stub.api.runs as unknown as { modify: typeof modifySpy }).modify = modifySpy;
+
+    render(<ExecutionView runId="r-99" projectId="p-1" onBack={noop} />);
+
+    // Open the modify composer.
+    const modifyBtn = await screen.findByTestId('modify-button');
+    fireEvent.click(modifyBtn);
+
+    // The composer uses distinct testids (`approval-modify-input` /
+    // `approval-modify-send`) so the page-bottom PromptInput's
+    // `log-prompt-input` / `log-send-button` don't collide.
+    const composer = (await screen.findByTestId(
+      'approval-modify-input',
+    )) as HTMLTextAreaElement;
+    const composerSend = screen.getByTestId(
+      'approval-modify-send',
+    ) as HTMLButtonElement;
+
+    fireEvent.change(composer, { target: { value: 'edited plan body' } });
+    fireEvent.click(composerSend);
+
+    await waitFor(() => {
+      expect(modifySpy).toHaveBeenCalledWith({
+        runId: 'r-99',
+        text: 'edited plan body',
+      });
+    });
+    expect(stub.claudeWrite).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-APPROVAL-007 — Page-bottom PromptInput still calls claude.write
+  // -------------------------------------------------------------------------
+  it('EXEC-APPROVAL-007: page-bottom log-prompt-input is still wired to claude.write (regression)', async () => {
+    const stub = installApi({
+      current: {
+        ok: true,
+        data: {
+          // No pendingApproval → no panel competing for the testid.
+          run: makeRun({
+            id: 'r-1',
+            projectId: 'p-1',
+            pendingApproval: null,
+          }),
+        },
+      },
+      status: {
+        ok: true,
+        data: { active: { runId: 'claude-run-xyz', pid: 1, startedAt: 1 } },
+      },
+    });
+    const modifySpy = vi.fn().mockResolvedValue({ ok: true, data: { runId: 'r-1' } });
+    (stub.api.runs as unknown as { modify: typeof modifySpy }).modify = modifySpy;
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+
+    const textarea = await screen.findByTestId('log-prompt-input');
+    fireEvent.change(textarea, { target: { value: 'hello' } });
+    fireEvent.click(screen.getByTestId('log-send-button'));
+
+    await waitFor(() => {
+      expect(stub.claudeWrite).toHaveBeenCalled();
+    });
+    expect(modifySpy).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-APPROVAL-008 — Transitioning out of awaitingApproval cleanly unmounts
+  // -------------------------------------------------------------------------
+  it('EXEC-APPROVAL-008: state transition out of awaitingApproval drops the panel without errors', async () => {
+    const stateListeners: Array<(e: { runId: string; run: Run }) => void> = [];
+    const currentListeners: Array<(e: { run: Run | null }) => void> = [];
+
+    const stub = installApi({
+      current: {
+        ok: true,
+        data: {
+          run: makeRun({
+            id: 'r-1',
+            projectId: 'p-1',
+            state: 'awaitingApproval',
+            pendingApproval: makeApproval(),
+          }),
+        },
+      },
+    });
+    stub.runsOnStateChanged.mockImplementation((cb) => {
+      const typed = cb as (e: { runId: string; run: Run }) => void;
+      stateListeners.push(typed);
+      return () => {
+        const idx = stateListeners.indexOf(typed);
+        if (idx >= 0) stateListeners.splice(idx, 1);
+      };
+    });
+    type OnCurrent = (cb: (e: { run: Run | null }) => void) => () => void;
+    const onCurrent: OnCurrent = (cb) => {
+      currentListeners.push(cb);
+      return () => {
+        const idx = currentListeners.indexOf(cb);
+        if (idx >= 0) currentListeners.splice(idx, 1);
+      };
+    };
+    (stub.api.runs as unknown as { onCurrentChanged: OnCurrent }).onCurrentChanged = onCurrent;
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+
+    // Panel rendered.
+    await screen.findByTestId('approval-panel-root');
+
+    // Spy on console.error to assert no errors during the transition.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // Fire a state change clearing pendingApproval.
+    const cleared = makeRun({
+      id: 'r-1',
+      projectId: 'p-1',
+      state: 'committing',
+      pendingApproval: null,
+    });
+    // Wrap the synchronous listener invocations in act() so React batches
+    // their state updates the same way a real subscription would (avoids
+    // spurious "not wrapped in act(...)" warnings).
+    act(() => {
+      for (const listener of stateListeners) {
+        listener({ runId: 'r-1', run: cleared });
+      }
+      for (const listener of currentListeners) {
+        listener({ run: cleared });
+      }
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('approval-panel-root')).not.toBeInTheDocument();
+    });
+    expect(bodyOf().getAttribute('data-has-panel')).toBe('false');
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

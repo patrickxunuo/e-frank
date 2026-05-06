@@ -19,6 +19,8 @@
   --accent-hover: #6b91ff;
   --accent-press: #3a64da;
   --accent-deep: #2c4ea0;
+  --accent-soft: rgba(77, 124, 255, 0.12);
+  --accent-border: rgba(77, 124, 255, 0.32);
   --success: #4ad98a;
   --success-soft: rgba(74, 217, 138, 0.14);
   --warning: #f0b95c;
