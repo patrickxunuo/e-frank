@@ -2,13 +2,21 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { IconChevronDown } from './icons';
 import styles from './Dropdown.module.css';
+
+interface MenuRect {
+  top: number;
+  left: number;
+  width: number;
+}
 
 export interface DropdownOption {
   value: string;
@@ -62,9 +70,11 @@ export function Dropdown({
 
   const [open, setOpen] = useState<boolean>(false);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
+  const [menuRect, setMenuRect] = useState<MenuRect | null>(null);
 
   const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLUListElement | null>(null);
 
   const selectedOption = useMemo(
     () => options.find((o) => o.value === value),
@@ -75,19 +85,47 @@ export function Dropdown({
   if (error) describedBy.push(`${reactId}-error`);
   else if (hint) describedBy.push(`${reactId}-hint`);
 
-  // Close on outside click.
+  // Close on outside click. Both the shell (trigger + hidden select) AND
+  // the portaled menu count as "inside".
   useEffect(() => {
     if (!open) return;
     const handler = (event: MouseEvent): void => {
-      const root = rootRef.current;
       const target = event.target;
-      if (!root) return;
-      if (target instanceof Node && root.contains(target)) return;
+      if (!(target instanceof Node)) return;
+      if (shellRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
       setOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => {
       document.removeEventListener('mousedown', handler);
+    };
+  }, [open]);
+
+  // Measure the trigger when opening (and reposition on scroll/resize while
+  // open). The menu is portaled to <body>, so its layout uses viewport
+  // coordinates via position: fixed.
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuRect(null);
+      return;
+    }
+    const measure = (): void => {
+      const el = shellRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setMenuRect({
+        top: rect.bottom + 4,
+        left: rect.left,
+        width: rect.width,
+      });
+    };
+    measure();
+    window.addEventListener('scroll', measure, true);
+    window.addEventListener('resize', measure);
+    return () => {
+      window.removeEventListener('scroll', measure, true);
+      window.removeEventListener('resize', measure);
     };
   }, [open]);
 
@@ -197,7 +235,7 @@ export function Dropdown({
   const showPlaceholder = triggerLabel === undefined;
 
   return (
-    <div className={styles.field} ref={rootRef}>
+    <div className={styles.field}>
       {label && (
         <label
           htmlFor={triggerId}
@@ -207,6 +245,7 @@ export function Dropdown({
         </label>
       )}
       <div
+        ref={shellRef}
         className={styles.shell}
         data-error={error ? 'true' : undefined}
         data-disabled={disabled ? 'true' : undefined}
@@ -254,36 +293,46 @@ export function Dropdown({
           ))}
         </select>
       </div>
-      {open && (
-        <ul
-          id={menuId}
-          className={styles.menu}
-          role="listbox"
-          data-testid={`${testId}-menu`}
-        >
-          {options.map((o, idx) => (
-            <li key={o.value} role="presentation">
-              <button
-                type="button"
-                role="option"
-                aria-selected={value === o.value}
-                disabled={o.disabled}
-                className={styles.option}
-                data-disabled={o.disabled ? 'true' : undefined}
-                data-active={value === o.value ? 'true' : undefined}
-                data-highlighted={highlightedIndex === idx ? 'true' : undefined}
-                data-testid={`${testId}-option-${o.value}`}
-                onClick={() => handleOptionClick(o)}
-                onMouseEnter={() => {
-                  if (!o.disabled) setHighlightedIndex(idx);
-                }}
-              >
-                {o.label}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      {open && menuRect !== null && typeof document !== 'undefined'
+        ? createPortal(
+            <ul
+              ref={menuRef}
+              id={menuId}
+              className={styles.menu}
+              role="listbox"
+              data-testid={`${testId}-menu`}
+              style={{
+                position: 'fixed',
+                top: `${menuRect.top}px`,
+                left: `${menuRect.left}px`,
+                width: `${menuRect.width}px`,
+              }}
+            >
+              {options.map((o, idx) => (
+                <li key={o.value} role="presentation">
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={value === o.value}
+                    disabled={o.disabled}
+                    className={styles.option}
+                    data-disabled={o.disabled ? 'true' : undefined}
+                    data-active={value === o.value ? 'true' : undefined}
+                    data-highlighted={highlightedIndex === idx ? 'true' : undefined}
+                    data-testid={`${testId}-option-${o.value}`}
+                    onClick={() => handleOptionClick(o)}
+                    onMouseEnter={() => {
+                      if (!o.disabled) setHighlightedIndex(idx);
+                    }}
+                  >
+                    {o.label}
+                  </button>
+                </li>
+              ))}
+            </ul>,
+            document.body,
+          )
+        : null}
       {error ? (
         <span
           id={`${reactId}-error`}

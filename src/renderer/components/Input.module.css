@@ -36,7 +36,10 @@
 
 .shell:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  /* Inset shadow draws a 1px line just inside the border, same color as it.
+   * Combined with the 1px outer border, the focus indicator reads as one
+   * continuous 2px edge — no second concentric ring. */
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .shell.error {
@@ -44,7 +47,7 @@
 }
 
 .shell.error:focus-within {
-  box-shadow: 0 0 0 3px var(--danger-soft);
+  box-shadow: inset 0 0 0 1px var(--danger);
 }
 
 .leadingIcon {
