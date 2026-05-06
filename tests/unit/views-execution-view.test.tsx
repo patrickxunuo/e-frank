@@ -173,6 +173,14 @@ function installApi(opts?: {
       onTicketsChanged: vi.fn<IpcApi['jira']['onTicketsChanged']>(() => () => {}),
       onError: vi.fn<IpcApi['jira']['onError']>(() => () => {}),
     },
+    connections: {
+      list: vi.fn() as unknown as IpcApi['connections']['list'],
+      get: vi.fn() as unknown as IpcApi['connections']['get'],
+      create: vi.fn() as unknown as IpcApi['connections']['create'],
+      update: vi.fn() as unknown as IpcApi['connections']['update'],
+      delete: vi.fn() as unknown as IpcApi['connections']['delete'],
+      test: vi.fn() as unknown as IpcApi['connections']['test'],
+    },
     runs: {
       start: vi.fn() as unknown as IpcApi['runs']['start'],
       cancel: runsCancel as unknown as IpcApi['runs']['cancel'],

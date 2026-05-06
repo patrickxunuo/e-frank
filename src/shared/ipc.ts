@@ -12,6 +12,14 @@ import type {
 } from './schema/project-instance.js';
 import type { Ticket } from './schema/ticket.js';
 import type { Run, RunStateEvent, RunMode, RunLogEntry } from './schema/run.js';
+import type {
+  Connection,
+  ConnectionInput,
+  ConnectionUpdate,
+  Provider,
+  AuthMethod,
+  ConnectionIdentity,
+} from './schema/connection.js';
 
 /**
  * `ProjectInstanceDto` is the renderer-facing alias for the schema's
@@ -51,6 +59,16 @@ export type {
   ApprovalResponse,
   RunLogEntry,
 } from './schema/run.js';
+// Re-export connection types so renderer code can import everything from
+// `shared/ipc` rather than reaching into `shared/schema/connection.js`.
+export type {
+  Connection,
+  ConnectionInput,
+  ConnectionUpdate,
+  ConnectionIdentity,
+  Provider,
+  AuthMethod,
+} from './schema/connection.js';
 
 export const IPC_CHANNELS = {
   PING: 'app:ping',
@@ -82,6 +100,13 @@ export const IPC_CHANNELS = {
   JIRA_TICKETS_CHANGED: 'jira:tickets-changed',
   /** event channel (main -> renderer) */
   JIRA_ERROR: 'jira:error',
+  // -- Connections (issue #24) --
+  CONNECTIONS_LIST: 'connections:list',
+  CONNECTIONS_GET: 'connections:get',
+  CONNECTIONS_CREATE: 'connections:create',
+  CONNECTIONS_UPDATE: 'connections:update',
+  CONNECTIONS_DELETE: 'connections:delete',
+  CONNECTIONS_TEST: 'connections:test',
   // -- Workflow Runner (issue #7) --
   RUNS_START: 'runs:start',
   RUNS_CANCEL: 'runs:cancel',
@@ -291,6 +316,43 @@ export interface RunsCurrentChangedEvent {
   run: Run | null;
 }
 
+// -- Connections IPC payloads -------------------------------------------------
+
+export interface ConnectionsGetRequest {
+  id: string;
+}
+export interface ConnectionsCreateRequest {
+  input: ConnectionInput;
+}
+export interface ConnectionsUpdateRequest {
+  id: string;
+  input: ConnectionUpdate;
+}
+export interface ConnectionsDeleteRequest {
+  id: string;
+}
+
+/**
+ * Test an existing connection by id (read creds from SecretsManager) OR
+ * test pre-save creds before persisting.
+ */
+export type ConnectionsTestRequest =
+  | { mode: 'existing'; id: string }
+  | {
+      mode: 'preview';
+      provider: Provider;
+      host: string;
+      authMethod: AuthMethod;
+      plaintextToken: string;
+      email?: string;
+    };
+
+export interface ConnectionsTestResponse {
+  identity: ConnectionIdentity;
+  /** Echoed back so the dialog can update its UI even before the connection is saved. */
+  verifiedAt: number;
+}
+
 /**
  * Discriminated-union result returned over IPC. `code` is a string (rather
  * than a literal-union of manager error codes) to keep the renderer
@@ -336,6 +398,14 @@ export interface IpcApi {
     onTicketsChanged: (listener: (e: JiraTicketsChangedEvent) => void) => () => void;
     /** Subscribe to poller error events. Returns unsubscribe fn. */
     onError: (listener: (e: JiraErrorEvent) => void) => () => void;
+  };
+  connections: {
+    list: () => Promise<IpcResult<Connection[]>>;
+    get: (req: ConnectionsGetRequest) => Promise<IpcResult<Connection>>;
+    create: (req: ConnectionsCreateRequest) => Promise<IpcResult<Connection>>;
+    update: (req: ConnectionsUpdateRequest) => Promise<IpcResult<Connection>>;
+    delete: (req: ConnectionsDeleteRequest) => Promise<IpcResult<{ id: string }>>;
+    test: (req: ConnectionsTestRequest) => Promise<IpcResult<ConnectionsTestResponse>>;
   };
   runs: {
     start: (req: RunsStartRequest) => Promise<IpcResult<RunsStartResponse>>;

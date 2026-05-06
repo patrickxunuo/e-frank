@@ -120,6 +120,19 @@ function makeIpcApiStub(
       // we attach a runtime stub so any view code that calls it is satisfied.
       readLog: vi.fn().mockResolvedValue({ ok: true, data: { entries: [] } }),
     } as unknown as IpcApi['runs'],
+    // #24 Connections — App may navigate to the Connections view, which
+    // calls list() on mount. Stub it to a successful empty list so the
+    // route doesn't error.
+    connections: {
+      list: vi
+        .fn<IpcApi['connections']['list']>()
+        .mockResolvedValue({ ok: true, data: [] }),
+      get: vi.fn<IpcApi['connections']['get']>().mockResolvedValue(unusedErr()),
+      create: vi.fn<IpcApi['connections']['create']>().mockResolvedValue(unusedErr()),
+      update: vi.fn<IpcApi['connections']['update']>().mockResolvedValue(unusedErr()),
+      delete: vi.fn<IpcApi['connections']['delete']>().mockResolvedValue(unusedErr()),
+      test: vi.fn<IpcApi['connections']['test']>().mockResolvedValue(unusedErr()),
+    },
   };
 }
 
@@ -243,5 +256,64 @@ describe('<App /> — APP-005 graceful when window.api missing', () => {
     // Shell still mounts even if IPC bridge is missing
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
     expect(screen.getByTestId('app-main')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SIDEBAR-CONN-001..003 — sidebar Connections nav row + onNavigate plumbing
+// ---------------------------------------------------------------------------
+describe('<App /> — SIDEBAR-CONN', () => {
+  beforeEach(() => {
+    (window as { api?: IpcApi }).api = makeIpcApiStub(PING, { ok: true, data: [] });
+  });
+
+  it('SIDEBAR-CONN-001: Connections nav item is rendered between Projects and Settings', async () => {
+    render(<App />);
+    // Wait for the sidebar to mount fully.
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-nav-projects')).toBeInTheDocument();
+    });
+    const projectsNav = screen.getByTestId('sidebar-nav-projects');
+    const connectionsNav = screen.getByTestId('sidebar-nav-connections');
+    const settingsNav = screen.getByTestId('sidebar-nav-settings');
+    expect(connectionsNav).toBeInTheDocument();
+
+    // DOCUMENT_POSITION_FOLLOWING = 4. Projects must come BEFORE Connections,
+    // and Connections must come BEFORE Settings.
+    expect(projectsNav.compareDocumentPosition(connectionsNav) & 4).toBeTruthy();
+    expect(connectionsNav.compareDocumentPosition(settingsNav) & 4).toBeTruthy();
+  });
+
+  it('SIDEBAR-CONN-002: clicking Connections nav switches activeNav to "connections"', async () => {
+    render(<App />);
+    const navBtn = await screen.findByTestId('sidebar-nav-connections');
+
+    // Pre-click: aria-current should NOT be set on the connections row.
+    expect(navBtn.getAttribute('aria-current')).not.toBe('page');
+
+    fireEvent.click(navBtn);
+
+    // Post-click: connections row carries aria-current="page".
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('sidebar-nav-connections').getAttribute('aria-current'),
+      ).toBe('page');
+    });
+  });
+
+  it('SIDEBAR-CONN-003: activeNav="connections" applies aria-current to the row', async () => {
+    render(<App />);
+    const navBtn = await screen.findByTestId('sidebar-nav-connections');
+    fireEvent.click(navBtn);
+
+    // Connections nav has aria-current=page; Projects does NOT.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('sidebar-nav-connections').getAttribute('aria-current'),
+      ).toBe('page');
+    });
+    expect(
+      screen.getByTestId('sidebar-nav-projects').getAttribute('aria-current'),
+    ).not.toBe('page');
   });
 });

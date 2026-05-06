@@ -1,7 +1,7 @@
 import styles from './Sidebar.module.css';
-import { IconLogo, IconProjects, IconSettings } from './icons';
+import { IconKey, IconLogo, IconProjects, IconSettings } from './icons';
 
-export type SidebarNavId = 'projects' | 'settings';
+export type SidebarNavId = 'projects' | 'connections' | 'settings';
 
 export interface SidebarUser {
   name: string;
@@ -11,6 +11,8 @@ export interface SidebarUser {
 export interface SidebarProps {
   activeNav: SidebarNavId;
   user?: SidebarUser;
+  /** Called when the user clicks a nav item. */
+  onNavigate?: (id: SidebarNavId) => void;
 }
 
 interface NavItemDef {
@@ -21,6 +23,7 @@ interface NavItemDef {
 
 const NAV_ITEMS: NavItemDef[] = [
   { id: 'projects', label: 'Projects', icon: <IconProjects /> },
+  { id: 'connections', label: 'Connections', icon: <IconKey /> },
   { id: 'settings', label: 'Settings', icon: <IconSettings /> },
 ];
 
@@ -31,7 +34,7 @@ function initialsOf(name: string): string {
   return (first + second).toUpperCase() || '?';
 }
 
-export function Sidebar({ activeNav, user }: SidebarProps): JSX.Element {
+export function Sidebar({ activeNav, user, onNavigate }: SidebarProps): JSX.Element {
   return (
     <aside className={styles.sidebar} data-testid="sidebar">
       <div className={styles.brand}>
@@ -57,6 +60,7 @@ export function Sidebar({ activeNav, user }: SidebarProps): JSX.Element {
               className={`${styles.navItem} ${isActive ? styles.active : ''}`}
               aria-current={isActive ? 'page' : undefined}
               data-testid={`sidebar-nav-${item.id}`}
+              onClick={() => onNavigate?.(item.id)}
             >
               <span className={styles.navIcon}>{item.icon}</span>
               <span>{item.label}</span>

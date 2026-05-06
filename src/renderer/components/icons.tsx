@@ -58,6 +58,19 @@ export function IconProjects({ size = 18, ...rest }: IconProps): JSX.Element {
   );
 }
 
+export function IconKey({ size = 18, ...rest }: IconProps): JSX.Element {
+  // Stylized key — bow + bit, drawn in the same stroke style as IconProjects/
+  // IconSettings. Used for the Connections nav row.
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <circle cx="8" cy="14" r="3.5" />
+      <path d="m11 12 8-8" />
+      <path d="m15 8 3 3" />
+      <path d="m17 6 2 2" />
+    </svg>
+  );
+}
+
 export function IconSettings({ size = 18, ...rest }: IconProps): JSX.Element {
   return (
     <svg {...baseProps(size)} {...rest}>

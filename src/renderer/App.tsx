@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { AppShell } from './components/AppShell';
+import type { SidebarNavId } from './components/Sidebar';
 import { Dialog } from './components/Dialog';
 import { AddProject } from './views/AddProject';
+import { Connections } from './views/Connections';
 import { ExecutionView } from './views/ExecutionView';
 import { ProjectDetail } from './views/ProjectDetail';
 import { ProjectList } from './views/ProjectList';
@@ -9,6 +11,7 @@ import { useProjects } from './state/projects';
 
 type ViewState =
   | { kind: 'list' }
+  | { kind: 'connections' }
   | { kind: 'detail'; projectId: string }
   | { kind: 'execution'; runId: string; projectId: string };
 
@@ -40,13 +43,27 @@ function renderExecution(view: ExecutionViewState, setView: SetView): JSX.Elemen
   );
 }
 
+function activeNavFor(view: ViewState): SidebarNavId {
+  if (view.kind === 'connections') return 'connections';
+  return 'projects';
+}
+
 export function App(): JSX.Element {
   const [view, setView] = useState<ViewState>({ kind: 'list' });
   const [addOpen, setAddOpen] = useState<boolean>(false);
   const projects = useProjects();
 
+  const handleNavigate = (id: SidebarNavId): void => {
+    if (id === 'connections') {
+      setView({ kind: 'connections' });
+    } else if (id === 'projects') {
+      setView({ kind: 'list' });
+    }
+    // 'settings' is a no-op until a settings view ships.
+  };
+
   return (
-    <AppShell activeNav="projects">
+    <AppShell activeNav={activeNavFor(view)} onNavigate={handleNavigate}>
       {view.kind === 'list' && (
         <ProjectList
           projects={projects.projects}
@@ -59,6 +76,7 @@ export function App(): JSX.Element {
           }}
         />
       )}
+      {view.kind === 'connections' && <Connections />}
       {view.kind === 'detail' && renderDetail(view, setView)}
       {view.kind === 'execution' && renderExecution(view, setView)}
 
