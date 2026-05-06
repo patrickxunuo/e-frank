@@ -297,7 +297,10 @@ export function Connections({ initialAdd = false }: ConnectionsProps): JSX.Eleme
 
   const showSkeleton = loading && connections.length === 0;
   const showEmpty = !loading && !error && connections.length === 0;
-  const showTable = !loading && !error && connections.length > 0;
+  // Keep the table mounted any time we have data — `loading` flips true
+  // briefly during refresh() (e.g. after Test Connection), and unmounting
+  // here would re-fire the row-enter animations on every refetch.
+  const showTable = connections.length > 0;
 
   return (
     <div className={styles.page} data-testid="connections-page">
