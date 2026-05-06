@@ -266,11 +266,6 @@ export function Connections({ initialAdd = false }: ConnectionsProps): JSX.Eleme
         render: (row) => <span className={styles.cellPrimary}>{row.label}</span>,
       },
       {
-        key: 'host',
-        header: 'Host',
-        render: (row) => <span className={styles.cellMono}>{row.host}</span>,
-      },
-      {
         key: 'identity',
         header: 'Identity',
         render: (row) => <IdentityCell row={row} />,
