@@ -79,11 +79,17 @@ ol {
   list-style: none;
 }
 
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 2px;
-}
+/*
+ * Global :focus-visible was previously declared here as a 2px solid accent
+ * outline. It rendered OUTSIDE every focused element — including the
+ * <input> inside its .shell wrapper — creating a second visible edge that
+ * looked like a duplicate border. Each component now owns its own
+ * focus-visible style:
+ *   - Button → `box-shadow: var(--shadow-glow-accent)` (Button.module.css)
+ *   - Input / Textarea / Select → `.shell:focus-within { border-color: var(--accent) }`
+ *   - Dropdown trigger → `.shell:focus-within { border-color: var(--accent) }`
+ * Anything not covered above (links, custom controls) should declare its own.
+ */
 
 ::selection {
   background: rgba(77, 124, 255, 0.32);
