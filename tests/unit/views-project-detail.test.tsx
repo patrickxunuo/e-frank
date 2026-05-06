@@ -178,7 +178,10 @@ function installApi(opts?: {
         .mockResolvedValue(unusedErr()),
       onCurrentChanged: vi.fn<IpcApi['runs']['onCurrentChanged']>(() => () => {}),
       onStateChanged: vi.fn<IpcApi['runs']['onStateChanged']>(() => () => {}),
-    },
+      // #8 adds runs.readLog. Agent B owns the typed signature; we patch it
+      // on at runtime so legacy tests that don't care about it keep working.
+      readLog: vi.fn().mockResolvedValue({ ok: true, data: { entries: [] } }),
+    } as unknown as IpcApi['runs'],
   };
 
   (window as { api?: IpcApi }).api = api;
@@ -584,11 +587,11 @@ describe('<ProjectDetail /> — DET', () => {
   });
 
   describe('DET-012 active execution panel shown', () => {
-    it('DET-012: live run → Cancel button visible (Open Details removed in #7)', async () => {
+    it('DET-012: live run → Cancel + Open Details buttons visible (Open Details restored in #8)', async () => {
       // The Active Execution panel now consumes the real `Run` shape from
       // #7's schema. We stub useActiveRun to return a minimal ready-state
-      // run snapshot. Open Details has been removed (its consumer #8 will
-      // re-introduce it once the streaming logs view exists).
+      // run snapshot. Open Details was removed during #7 review and
+      // restored in #8 alongside the ExecutionView route.
       (useActiveRun as unknown as Mock).mockReturnValue({
         id: 'run-1',
         projectId: 'p-1',
@@ -608,11 +611,93 @@ describe('<ProjectDetail /> — DET', () => {
         <ProjectDetail
           projectId="p-1"
           onBack={noop}
+          onOpenExecution={() => {}}
         />,
       );
 
       const cancel = await screen.findByTestId('active-execution-cancel');
       expect(cancel).toBeInTheDocument();
+
+      // Open Details is restored in #8 — must be on the panel.
+      expect(
+        screen.getByTestId('active-execution-open-details'),
+      ).toBeInTheDocument();
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // NAV-001..002 — Open Details navigation (#8 restoration)
+  // ---------------------------------------------------------------------
+  //
+  // Per the spec, `App.tsx` is the router. ProjectDetail receives an
+  // `onOpenExecution: (runId: string) => void` prop and invokes it when
+  // the user clicks Open Details on the Active Execution panel.
+  //
+  // NAV-003 (ExecutionView Back returns to ProjectDetail) is covered in
+  // tests/unit/views-execution-view.test.tsx (EXEC-006).
+  // ---------------------------------------------------------------------
+
+  describe('NAV-001 Open Details button restored on Active Execution panel', () => {
+    it('NAV-001: panel rendered → active-execution-open-details testid exists', async () => {
+      (useActiveRun as unknown as Mock).mockReturnValue({
+        id: 'run-1',
+        projectId: 'p-1',
+        ticketKey: 'ABC-7',
+        mode: 'interactive',
+        branchName: 'feat/ABC-7',
+        state: 'running',
+        status: 'running',
+        steps: [],
+        pendingApproval: null,
+        startedAt: 0,
+      });
+      installApi({ tickets: [makeTicket('ABC-7')] });
+      installRunsStub();
+
+      render(
+        <ProjectDetail
+          projectId="p-1"
+          onBack={noop}
+          onOpenExecution={() => {}}
+        />,
+      );
+
+      const open = await screen.findByTestId('active-execution-open-details');
+      expect(open).toBeInTheDocument();
+    });
+  });
+
+  describe('NAV-002 Open Details click invokes onOpenExecution(runId)', () => {
+    it('NAV-002: click → onOpenExecution called with the active run id', async () => {
+      (useActiveRun as unknown as Mock).mockReturnValue({
+        id: 'run-42',
+        projectId: 'p-1',
+        ticketKey: 'ABC-7',
+        mode: 'interactive',
+        branchName: 'feat/ABC-7',
+        state: 'running',
+        status: 'running',
+        steps: [],
+        pendingApproval: null,
+        startedAt: 0,
+      });
+      installApi({ tickets: [makeTicket('ABC-7')] });
+      installRunsStub();
+
+      const onOpenExecution = vi.fn();
+      render(
+        <ProjectDetail
+          projectId="p-1"
+          onBack={noop}
+          onOpenExecution={onOpenExecution}
+        />,
+      );
+
+      const open = await screen.findByTestId('active-execution-open-details');
+      fireEvent.click(open);
+
+      expect(onOpenExecution).toHaveBeenCalledTimes(1);
+      expect(onOpenExecution).toHaveBeenCalledWith('run-42');
     });
   });
 

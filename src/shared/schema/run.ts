@@ -103,3 +103,22 @@ export interface ApprovalResponse {
   /** Required when decision === 'modify'; ignored otherwise. */
   text?: string;
 }
+
+/**
+ * One line of streamed Claude output, persisted as NDJSON in
+ * `userData/runs/{runId}.log` (#8). The renderer reads these back via
+ * `runs.readLog` for completed runs and buckets them into per-state steps
+ * by their `state` tag.
+ */
+export interface RunLogEntry {
+  runId: string;
+  stream: 'stdout' | 'stderr';
+  line: string;
+  /** Epoch ms when the line was received in main. */
+  timestamp: number;
+  /**
+   * Workflow state at the time the line was received (best-effort tagging
+   * so the renderer can bucket lines without re-deriving from timestamps).
+   */
+  state: RunState;
+}

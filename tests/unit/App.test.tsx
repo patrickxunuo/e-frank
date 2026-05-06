@@ -116,7 +116,10 @@ function makeIpcApiStub(
         .mockResolvedValue(unusedErr()),
       onCurrentChanged: vi.fn<IpcApi['runs']['onCurrentChanged']>(() => () => {}),
       onStateChanged: vi.fn<IpcApi['runs']['onStateChanged']>(() => () => {}),
-    },
+      // #8: extend with readLog. Agent B owns the typed signature on IpcApi;
+      // we attach a runtime stub so any view code that calls it is satisfied.
+      readLog: vi.fn().mockResolvedValue({ ok: true, data: { entries: [] } }),
+    } as unknown as IpcApi['runs'],
   };
 }
 

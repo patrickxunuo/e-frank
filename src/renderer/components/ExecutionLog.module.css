@@ -1,0 +1,259 @@
+/*
+ * ExecutionLog — stepped timeline for the Execution View.
+ *
+ * Visual model: each step is a row with a left-side accent bar coloured by
+ * status (pending/running/done/failed). The active step's body is a
+ * translucent terminal surface using `--bg-input` so streamed lines feel
+ * like a real terminal.
+ */
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg-app);
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  font-family: var(--font-body);
+  /* Soft inner shadow at the top so the header floats over content */
+  box-shadow: inset 0 8px 12px -8px rgba(0, 0, 0, 0.4);
+}
+
+.empty {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  padding: var(--space-7) var(--space-5);
+  text-align: center;
+  font-family: var(--font-body);
+}
+
+.row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  transition: border-color var(--duration-base) var(--ease-out),
+    background-color var(--duration-base) var(--ease-out);
+}
+
+/* Left-side accent bar — driven by status. */
+.row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--text-tertiary);
+  transition: background-color var(--duration-base) var(--ease-out);
+}
+
+.row[data-status='running']::before {
+  background: var(--accent);
+  box-shadow: 0 0 12px -2px rgba(77, 124, 255, 0.55);
+}
+
+.row[data-status='done']::before {
+  background: var(--success);
+}
+
+.row[data-status='failed']::before {
+  background: var(--danger);
+}
+
+.row[data-status='cancelled']::before {
+  background: var(--warning);
+}
+
+.row[data-status='running'] {
+  border-color: rgba(77, 124, 255, 0.35);
+  background: linear-gradient(
+    180deg,
+    rgba(77, 124, 255, 0.05),
+    rgba(77, 124, 255, 0)
+  );
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  user-select: none;
+}
+
+.toggle {
+  appearance: none;
+  background: transparent;
+  border: none;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  flex: 0 0 auto;
+  transition: color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+
+.toggle:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chevron {
+  display: inline-block;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+.statusIcon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+}
+
+.row[data-status='running'] .statusIcon {
+  color: var(--accent);
+  background: rgba(77, 124, 255, 0.15);
+  border-color: rgba(77, 124, 255, 0.4);
+}
+
+.row[data-status='done'] .statusIcon {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: rgba(74, 217, 138, 0.35);
+}
+
+.row[data-status='failed'] .statusIcon {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(240, 111, 111, 0.35);
+}
+
+.row[data-status='cancelled'] .statusIcon {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: rgba(240, 185, 92, 0.35);
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.row[data-status='running'] .statusDot {
+  animation: pulseDot 1.6s var(--ease-in-out) infinite;
+}
+
+@keyframes pulseDot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(77, 124, 255, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(77, 124, 255, 0);
+  }
+}
+
+.label {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  letter-spacing: 0.005em;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.range {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: var(--space-1);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.bodyEmpty {
+  color: var(--text-tertiary);
+  font-style: italic;
+  padding: var(--space-2) 0;
+}
+
+.line {
+  display: grid;
+  grid-template-columns: 80px 56px 1fr;
+  gap: var(--space-3);
+  align-items: baseline;
+  padding: 1px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.lineTime {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lineStream {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.lineStream[data-stream='stderr'] {
+  color: var(--danger);
+}
+
+.lineText {
+  color: var(--text-primary);
+}

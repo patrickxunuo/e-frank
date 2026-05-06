@@ -39,6 +39,8 @@ import {
   type RunsCurrentResponse,
   type RunsListHistoryRequest,
   type RunsListHistoryResponse,
+  type RunsReadLogRequest,
+  type RunsReadLogResponse,
   type RunsCurrentChangedEvent,
   type RunStateEvent,
 } from '../shared/ipc.js';
@@ -217,6 +219,13 @@ const api: IpcApi = {
     ): Promise<IpcResult<RunsListHistoryResponse>> =>
       ipcRenderer.invoke(IPC_CHANNELS.RUNS_LIST_HISTORY, req) as Promise<
         IpcResult<RunsListHistoryResponse>
+      >,
+
+    readLog: (
+      req: RunsReadLogRequest,
+    ): Promise<IpcResult<RunsReadLogResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.RUNS_READ_LOG, req) as Promise<
+        IpcResult<RunsReadLogResponse>
       >,
 
     onCurrentChanged: (

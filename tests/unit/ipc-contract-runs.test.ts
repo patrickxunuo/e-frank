@@ -10,6 +10,7 @@ import type {
   Run as IpcRun,
   RunStateEvent as IpcRunStateEvent,
 } from '../../src/shared/ipc';
+import type { RunLogEntry } from '../../src/shared/schema/run';
 
 /**
  * IPC contract tests for the Workflow Runner extension (issue #7).
@@ -282,6 +283,32 @@ describe('src/shared/ipc.ts — Runs (workflow runner) extension', () => {
     it('IPC-RUNS-004: `RunStateEvent` re-exported from ipc.ts is structurally equivalent to schema.RunStateEvent', () => {
       type SchemaEvent = import('../../src/shared/schema/run').RunStateEvent;
       expectTypeOf<IpcRunStateEvent>().toEqualTypeOf<SchemaEvent>();
+    });
+  });
+
+  // -------------------------------------------------------------
+  // IPC-RUNS-005 — `runs:read-log` channel + `IpcApi.runs.readLog` (issue #8)
+  // -------------------------------------------------------------
+  describe('IPC-RUNS-005 readLog channel + IpcApi entry', () => {
+    it('IPC-RUNS-005: RUNS_READ_LOG === "runs:read-log"', () => {
+      // Cast through unknown so this assertion fails loudly if the key is
+      // missing rather than failing to type-check the test file.
+      const channels = IPC_CHANNELS as unknown as Record<string, string>;
+      expect(channels.RUNS_READ_LOG).toBe('runs:read-log');
+    });
+
+    it('IPC-RUNS-005: IpcApi.runs has a readLog method', () => {
+      expectTypeOf<IpcApi['runs']>().toHaveProperty('readLog');
+    });
+
+    it('IPC-RUNS-005: IpcApi.runs.readLog signature: (req) → Promise<IpcResult<{ entries: RunLogEntry[] }>>', () => {
+      type Fn = IpcApi['runs']['readLog'];
+      type Arg0 = Fn extends (req: infer A) => unknown ? A : never;
+      expectTypeOf<Arg0>().toHaveProperty('runId');
+      type Ret = ReturnType<Fn>;
+      expectTypeOf<Ret>().toEqualTypeOf<
+        Promise<IpcResult<{ entries: RunLogEntry[] }>>
+      >();
     });
   });
 });
