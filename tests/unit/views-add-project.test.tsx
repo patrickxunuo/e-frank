@@ -146,7 +146,10 @@ function installApi(opts?: {
         .mockResolvedValue(unusedErr()),
       onCurrentChanged: vi.fn<IpcApi['runs']['onCurrentChanged']>(() => () => {}),
       onStateChanged: vi.fn<IpcApi['runs']['onStateChanged']>(() => () => {}),
-    },
+      // #8: extend with readLog so AddProject (and any code that imports the
+      // full IpcApi via tree-shaken renderer modules) sees a complete bridge.
+      readLog: vi.fn().mockResolvedValue({ ok: true, data: { entries: [] } }),
+    } as unknown as IpcApi['runs'],
   };
 
   (window as { api?: IpcApi }).api = api;

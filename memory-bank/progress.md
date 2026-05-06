@@ -1,7 +1,7 @@
 # Progress
 
 ## Current Sprint / Focus
-Phase 3 — Workflow Runner state machine (#7) shipped. Active Execution panel from #6 now drives off real runner events. Next up: #8 (Stream Claude Output) and #9 (Approval Interface) — both ride the runner contract this PR establishes.
+Phase 3 — Execution View (#8) shipped: full-screen log + PromptInput + RunLogStore. The Active Execution panel's Open Details button now navigates to it. Next up: #9 Approval Interface — drops into the right pane that's currently a placeholder.
 
 ## Log
 <!-- Newest entries first. Format: - YYYY-MM-DDTHH:MMZ [status] feature-name (developer) — notes -->

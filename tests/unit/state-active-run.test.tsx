@@ -147,7 +147,11 @@ function installApi(opts: {
       onCurrentChanged:
         runsOnCurrentChanged as unknown as IpcApi['runs']['onCurrentChanged'],
       onStateChanged: vi.fn(() => () => {}) as unknown as IpcApi['runs']['onStateChanged'],
-    },
+      // #8: extend with readLog. Hook tests don't exercise it, but a
+      // complete bridge keeps any future code reachable from useActiveRun
+      // happy.
+      readLog: vi.fn().mockResolvedValue({ ok: true, data: { entries: [] } }),
+    } as unknown as IpcApi['runs'],
   };
 
   (window as { api?: IpcApi }).api = api;

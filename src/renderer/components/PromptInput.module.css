@@ -1,0 +1,90 @@
+/*
+ * PromptInput — bottom composer for the Execution View. Shared with #9's
+ * Modify flow.
+ *
+ * Visual model: a card-styled row with a multi-line autosize textarea on
+ * the left and a primary "Send" button on the right. Echoes the chat
+ * composers users already know — but in dark, monospace-friendly attire.
+ */
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-card);
+  border-top: 1px solid var(--border-default);
+}
+
+.row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  transition: border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.row:focus-within {
+  border-color: rgba(77, 124, 255, 0.5);
+  box-shadow: var(--shadow-glow-accent);
+}
+
+.row[data-disabled='true'] {
+  opacity: 0.6;
+}
+
+.textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  appearance: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: var(--space-2) var(--space-1);
+  min-height: 32px;
+  max-height: 168px; /* ~6 rows at 1.5 line-height + padding */
+  overflow-y: auto;
+}
+
+.textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+.textarea:disabled {
+  cursor: not-allowed;
+}
+
+.send {
+  flex: 0 0 auto;
+}
+
+.hint {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0 var(--space-2);
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  margin: 0 2px;
+}

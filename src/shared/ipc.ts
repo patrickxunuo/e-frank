@@ -11,7 +11,7 @@ import type {
   ProjectInstanceInput,
 } from './schema/project-instance.js';
 import type { Ticket } from './schema/ticket.js';
-import type { Run, RunStateEvent, RunMode } from './schema/run.js';
+import type { Run, RunStateEvent, RunMode, RunLogEntry } from './schema/run.js';
 
 /**
  * `ProjectInstanceDto` is the renderer-facing alias for the schema's
@@ -49,6 +49,7 @@ export type {
   RunStateEvent,
   ApprovalRequest,
   ApprovalResponse,
+  RunLogEntry,
 } from './schema/run.js';
 
 export const IPC_CHANNELS = {
@@ -89,6 +90,7 @@ export const IPC_CHANNELS = {
   RUNS_MODIFY: 'runs:modify',
   RUNS_CURRENT: 'runs:current',
   RUNS_LIST_HISTORY: 'runs:list-history',
+  RUNS_READ_LOG: 'runs:read-log',
   /** event channel (main -> renderer) */
   RUNS_CURRENT_CHANGED: 'runs:current-changed',
   /** event channel (main -> renderer) */
@@ -275,6 +277,14 @@ export interface RunsListHistoryResponse {
   runs: Run[];
 }
 
+export interface RunsReadLogRequest {
+  runId: string;
+}
+
+export interface RunsReadLogResponse {
+  entries: RunLogEntry[];
+}
+
 /** Event payload broadcast on `RUNS_CURRENT_CHANGED`. */
 export interface RunsCurrentChangedEvent {
   /** `null` indicates the runner has gone idle. */
@@ -337,6 +347,7 @@ export interface IpcApi {
     listHistory: (
       req: RunsListHistoryRequest,
     ) => Promise<IpcResult<RunsListHistoryResponse>>;
+    readLog: (req: RunsReadLogRequest) => Promise<IpcResult<RunsReadLogResponse>>;
     /** Subscribe to current-changed events (run starts / advances / completes). Returns unsubscribe fn. */
     onCurrentChanged: (listener: (e: RunsCurrentChangedEvent) => void) => () => void;
     /** Subscribe to fine-grained state-changed events (every state entry/exit). Returns unsubscribe fn. */

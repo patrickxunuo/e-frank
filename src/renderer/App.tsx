@@ -2,11 +2,43 @@ import { useState } from 'react';
 import { AppShell } from './components/AppShell';
 import { Dialog } from './components/Dialog';
 import { AddProject } from './views/AddProject';
+import { ExecutionView } from './views/ExecutionView';
 import { ProjectDetail } from './views/ProjectDetail';
 import { ProjectList } from './views/ProjectList';
 import { useProjects } from './state/projects';
 
-type ViewState = { kind: 'list' } | { kind: 'detail'; projectId: string };
+type ViewState =
+  | { kind: 'list' }
+  | { kind: 'detail'; projectId: string }
+  | { kind: 'execution'; runId: string; projectId: string };
+
+type DetailViewState = Extract<ViewState, { kind: 'detail' }>;
+type ExecutionViewState = Extract<ViewState, { kind: 'execution' }>;
+type SetView = (v: ViewState) => void;
+
+function renderDetail(view: DetailViewState, setView: SetView): JSX.Element {
+  const { projectId } = view;
+  return (
+    <ProjectDetail
+      projectId={projectId}
+      onBack={() => setView({ kind: 'list' })}
+      onOpenExecution={(runId) => {
+        setView({ kind: 'execution', runId, projectId });
+      }}
+    />
+  );
+}
+
+function renderExecution(view: ExecutionViewState, setView: SetView): JSX.Element {
+  const { projectId, runId } = view;
+  return (
+    <ExecutionView
+      runId={runId}
+      projectId={projectId}
+      onBack={() => setView({ kind: 'detail', projectId })}
+    />
+  );
+}
 
 export function App(): JSX.Element {
   const [view, setView] = useState<ViewState>({ kind: 'list' });
@@ -27,12 +59,8 @@ export function App(): JSX.Element {
           }}
         />
       )}
-      {view.kind === 'detail' && (
-        <ProjectDetail
-          projectId={view.projectId}
-          onBack={() => setView({ kind: 'list' })}
-        />
-      )}
+      {view.kind === 'detail' && renderDetail(view, setView)}
+      {view.kind === 'execution' && renderExecution(view, setView)}
 
       <Dialog
         open={addOpen}

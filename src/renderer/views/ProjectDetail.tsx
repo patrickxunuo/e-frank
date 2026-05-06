@@ -33,6 +33,9 @@ import styles from './ProjectDetail.module.css';
 export interface ProjectDetailProps {
   projectId: string;
   onBack: () => void;
+  /** Open the full Execution View for an active run (#8). Optional so legacy
+   *  tests that don't exercise the Active Execution panel can omit it. */
+  onOpenExecution?: (runId: string) => void;
 }
 
 /**
@@ -142,6 +145,7 @@ function priorityLabel(raw: string): string {
 export function ProjectDetail({
   projectId,
   onBack,
+  onOpenExecution,
 }: ProjectDetailProps): JSX.Element {
   const [state, setState] = useState<ProjectState>({ kind: 'loading' });
   const [tab, setTab] = useState<TabId>('tickets');
@@ -717,6 +721,14 @@ export function ProjectDetail({
                     </Badge>
                   </div>
                   <div className={styles.activeActions}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onOpenExecution?.(activeRun.id)}
+                      data-testid="active-execution-open-details"
+                    >
+                      Open Details
+                    </Button>
                     <Button
                       variant="destructive"
                       size="sm"

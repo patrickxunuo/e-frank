@@ -29,9 +29,11 @@ import {
   type RunsCurrentResponse,
   type RunsListHistoryRequest,
   type RunsListHistoryResponse,
+  type RunsReadLogRequest,
+  type RunsReadLogResponse,
   type RunsCurrentChangedEvent,
 } from '../shared/ipc.js';
-import type { Run, RunStateEvent, RunMode } from '../shared/schema/run.js';
+import type { Run, RunStateEvent, RunMode, RunLogEntry } from '../shared/schema/run.js';
 import { handlePing } from './ping-handler.js';
 import {
   ClaudeProcessManager,
@@ -48,6 +50,7 @@ import {
   type TicketsChangedEvent,
 } from './modules/jira-poller.js';
 import { RunStore } from './modules/run-store.js';
+import { RunLogStore } from './modules/run-log-store.js';
 import { StubGitManager } from './modules/git-manager.js';
 import { StubPrCreator } from './modules/pr-creator.js';
 import { StubJiraUpdater } from './modules/jira-updater.js';
@@ -68,6 +71,7 @@ let projectStore: ProjectStore | null = null;
 let runHistory: RunHistory | null = null;
 let jiraPoller: JiraPoller | null = null;
 let runStore: RunStore | null = null;
+let runLogStore: RunLogStore | null = null;
 let workflowRunner: WorkflowRunner | null = null;
 
 function createWindow(): void {
@@ -360,6 +364,16 @@ function validateRunsListHistoryRequest(
     req.limit = limit;
   }
   return { ok: true, data: req };
+}
+
+function validateRunsReadLogRequest(raw: unknown): IpcResult<RunsReadLogRequest> {
+  if (!isPlainObject(raw) || typeof raw['runId'] !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'runId must be a string' },
+    };
+  }
+  return { ok: true, data: { runId: raw['runId'] } };
 }
 
 function validateJiraTestConnectionRequest(raw: unknown): IpcResult<JiraTestConnectionRequest> {
@@ -796,6 +810,24 @@ function registerIpcHandlers(): void {
       return { ok: true, data: { runs: res.data } };
     },
   );
+
+  ipcMain.handle(
+    IPC_CHANNELS.RUNS_READ_LOG,
+    async (_event, raw): Promise<IpcResult<RunsReadLogResponse>> => {
+      const validated = validateRunsReadLogRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (runLogStore === null) {
+        return notInitialized('RunLogStore');
+      }
+      const res = await runLogStore.read(validated.data.runId);
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return { ok: true, data: { entries: res.data } };
+    },
+  );
 }
 
 function toIpcCurrentChangedEvent(e: { run: Run | null }): RunsCurrentChangedEvent {
@@ -914,6 +946,21 @@ async function initStores(): Promise<void> {
       runStore = runs;
     }
 
+    // -- Run Log Store (issue #8) --
+    // Append-only NDJSON per-run log files live alongside the run JSON
+    // sidecars. Init failures leave runLogStore null so the read handler
+    // surfaces NOT_INITIALIZED; the claude->log forwarder below still
+    // attempts appends but logs and swallows the error.
+    const runLogs = new RunLogStore({ runsDir: join(userData, 'runs') });
+    const runLogsInit = await runLogs.init();
+    if (!runLogsInit.ok) {
+      console.error(
+        `[main] RunLogStore init failed: ${runLogsInit.error.code} - ${runLogsInit.error.message}`,
+      );
+    } else {
+      runLogStore = runLogs;
+    }
+
     const runner = new WorkflowRunner({
       projectStore: {
         get: async (id: string) => {
@@ -947,6 +994,32 @@ async function initStores(): Promise<void> {
       broadcastToWindows(IPC_CHANNELS.RUNS_CURRENT_CHANGED, toIpcCurrentChangedEvent(e));
     });
     workflowRunner = runner;
+
+    // -- Claude output -> RunLogStore (issue #8) --
+    // Forward every line from the active claude child process to the
+    // run-log NDJSON file, tagged with the runner's current state. Lines
+    // emitted while no run is active (defensive — shouldn't happen in
+    // practice) are dropped. We hook into the manager AFTER the runner is
+    // wired so `runner.current()` reflects the very first state.
+    claudeManager.on('output', (e: OutputEvent) => {
+      if (workflowRunner === null || runLogStore === null) return;
+      const current = workflowRunner.current();
+      if (current === null) return;
+      const entry: RunLogEntry = {
+        runId: current.id,
+        stream: e.stream,
+        line: e.line,
+        timestamp: e.timestamp,
+        state: current.state,
+      };
+      void runLogStore.appendLine(entry).then((res) => {
+        if (!res.ok) {
+          console.warn(
+            `[main] runLogStore.appendLine failed for run ${current.id}: ${res.error.code} - ${res.error.message}`,
+          );
+        }
+      });
+    });
   } catch (err) {
 
     console.error('[main] store initialization threw:', err);

@@ -1,0 +1,519 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
+import '@testing-library/jest-dom/vitest';
+import { ExecutionView } from '../../src/renderer/views/ExecutionView';
+import type {
+  IpcApi,
+  IpcResult,
+  ProjectInstanceDto,
+  Run,
+  RunState,
+} from '../../src/shared/ipc';
+import type { RunLogEntry } from '../../src/shared/schema/run';
+
+/**
+ * EXEC-001..010 — <ExecutionView> view.
+ *
+ * Spec snippet:
+ *   interface ExecutionViewProps {
+ *     runId: string;
+ *     projectId: string;
+ *     onBack: () => void;
+ *   }
+ *
+ * Behavior:
+ *   - Resolves the run by first checking `runs.current()`. If the active
+ *     run's id matches `runId`, use that. Otherwise fall back to
+ *     `runs.readLog({ runId })` for a terminal/history view.
+ *   - Header has Back, project name + ticket key + status badge,
+ *     progress counter, Auto-scroll toggle (default ON), Pause, Cancel
+ *     (hidden when terminal).
+ *   - Two-column body: Execution log on the left, "Approval panel lands
+ *     in #9" placeholder on the right.
+ *   - Bottom <PromptInput> wires onSubmit → claude.write where claudeRunId
+ *     comes from claude.status() at submit-time. Disabled when no active
+ *     claude run.
+ *
+ * Pattern: install a full IpcApi stub on window.api and override per-test
+ * the methods the view exercises. We do NOT module-mock useRunLog — the
+ * real hook subscribes to claude/runs events that we already stub on the
+ * IPC bridge, so the view+hook+bridge pipeline is exercised end-to-end.
+ */
+
+declare global {
+  interface Window {
+    api?: IpcApi;
+  }
+}
+
+interface ApiStub {
+  api: IpcApi;
+  projectsGet: Mock;
+  runsCurrent: Mock;
+  runsCancel: Mock;
+  runsReadLog: Mock;
+  claudeStatus: Mock;
+  claudeWrite: Mock;
+  claudeOnOutput: Mock;
+  runsOnStateChanged: Mock;
+}
+
+function makeProject(
+  id: string,
+  name: string,
+  overrides: Partial<ProjectInstanceDto> = {},
+): ProjectInstanceDto {
+  return {
+    id,
+    name,
+    repo: { type: 'github', localPath: '/tmp/' + id, baseBranch: 'main' },
+    tickets: { source: 'jira', query: 'project = ABC' },
+    workflow: { mode: 'interactive', branchFormat: 'feature/{ticketKey}-{slug}' },
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  };
+}
+
+function makeRun(over: Partial<Run> = {}): Run {
+  return {
+    id: 'r-1',
+    projectId: 'p-1',
+    ticketKey: 'ABC-7',
+    mode: 'interactive',
+    branchName: 'feat/abc-7',
+    state: 'running' as RunState,
+    status: 'running',
+    steps: [],
+    pendingApproval: null,
+    startedAt: 1,
+    ...over,
+  };
+}
+
+function installApi(opts?: {
+  project?: ProjectInstanceDto;
+  current?: IpcResult<{ run: Run | null }>;
+  readLog?: IpcResult<{ entries: RunLogEntry[] }>;
+  status?: IpcResult<{ active: { runId: string; pid: number | undefined; startedAt: number } | null }>;
+  cancelResult?: IpcResult<{ runId: string }>;
+  writeResult?: IpcResult<{ bytesWritten: number }>;
+}): ApiStub {
+  const unusedErr = (): IpcResult<never> => ({
+    ok: false,
+    error: { code: 'NOT_USED_IN_FE_TESTS', message: '' },
+  });
+
+  const project = opts?.project ?? makeProject('p-1', 'Alpha Project');
+  const projectsGet = vi.fn().mockResolvedValue({ ok: true, data: project });
+
+  const runsCurrent = vi
+    .fn()
+    .mockResolvedValue(opts?.current ?? { ok: true, data: { run: null } });
+  const runsReadLog = vi
+    .fn()
+    .mockResolvedValue(opts?.readLog ?? { ok: true, data: { entries: [] } });
+  const runsCancel = vi
+    .fn()
+    .mockResolvedValue(opts?.cancelResult ?? { ok: true, data: { runId: 'r-1' } });
+  const claudeStatus = vi
+    .fn()
+    .mockResolvedValue(opts?.status ?? { ok: true, data: { active: null } });
+  const claudeWrite = vi
+    .fn()
+    .mockResolvedValue(opts?.writeResult ?? { ok: true, data: { bytesWritten: 0 } });
+  const claudeOnOutput = vi.fn(() => () => {});
+  const runsOnStateChanged = vi.fn(() => () => {});
+
+  const api: IpcApi = {
+    ping: vi.fn<IpcApi['ping']>().mockResolvedValue({ reply: 'pong', receivedAt: 0 }),
+    claude: {
+      run: vi.fn<IpcApi['claude']['run']>().mockResolvedValue(unusedErr()),
+      cancel: vi.fn<IpcApi['claude']['cancel']>().mockResolvedValue(unusedErr()),
+      write: claudeWrite as unknown as IpcApi['claude']['write'],
+      status: claudeStatus as unknown as IpcApi['claude']['status'],
+      onOutput: claudeOnOutput as unknown as IpcApi['claude']['onOutput'],
+      onExit: vi.fn<IpcApi['claude']['onExit']>(() => () => {}),
+    },
+    projects: {
+      list: vi.fn<IpcApi['projects']['list']>().mockResolvedValue({ ok: true, data: [] }),
+      get: projectsGet as unknown as IpcApi['projects']['get'],
+      create: vi.fn<IpcApi['projects']['create']>().mockResolvedValue(unusedErr()),
+      update: vi.fn<IpcApi['projects']['update']>().mockResolvedValue(unusedErr()),
+      delete: vi.fn<IpcApi['projects']['delete']>().mockResolvedValue(unusedErr()),
+    },
+    secrets: {
+      set: vi.fn<IpcApi['secrets']['set']>().mockResolvedValue(unusedErr()),
+      get: vi.fn<IpcApi['secrets']['get']>().mockResolvedValue(unusedErr()),
+      delete: vi.fn<IpcApi['secrets']['delete']>().mockResolvedValue(unusedErr()),
+      list: vi.fn<IpcApi['secrets']['list']>().mockResolvedValue(unusedErr()),
+    },
+    jira: {
+      list: vi
+        .fn<IpcApi['jira']['list']>()
+        .mockResolvedValue({ ok: true, data: { tickets: [] } }),
+      refresh: vi
+        .fn<IpcApi['jira']['refresh']>()
+        .mockResolvedValue({ ok: true, data: { tickets: [] } }),
+      testConnection: vi
+        .fn<IpcApi['jira']['testConnection']>()
+        .mockResolvedValue(unusedErr()),
+      refreshPollers: vi
+        .fn<IpcApi['jira']['refreshPollers']>()
+        .mockResolvedValue(unusedErr()),
+      onTicketsChanged: vi.fn<IpcApi['jira']['onTicketsChanged']>(() => () => {}),
+      onError: vi.fn<IpcApi['jira']['onError']>(() => () => {}),
+    },
+    runs: {
+      start: vi.fn() as unknown as IpcApi['runs']['start'],
+      cancel: runsCancel as unknown as IpcApi['runs']['cancel'],
+      approve: vi.fn() as unknown as IpcApi['runs']['approve'],
+      reject: vi.fn() as unknown as IpcApi['runs']['reject'],
+      modify: vi.fn() as unknown as IpcApi['runs']['modify'],
+      current: runsCurrent as unknown as IpcApi['runs']['current'],
+      listHistory: vi.fn() as unknown as IpcApi['runs']['listHistory'],
+      onCurrentChanged: vi.fn(() => () => {}) as unknown as IpcApi['runs']['onCurrentChanged'],
+      onStateChanged: runsOnStateChanged as unknown as IpcApi['runs']['onStateChanged'],
+      // `readLog` is patched via the unknown cast — Agent B owns the typed signature.
+      readLog: runsReadLog,
+    } as unknown as IpcApi['runs'],
+  };
+
+  (window as { api?: IpcApi }).api = api;
+  return {
+    api,
+    projectsGet,
+    runsCurrent,
+    runsCancel,
+    runsReadLog,
+    claudeStatus,
+    claudeWrite,
+    claudeOnOutput,
+    runsOnStateChanged,
+  };
+}
+
+const noop = (): void => {};
+
+afterEach(() => {
+  cleanup();
+  delete (window as { api?: IpcApi }).api;
+  vi.restoreAllMocks();
+});
+
+describe('<ExecutionView /> — EXEC', () => {
+  // -------------------------------------------------------------------------
+  // EXEC-001 — Header renders project name + ticket key + status badge
+  // -------------------------------------------------------------------------
+  it('EXEC-001: header renders project name, ticket key, and status badge', async () => {
+    installApi({
+      project: makeProject('p-1', 'Alpha Project'),
+      current: {
+        ok: true,
+        data: { run: makeRun({ id: 'r-1', projectId: 'p-1', ticketKey: 'ABC-7' }) },
+      },
+    });
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+
+    // Project name lands in the header. Asserted via the title testid since
+    // the name renders in multiple places (sidebar, breadcrumb, title).
+    await waitFor(() => {
+      expect(screen.getByTestId('execution-title')).toHaveTextContent(
+        /alpha project/i,
+      );
+    });
+    // Ticket key visible.
+    expect(screen.getByTestId('execution-ticket-key')).toHaveTextContent(/ABC-7/);
+    // Status badge testid present.
+    expect(screen.getByTestId('execution-status-badge')).toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-002 — Progress counter renders "Step X of Y"
+  // -------------------------------------------------------------------------
+  it('EXEC-002: progress counter renders Step X of Y', async () => {
+    installApi({
+      current: {
+        ok: true,
+        data: { run: makeRun({ id: 'r-1', projectId: 'p-1' }) },
+      },
+    });
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+
+    await waitFor(() => {
+      const progress = screen.getByTestId('execution-progress');
+      expect(progress).toBeInTheDocument();
+      // Tolerant: accept "Step N of M" or "N of M".
+      expect(progress.textContent ?? '').toMatch(/\d+\s*of\s*\d+/i);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-003 — Auto-scroll toggle defaults ON
+  // -------------------------------------------------------------------------
+  it('EXEC-003: auto-scroll toggle defaults to ON (checked / pressed / data-on)', async () => {
+    installApi({
+      current: {
+        ok: true,
+        data: { run: makeRun({ id: 'r-1', projectId: 'p-1' }) },
+      },
+    });
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+
+    const toggle = await screen.findByTestId('log-autoscroll-toggle');
+    // Tolerant — Toggle in this codebase varies between aria-checked,
+    // aria-pressed, data-state, and a checked input. Accept any of them.
+    const on =
+      toggle.getAttribute('aria-checked') === 'true' ||
+      toggle.getAttribute('aria-pressed') === 'true' ||
+      toggle.getAttribute('data-state') === 'checked' ||
+      toggle.getAttribute('data-on') === 'true' ||
+      (toggle as HTMLInputElement).checked === true ||
+      toggle.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked ===
+        true;
+    expect(on).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-004 — Pause button toggles useRunLog paused state; UI shows "Resume"
+  // -------------------------------------------------------------------------
+  it('EXEC-004: clicking Pause flips the label/state to Resume', async () => {
+    installApi({
+      current: {
+        ok: true,
+        data: { run: makeRun({ id: 'r-1', projectId: 'p-1' }) },
+      },
+    });
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+
+    const pause = await screen.findByTestId('log-pause-button');
+    expect(pause.textContent ?? '').toMatch(/pause/i);
+
+    fireEvent.click(pause);
+    await waitFor(() => {
+      const after = screen.getByTestId('log-pause-button');
+      expect(after.textContent ?? '').toMatch(/resume/i);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-005 — Cancel button calls runs.cancel; hidden when terminal
+  // -------------------------------------------------------------------------
+  it('EXEC-005: live run → Cancel button visible and calls runs.cancel', async () => {
+    const stub = installApi({
+      current: {
+        ok: true,
+        data: { run: makeRun({ id: 'r-1', projectId: 'p-1', state: 'running' }) },
+      },
+    });
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+
+    const cancel = await screen.findByTestId('log-cancel-button');
+    fireEvent.click(cancel);
+
+    await waitFor(() => {
+      expect(stub.runsCancel).toHaveBeenCalledWith({ runId: 'r-1' });
+    });
+  });
+
+  it('EXEC-005 (terminal): cancel button is hidden when status is terminal', async () => {
+    installApi({
+      // Active run is something else / null — view falls back to readLog.
+      current: { ok: true, data: { run: null } },
+      readLog: { ok: true, data: { entries: [] } },
+      status: { ok: true, data: { active: null } },
+    });
+
+    render(<ExecutionView runId="r-done" projectId="p-1" onBack={noop} />);
+
+    // Allow the view to settle on a "terminal/history" rendering. The
+    // cancel button must NOT be present.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByTestId('log-cancel-button')).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-006 — Back button calls onBack
+  // -------------------------------------------------------------------------
+  it('EXEC-006: clicking the Back button calls onBack', async () => {
+    const onBack = vi.fn();
+    installApi({
+      current: {
+        ok: true,
+        data: { run: makeRun({ id: 'r-1', projectId: 'p-1' }) },
+      },
+    });
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={onBack} />);
+
+    const back = await screen.findByTestId('execution-back');
+    fireEvent.click(back);
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-007 — Right pane shows "Approval panel lands in #9"
+  // -------------------------------------------------------------------------
+  it('EXEC-007: right-pane placeholder renders with the #9 hand-off note', async () => {
+    installApi({
+      current: {
+        ok: true,
+        data: { run: makeRun({ id: 'r-1', projectId: 'p-1' }) },
+      },
+    });
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+
+    const placeholder = await screen.findByTestId('execution-approval-placeholder');
+    expect(placeholder).toBeInTheDocument();
+    expect(placeholder.textContent ?? '').toMatch(/approval panel/i);
+    expect(placeholder.textContent ?? '').toMatch(/#9/);
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-008 — PromptInput onSubmit → claude.write with id from claude.status()
+  // -------------------------------------------------------------------------
+  it('EXEC-008: PromptInput submit calls claude.status() then claude.write({ runId, text })', async () => {
+    const stub = installApi({
+      current: {
+        ok: true,
+        data: { run: makeRun({ id: 'r-1', projectId: 'p-1' }) },
+      },
+      status: {
+        ok: true,
+        data: { active: { runId: 'claude-run-xyz', pid: 12345, startedAt: 1 } },
+      },
+    });
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+
+    const textarea = await screen.findByTestId('log-prompt-input');
+    fireEvent.change(textarea, { target: { value: 'continue please' } });
+    fireEvent.click(screen.getByTestId('log-send-button'));
+
+    await waitFor(() => {
+      expect(stub.claudeStatus).toHaveBeenCalled();
+      expect(stub.claudeWrite).toHaveBeenCalled();
+    });
+
+    // Status MUST be called BEFORE write — runId is sourced from status().
+    const statusOrder = stub.claudeStatus.mock.invocationCallOrder;
+    const writeOrder = stub.claudeWrite.mock.invocationCallOrder;
+    expect(statusOrder.length).toBeGreaterThan(0);
+    expect(writeOrder.length).toBeGreaterThan(0);
+    const lastStatusBeforeWrite = Math.max(
+      ...statusOrder.filter((n) => n < (writeOrder[0] as number)),
+    );
+    expect(lastStatusBeforeWrite).toBeGreaterThan(0);
+
+    // Write was called with the runId from status().
+    expect(stub.claudeWrite).toHaveBeenCalledWith({
+      runId: 'claude-run-xyz',
+      text: 'continue please',
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-009 — Live run with state events updates the timeline
+  // -------------------------------------------------------------------------
+  it('EXEC-009: state-changed events from runs.onStateChanged refresh the timeline', async () => {
+    // ExecutionView and useRunLog each register their own onStateChanged
+    // listener. Capture ALL of them so the fired event drives both.
+    const stateListeners: Array<(e: { runId: string; run: Run }) => void> = [];
+    const stub = installApi({
+      current: {
+        ok: true,
+        data: { run: makeRun({ id: 'r-1', projectId: 'p-1', state: 'running' }) },
+      },
+    });
+    stub.runsOnStateChanged.mockImplementation((cb) => {
+      const typed = cb as (e: { runId: string; run: Run }) => void;
+      stateListeners.push(typed);
+      return () => {
+        const idx = stateListeners.indexOf(typed);
+        if (idx >= 0) stateListeners.splice(idx, 1);
+      };
+    });
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+
+    await waitFor(() => {
+      // Both listeners (ExecutionView resolution + useRunLog) should be
+      // registered before we fire.
+      expect(stateListeners.length).toBeGreaterThanOrEqual(2);
+    });
+
+    // Fire a state-change event that advances the run to a later step.
+    const advanced = makeRun({
+      id: 'r-1',
+      projectId: 'p-1',
+      state: 'committing',
+      steps: [
+        {
+          state: 'running',
+          userVisibleLabel: 'Implementing feature',
+          status: 'done',
+          startedAt: 1,
+          finishedAt: 2,
+        },
+        {
+          state: 'committing',
+          userVisibleLabel: 'Committing changes',
+          status: 'running',
+          startedAt: 2,
+        },
+      ],
+    });
+
+    // Drive ALL captured listeners.
+    for (const listener of stateListeners) {
+      listener({ runId: 'r-1', run: advanced });
+    }
+
+    // The progress counter / status badge should reflect the new state.
+    await waitFor(() => {
+      // At least the new step's user-visible label appears somewhere in the
+      // log timeline.
+      expect(screen.getByText(/committing changes/i)).toBeInTheDocument();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // EXEC-010 — Terminal run, no active claude run: input disabled
+  // -------------------------------------------------------------------------
+  it('EXEC-010: terminal run + no active claude run → PromptInput disabled', async () => {
+    // ExecutionView's #8-scope resolution requires `runs.current()` to return
+    // the matching runId — a terminal run that's still the most recent one.
+    // (Full history navigation for runs that are no longer current lands
+    // with the future Runs tab.)
+    const terminalRun = makeRun({ id: 'r-1', status: 'done', state: 'done' });
+    installApi({
+      current: { ok: true, data: { run: terminalRun } },
+      readLog: { ok: true, data: { entries: [] } },
+      status: { ok: true, data: { active: null } },
+    });
+
+    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
+
+    // Wait for textarea to mount; assert disabled.
+    const textarea = (await screen.findByTestId(
+      'log-prompt-input',
+    )) as HTMLTextAreaElement;
+    expect(textarea.disabled).toBe(true);
+
+    const send = screen.getByTestId('log-send-button') as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+  });
+});
