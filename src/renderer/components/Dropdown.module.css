@@ -35,11 +35,14 @@
   border-color: var(--border-emphasis);
 }
 
+/* Doubled selector with `:hover` beats `.shell:hover:not([data-disabled='true'])`
+ * on specificity, so the focus color stays accent even when the cursor is
+ * over the dropdown. Just a 1px recolored border, nothing else. */
 .shell:focus-within,
-.shell[data-open='true'] {
+.shell:focus-within:hover,
+.shell[data-open='true'],
+.shell[data-open='true']:hover {
   border-color: var(--accent);
-  /* Inset 1px line same color as border → reads as one continuous 2px edge. */
-  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .shell[data-error='true'] {
@@ -47,8 +50,10 @@
 }
 
 .shell[data-error='true']:focus-within,
-.shell[data-error='true'][data-open='true'] {
-  box-shadow: inset 0 0 0 1px var(--danger);
+.shell[data-error='true']:focus-within:hover,
+.shell[data-error='true'][data-open='true'],
+.shell[data-error='true'][data-open='true']:hover {
+  border-color: var(--danger);
 }
 
 .shell[data-disabled='true'] {

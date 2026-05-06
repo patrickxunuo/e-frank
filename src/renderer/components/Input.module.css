@@ -34,20 +34,21 @@
   border-color: var(--border-emphasis);
 }
 
-.shell:focus-within {
+/* The doubled selector beats `.shell:hover:not(.disabled)` on specificity,
+ * so border-color stays accent even when the cursor sits over the focused
+ * input. Nothing else changes — same 1px line, just recolored. */
+.shell:focus-within,
+.shell:focus-within:hover {
   border-color: var(--accent);
-  /* Inset shadow draws a 1px line just inside the border, same color as it.
-   * Combined with the 1px outer border, the focus indicator reads as one
-   * continuous 2px edge — no second concentric ring. */
-  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .shell.error {
   border-color: var(--danger);
 }
 
-.shell.error:focus-within {
-  box-shadow: inset 0 0 0 1px var(--danger);
+.shell.error:focus-within,
+.shell.error:focus-within:hover {
+  border-color: var(--danger);
 }
 
 .leadingIcon {
