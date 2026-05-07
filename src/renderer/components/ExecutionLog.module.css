@@ -55,9 +55,35 @@
   transition: background-color var(--duration-base) var(--ease-out);
 }
 
+/*
+ * The accent bar on the running step gets a slow, gentle breath in its
+ * box-shadow halo. The bar's geometry stays put (no width/height
+ * animation) so the row layout never jiggles; only the painted glow
+ * around it inhales / exhales. 3.2s cycle, ease-in-out — slow enough to
+ * read as "alive, still working" without competing for attention with
+ * the streaming stdout below.
+ */
 .row[data-status='running']::before {
   background: var(--accent);
-  box-shadow: 0 0 12px -2px var(--accent-glow);
+  animation: barBreath 3.2s var(--ease-in-out) infinite;
+  will-change: box-shadow;
+}
+
+@keyframes barBreath {
+  0%,
+  100% {
+    box-shadow: 0 0 8px -3px var(--accent-glow);
+  }
+  50% {
+    box-shadow: 0 0 16px -1px var(--accent-glow);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row[data-status='running']::before {
+    animation: none;
+    box-shadow: 0 0 12px -2px var(--accent-glow);
+  }
 }
 
 .row[data-status='done']::before {
@@ -169,16 +195,26 @@
 }
 
 .row[data-status='running'] .statusDot {
-  animation: pulseDot 1.6s var(--ease-in-out) infinite;
+  animation: pulseDot 1.8s var(--ease-in-out) infinite;
+  will-change: transform, box-shadow;
 }
 
 @keyframes pulseDot {
   0%,
   100% {
     box-shadow: 0 0 0 0 var(--accent-glow);
+    transform: scale(1);
   }
   50% {
-    box-shadow: 0 0 0 5px transparent;
+    box-shadow: 0 0 0 6px transparent;
+    transform: scale(1.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row[data-status='running'] .statusDot {
+    animation: none;
+    transform: none;
   }
 }
 

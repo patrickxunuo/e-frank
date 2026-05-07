@@ -73,7 +73,7 @@ import {
 } from './modules/ticket-poller.js';
 import { RunStore } from './modules/run-store.js';
 import { RunLogStore } from './modules/run-log-store.js';
-import { StubGitManager } from './modules/git-manager.js';
+import { NodeGitManager } from './modules/git-manager.js';
 import { StubPrCreator } from './modules/pr-creator.js';
 import { StubJiraUpdater } from './modules/jira-updater.js';
 import { WorkflowRunner } from './modules/workflow-runner.js';
@@ -1701,7 +1701,7 @@ async function initStores(): Promise<void> {
       runHistory: history,
       runStore: runs,
       claudeManager,
-      gitManager: new StubGitManager(),
+      gitManager: new NodeGitManager({ spawner: new NodeSpawner() }),
       prCreator: new StubPrCreator(),
       jiraUpdater: new StubJiraUpdater(),
     });
