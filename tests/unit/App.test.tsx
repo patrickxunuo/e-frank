@@ -145,6 +145,9 @@ function makeIpcApiStub(
         .fn<IpcApi['dialog']['selectFolder']>()
         .mockResolvedValue({ ok: true, data: { path: null } }),
     },
+    tickets: {
+      list: vi.fn<IpcApi['tickets']['list']>().mockResolvedValue(unusedErr()),
+    },
   };
 }
 

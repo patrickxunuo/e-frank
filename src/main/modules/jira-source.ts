@@ -29,6 +29,8 @@ import type {
   ConnectionStoreLike,
   PollerErrorCode,
   SecretsManagerLike,
+  TicketListOptions,
+  TicketListPage,
   TicketSourceClient,
 } from './ticket-poller-types.js';
 
@@ -143,7 +145,55 @@ export async function buildJiraSource(
     auth: { email, apiToken },
   });
 
-  const jql = tickets.query ?? `project = "${tickets.projectKey}"`;
+  const baseJql = tickets.query ?? `project = "${tickets.projectKey}"`;
+
+  /**
+   * Compose a JQL string by augmenting the project's base query with an
+   * optional `text ~ "..."` clause for free-text search and an optional
+   * `ORDER BY` for sorted reads. JQL syntax:
+   *   - String literals are double-quoted; inner `"` and `\` need escaping.
+   *   - `text ~` does word-token matching; no wildcards needed for prefix.
+   *   - Multiple ORDER BY clauses are comma-separated; first wins, rest
+   *     break ties.
+   *
+   * The base JQL may itself contain an `ORDER BY` (project owners sometimes
+   * embed one in `tickets.query`). In that case the user's clause wins —
+   * we only append an ORDER BY when the base doesn't already have one.
+   */
+  function composeJql(opts: TicketListOptions): string {
+    const trimmedSearch = (opts.search ?? '').trim();
+    let jql = baseJql;
+
+    // Attach a `text ~` clause when search is non-empty. Wrap the user's
+    // input in quotes after escaping backslashes and inner quotes — JQL
+    // string literal rules.
+    if (trimmedSearch !== '') {
+      const escaped = trimmedSearch.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      // If the base JQL already has an ORDER BY, splice the AND in before
+      // it so the ORDER stays at the tail. Otherwise just append.
+      const orderByIdx = jql.search(/\bORDER\s+BY\b/i);
+      if (orderByIdx >= 0) {
+        const head = jql.slice(0, orderByIdx).trimEnd();
+        const tail = jql.slice(orderByIdx);
+        jql = `${head} AND text ~ "${escaped}" ${tail}`;
+      } else {
+        jql = `${jql} AND text ~ "${escaped}"`;
+      }
+    }
+
+    // Append ORDER BY only if the base JQL didn't already include one.
+    if (opts.sortBy !== undefined && !/\bORDER\s+BY\b/i.test(jql)) {
+      const dir = opts.sortDir === 'asc' ? 'ASC' : 'DESC';
+      const field = opts.sortBy === 'priority' ? 'priority' : 'key';
+      // Tiebreak by key so equal-priority tickets stay in a stable order.
+      jql =
+        opts.sortBy === 'priority'
+          ? `${jql} ORDER BY ${field} ${dir}, key ${dir}`
+          : `${jql} ORDER BY ${field} ${dir}`;
+    }
+
+    return jql;
+  }
 
   const sourceClient: TicketSourceClient = {
     // Non-async wrapper: returns `client.search()` directly (then `.then` for
@@ -151,7 +201,7 @@ export async function buildJiraSource(
     // JiraClient.search await chain. Keeps the original POLLER-005 timing
     // assertions intact.
     fetchTickets(): ReturnType<TicketSourceClient['fetchTickets']> {
-      return client.search(jql).then((res) => {
+      return client.search(baseJql).then((res) => {
         if (!res.ok) {
           const code = jiraCodeToPollerCode(res.error.code);
           const out: {
@@ -171,6 +221,41 @@ export async function buildJiraSource(
         }
         return { ok: true, tickets: [...res.data.tickets] };
       });
+    },
+
+    listPage(opts): ReturnType<TicketSourceClient['listPage']> {
+      const startAt = opts.cursor !== undefined ? Number.parseInt(opts.cursor, 10) : 0;
+      // Cursor is a string for opacity but we stamped it as a digit string
+      // in `nextCursor`. NaN means a malformed/forged cursor — treat as 0.
+      const safeStartAt = Number.isFinite(startAt) && startAt >= 0 ? startAt : 0;
+      const jql = composeJql(opts);
+      return client
+        .search(jql, { startAt: safeStartAt, maxResults: opts.limit })
+        .then((res) => {
+          if (!res.ok) {
+            const code = jiraCodeToPollerCode(res.error.code);
+            const out: {
+              ok: false;
+              code: PollerErrorCode;
+              message: string;
+              httpStatus?: number;
+            } = {
+              ok: false,
+              code,
+              message: `Jira search failed: ${code}`,
+            };
+            if (typeof res.error.status === 'number') {
+              out.httpStatus = res.error.status;
+            }
+            return out;
+          }
+          const consumed = res.data.startAt + res.data.tickets.length;
+          const data: TicketListPage = {
+            rows: [...res.data.tickets],
+            nextCursor: consumed < res.data.total ? String(consumed) : undefined,
+          };
+          return { ok: true, data };
+        });
     },
   };
   return { ok: true, client: sourceClient };

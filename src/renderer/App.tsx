@@ -48,6 +48,10 @@ function activeNavFor(view: ViewState): SidebarNavId {
   return 'projects';
 }
 
+function routeFor(view: ViewState): 'list' | 'detail' | 'execution' | 'connections' {
+  return view.kind;
+}
+
 export function App(): JSX.Element {
   const [view, setView] = useState<ViewState>({ kind: 'list' });
   const [addOpen, setAddOpen] = useState<boolean>(false);
@@ -63,7 +67,11 @@ export function App(): JSX.Element {
   };
 
   return (
-    <AppShell activeNav={activeNavFor(view)} onNavigate={handleNavigate}>
+    <AppShell
+      activeNav={activeNavFor(view)}
+      route={routeFor(view)}
+      onNavigate={handleNavigate}
+    >
       {view.kind === 'list' && (
         <ProjectList
           projects={projects.projects}

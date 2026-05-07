@@ -24,7 +24,8 @@ import type { RunLogEntry } from '../../src/shared/schema/run';
 type FsOp =
   | { kind: 'appendFile'; path: string; data: string }
   | { kind: 'readFile'; path: string }
-  | { kind: 'mkdir'; path: string };
+  | { kind: 'mkdir'; path: string }
+  | { kind: 'unlink'; path: string };
 
 interface MemFs extends RunLogStoreFs {
   files: Map<string, string>;
@@ -63,6 +64,17 @@ function createMemFs(initial: Record<string, string> = {}): MemFs {
     },
     async mkdir(path: string, _opts: { recursive: true }): Promise<void> {
       ops.push({ kind: 'mkdir', path });
+    },
+    async unlink(path: string): Promise<void> {
+      ops.push({ kind: 'unlink', path });
+      if (!files.has(path)) {
+        const err = new Error(
+          `ENOENT: no such file or directory, unlink '${path}'`,
+        ) as NodeJS.ErrnoException;
+        err.code = 'ENOENT';
+        throw err;
+      }
+      files.delete(path);
     },
   };
   return fs;

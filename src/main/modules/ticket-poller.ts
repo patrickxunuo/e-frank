@@ -46,12 +46,16 @@ import type {
   ConnectionStoreLike,
   PollerErrorCode,
   SecretsManagerLike,
+  TicketListOptions,
+  TicketListPage,
   TicketSourceClient,
 } from './ticket-poller-types.js';
 
 export type {
   ConnectionStoreLike,
   PollerErrorCode,
+  TicketListOptions,
+  TicketListPage,
   TicketSourceClient,
 } from './ticket-poller-types.js';
 
@@ -382,6 +386,59 @@ export class TicketPoller extends EventEmitter {
     const state = this.states.get(projectId);
     if (state === undefined) return [];
     return state.lastTickets;
+  }
+
+  /**
+   * Paginated source-direct list. Bypasses the cache — always rebuilds the
+   * source strategy and calls `listPage` so sort + search land on a fresh
+   * server-side query. Eligibility (processed / running) is filtered after
+   * the fetch so the renderer doesn't see tickets that are already mid-run.
+   *
+   * The page size may shrink slightly when eligibility removes some rows;
+   * the renderer treats an undefined `nextCursor` as "no more rows" and
+   * shorter-than-requested pages as a normal partial result.
+   */
+  async listPage(
+    projectId: string,
+    opts: TicketListOptions,
+  ): Promise<
+    | { ok: true; data: TicketListPage }
+    | { ok: false; code: PollerErrorCode; message: string }
+  > {
+    // Resolve the project from the store. We read fresh on every call so
+    // recently-edited tickets config (JQL, labels) lands without a poller
+    // restart — same rationale as `runPoll`.
+    const projectsRes = await this.projectStore.list();
+    if (!projectsRes.ok) {
+      return { ok: false, code: 'NETWORK', message: 'project store unavailable' };
+    }
+    const project = projectsRes.data.find((p) => p.id === projectId);
+    if (project === undefined) {
+      return { ok: false, code: 'PROJECT_NOT_FOUND', message: `no project with id "${projectId}"` };
+    }
+
+    const sourceRes = await this.sourceFactory(project);
+    if (!sourceRes.ok) {
+      return { ok: false, code: sourceRes.code, message: sourceRes.message };
+    }
+
+    const pageRes = await sourceRes.client.listPage(opts);
+    if (!pageRes.ok) {
+      return { ok: false, code: pageRes.code, message: pageRes.message };
+    }
+
+    // Eligibility filter — same predicate the polling tick uses. Mid-run
+    // and already-processed tickets shouldn't show in the picker even when
+    // they match the source-side filter.
+    const processed = new Set(this.runHistory.getProcessed(projectId));
+    const running = new Set(this.runHistory.getRunning(projectId));
+    const filtered = pageRes.data.rows.filter(
+      (t) => !processed.has(t.key) && !running.has(t.key),
+    );
+    return {
+      ok: true,
+      data: { rows: filtered, nextCursor: pageRes.data.nextCursor },
+    };
   }
 
   /**

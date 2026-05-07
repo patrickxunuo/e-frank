@@ -28,13 +28,15 @@ export interface RunLogStoreOptions {
 }
 
 /**
- * Minimal fs surface for the log store. Smaller than `ProjectStoreFs` —
- * append-only persistence doesn't need rename/unlink/writeFile/readdir.
+ * Minimal fs surface for the log store. Append-only persistence doesn't
+ * need rename / writeFile / readdir; `unlink` is needed for `delete()`,
+ * which the run-delete IPC chains after dropping the JSON sidecar.
  */
 export interface RunLogStoreFs {
   appendFile(path: string, data: string, encoding: 'utf8'): Promise<void>;
   readFile(path: string, encoding: 'utf8'): Promise<string>;
   mkdir(path: string, opts: { recursive: true }): Promise<void>;
+  unlink(path: string): Promise<void>;
 }
 
 export type RunLogStoreErrorCode = 'IO_FAILURE' | 'NOT_FOUND' | 'CORRUPT';
@@ -48,6 +50,7 @@ function defaultFs(): RunLogStoreFs {
     appendFile: (path, data, encoding) => fs.appendFile(path, data, encoding),
     readFile: (path, encoding) => fs.readFile(path, encoding),
     mkdir: (path, opts) => fs.mkdir(path, opts).then(() => undefined),
+    unlink: (path) => fs.unlink(path),
   };
 }
 
@@ -96,6 +99,24 @@ export class RunLogStore {
       await this.fs.appendFile(target, data, 'utf8');
       return { ok: true, data: undefined };
     } catch (err) {
+      return { ok: false, error: { code: 'IO_FAILURE', message: errMessage(err) } };
+    }
+  }
+
+  /**
+   * Drop the per-run log file. ENOENT is success (idempotent) — a run that
+   * never produced output legitimately has no `.log` to remove. Any other
+   * IO error surfaces, since the caller (run-delete IPC) wants to know if
+   * a stray file was left behind.
+   */
+  async delete(runId: string): Promise<RunLogStoreResult<{ runId: string }>> {
+    try {
+      await this.fs.unlink(this.fileFor(runId));
+      return { ok: true, data: { runId } };
+    } catch (err) {
+      if (isENOENT(err)) {
+        return { ok: true, data: { runId } };
+      }
       return { ok: false, error: { code: 'IO_FAILURE', message: errMessage(err) } };
     }
   }

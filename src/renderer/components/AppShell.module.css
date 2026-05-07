@@ -17,6 +17,25 @@
   padding: var(--space-7) var(--space-7) var(--space-7);
 }
 
+/*
+ * Execution route is dense — log + approval pane fight for space and
+ * the page already manages its own header/footer/body padding. Drop
+ * the outer buffer so it can claim the full content width.
+ */
+.main[data-route='execution'] {
+  padding: 0;
+}
+
+/*
+ * Project detail manages its own scrolling — the page splits into a
+ * fixed skeleton (title, action row, tabs) and a single scroll region
+ * (the active tab body). Suppressing `.main`'s scroll lets the table
+ * card itself claim the leftover height and scroll its rows internally.
+ */
+.main[data-route='detail'] {
+  overflow: hidden;
+}
+
 @media (max-width: 900px) {
   .shell {
     grid-template-columns: 200px 1fr;

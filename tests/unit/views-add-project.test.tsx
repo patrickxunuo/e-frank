@@ -229,6 +229,9 @@ function installApi(opts?: {
       onCurrentChanged: vi.fn(() => () => {}),
       onStateChanged: vi.fn(() => () => {}),
     } as unknown as IpcApi['runs'],
+    tickets: {
+      list: vi.fn().mockResolvedValue(unusedErr()),
+    } as unknown as IpcApi['tickets'],
   };
 
   (window as { api?: IpcApi }).api = api;

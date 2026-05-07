@@ -3,9 +3,16 @@
   flex-direction: column;
   gap: var(--space-5);
   max-width: 1180px;
+  width: 100%;
   margin: 0 auto;
-  /* Leave breathing room above the sticky Active Execution panel. */
-  padding-bottom: 200px;
+  /* Fill the AppShell main so the inner tab panel can claim the leftover
+   * height and the table card inside scrolls its rows. Bottom-clearance
+   * for the fixed Active Execution panel is opt-in via `--active-clearance`
+   * (toggled by `[data-active-run='true']` below) so we don't reserve
+   * 200px when no run is in flight. */
+  height: 100%;
+  min-height: 0;
+  --active-clearance: 0px;
 }
 
 /* ---- Header ---- */
@@ -164,12 +171,32 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .tabPanel {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  flex: 1 1 auto;
+  min-height: 0;
+  /* The panel itself does NOT scroll — the table card inside it does.
+   * Active-execution-panel clearance is applied conditionally inside the
+   * DataTable's scroll wrapper via the `--active-clearance` custom prop
+   * driven by `.page[data-active-run]`, so we don't waste 200px when no
+   * run is in flight. */
+  overflow: hidden;
+}
+
+/*
+ * `--active-clearance` is read by the table's fillHeight scroll wrapper
+ * (DataTable.module.css). Default 0 (set on `.page`); bumps to 200px
+ * when the active execution panel is mounted so the last table row
+ * scrolls clear of the fixed overlay.
+ */
+.page[data-active-run='true'] {
+  --active-clearance: 200px;
 }
 
 /* ---- Ticket table cells ---- */
@@ -383,4 +410,119 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+/* Runs tab cells (#33). */
+.runTicketKey {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+}
+
+.runBranch {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.runStartedAt,
+.runDuration {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.runPrLink {
+  font-family: var(--font-display);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.runPrLink:hover {
+  text-decoration: underline;
+}
+
+.runPrEmpty {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.runActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+/*
+ * Tickets tab — wrap that fills the panel and lets the inner table card
+ * scroll its rows. Without `min-height: 0` on a flex column child,
+ * Chromium expands the column to its natural content height and the
+ * inner overflow:auto never engages.
+ */
+.ticketsTableWrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.ticketsSearchRow {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.ticketsSearchRow > :global(.field),
+.ticketsSearchRow > div:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The infinite-scroll sentinel is invisible but takes a single line of
+ * vertical space so the IntersectionObserver fires reliably. */
+.scrollSentinelRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.scrollSentinel {
+  width: 1px;
+  height: 1px;
+}
+
+.deleteDialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.deleteDialogError {
+  font-size: 12.5px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.deleteDialogActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
 }

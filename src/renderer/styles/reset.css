@@ -112,3 +112,12 @@ ol {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--surface-overlay-strong);
 }
+/*
+ * The corner is the small square where horizontal + vertical scrollbars
+ * meet. Chromium paints it system-default white when unstyled, which
+ * pokes through any card backgrounds beneath. Match the track and let
+ * the host element's background show through.
+ */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

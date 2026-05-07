@@ -39,8 +39,12 @@ import {
   type RunsCurrentResponse,
   type RunsListHistoryRequest,
   type RunsListHistoryResponse,
+  type RunsDeleteRequest,
+  type RunsDeleteResponse,
   type RunsReadLogRequest,
   type RunsReadLogResponse,
+  type TicketsListRequest,
+  type TicketsListResponse,
   type RunsCurrentChangedEvent,
   type RunStateEvent,
   type Connection,
@@ -290,6 +294,11 @@ const api: IpcApi = {
         IpcResult<RunsListHistoryResponse>
       >,
 
+    delete: (req: RunsDeleteRequest): Promise<IpcResult<RunsDeleteResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.RUNS_DELETE, req) as Promise<
+        IpcResult<RunsDeleteResponse>
+      >,
+
     readLog: (
       req: RunsReadLogRequest,
     ): Promise<IpcResult<RunsReadLogResponse>> =>
@@ -323,6 +332,13 @@ const api: IpcApi = {
         ipcRenderer.removeListener(IPC_CHANNELS.RUNS_STATE_CHANGED, wrapped);
       };
     },
+  },
+
+  tickets: {
+    list: (req: TicketsListRequest): Promise<IpcResult<TicketsListResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.TICKETS_LIST, req) as Promise<
+        IpcResult<TicketsListResponse>
+      >,
   },
 };
 

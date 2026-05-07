@@ -12,6 +12,29 @@
    * the wrapper sits on an opaque card background anyway. */
 }
 
+/*
+ * Opt-in scroll-container mode (used by ProjectDetail's tickets + runs
+ * tables). The wrapper claims the parent's leftover height and scrolls
+ * its rows internally. Combined with `theadSticky`, the column labels
+ * stay pinned at the top of the card while the user scrolls.
+ *
+ * Parent must be a flex column with a constrained height; the panel CSS
+ * in ProjectDetail handles that.
+ */
+.fillHeight {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Replace `overflow-x: auto` with both axes — vertical scrolling is the
+   * point of fillHeight, and a single overflow rule lets the sticky
+   * thead resolve to this wrapper as its scroll container. */
+  overflow: auto;
+  /* Bottom clearance for any overlay (e.g. ProjectDetail's active
+   * execution panel). The consumer sets `--active-clearance` on an
+   * ancestor; default 0 means no reservation. The padding is part of the
+   * scroll content so the last row scrolls clear of the overlay. */
+  padding-bottom: var(--active-clearance, 0);
+}
+
 .table {
   width: 100%;
   border-collapse: separate;
@@ -31,6 +54,63 @@
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-overlay-subtle);
   white-space: nowrap;
+}
+
+/*
+ * Sticky thead — only attached when the wrapper is the scroll container
+ * (`.fillHeight`). `top: 0` resolves to the wrapper because that's the
+ * nearest ancestor with overflow. We bump the z-index above the row
+ * stagger animation so the header doesn't get repainted under its own
+ * border during the keyframe.
+ *
+ * The default `.thead th` background uses `--surface-overlay-subtle`
+ * which is intentionally semi-transparent; for sticky headers that's a
+ * problem because rows scroll visibly behind. We layer the same overlay
+ * on top of an opaque `--bg-card` base so the visual tint is preserved
+ * AND the rows beneath are fully masked.
+ */
+.theadSticky th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background:
+    linear-gradient(var(--surface-overlay-subtle), var(--surface-overlay-subtle)),
+    var(--bg-card);
+}
+
+.sortButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.sortButton:hover {
+  color: var(--text-secondary);
+}
+
+.sortLabel {
+  display: inline-block;
+}
+
+.sortIndicator {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.sortIndicator[data-active='true'] {
+  color: var(--accent);
 }
 
 .thead th.alignRight {
@@ -54,6 +134,43 @@
   cursor: default;
 }
 
+/*
+ * Body-only skeleton rows used during a sort/search re-fetch, so the
+ * sticky `<thead>` stays in place and the user keeps their column
+ * context. Each row is a single shimmer bar inside a colSpan'd cell so
+ * the columns never realign mid-load.
+ */
+.skeletonRow td {
+  padding: 16px var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.skeletonRow:last-child td {
+  border-bottom: 0;
+}
+
+.skeletonBar {
+  height: 14px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--surface-overlay-low) 0%,
+    var(--surface-overlay-mid) 50%,
+    var(--surface-overlay-low) 100%
+  );
+  background-size: 200% 100%;
+  animation: dataTableShimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes dataTableShimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
 .row td {
   padding: 16px var(--space-5);
   border-bottom: 1px solid var(--border-subtle);
@@ -75,6 +192,22 @@
 
 .empty {
   padding: var(--space-7) var(--space-5);
+}
+
+.inlineEmpty {
+  padding: var(--space-7) var(--space-5);
+  text-align: center;
+}
+
+.footer {
+  border-top: 1px solid var(--border-subtle);
+  padding: var(--space-3) var(--space-5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  background: var(--bg-card);
 }
 
 @keyframes rowEnter {

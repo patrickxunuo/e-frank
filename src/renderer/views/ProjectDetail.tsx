@@ -1,10 +1,23 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { ProjectInstanceDto, Run, RunState, TicketDto } from '@shared/ipc';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type {
+  ProjectInstanceDto,
+  Run,
+  RunState,
+  TicketDto,
+  TicketsSortBy,
+  TicketsSortDir,
+} from '@shared/ipc';
 import { Badge, type BadgeVariant } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Checkbox } from '../components/Checkbox';
-import { DataTable, type DataTableColumn } from '../components/DataTable';
+import {
+  DataTable,
+  type DataTableColumn,
+  type DataTableSortState,
+} from '../components/DataTable';
+import { Dialog } from '../components/Dialog';
 import { EmptyState } from '../components/EmptyState';
+import { Input } from '../components/Input';
 import { LogPreview } from '../components/LogPreview';
 import { ProgressBar } from '../components/ProgressBar';
 import { Tabs, type TabItem } from '../components/Tabs';
@@ -21,13 +34,18 @@ import {
   IconPullRequest,
   IconRefresh,
   IconRuns,
+  IconSearch,
   IconSettings,
+  IconTrash,
 } from '../components/icons';
 import { normalizePriority, type PriorityBucket } from '../lib/priority';
 import { formatRelative } from '../lib/time';
 import { useActiveRun } from '../state/active-run';
 import { useAutoMode } from '../state/auto-mode';
-import { useTickets } from '../state/tickets';
+import {
+  useTicketPages,
+  type TicketPagesQuery,
+} from '../state/ticket-pages';
 import styles from './ProjectDetail.module.css';
 
 export interface ProjectDetailProps {
@@ -155,15 +173,119 @@ export function ProjectDetail({
   const [state, setState] = useState<ProjectState>({ kind: 'loading' });
   const [tab, setTab] = useState<TabId>('tickets');
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  /**
+   * Local search input value. Server-side search lives on `ticketQuery.search`;
+   * we debounce keystrokes into that field so each character doesn't trigger
+   * a fresh page-1 fetch.
+   */
+  const [ticketSearchInput, setTicketSearchInput] = useState<string>('');
+  const [committedSearch, setCommittedSearch] = useState<string>('');
+  const [sortState, setSortState] = useState<DataTableSortState | null>(null);
+  const [runHistory, setRunHistory] = useState<{
+    runs: Run[];
+    loading: boolean;
+    error: string | null;
+  }>({ runs: [], loading: false, error: null });
   const [runBanner, setRunBanner] = useState<
     | { kind: 'error'; message: string }
     | { kind: 'queued'; firstKey: string; remaining: number }
     | null
   >(null);
+  /**
+   * Run-row delete UX state. `confirmRunId` drives the modal's open/close;
+   * `deletingRunId` blocks the confirm button while the IPC round-trip is
+   * in flight so a double-click can't fire two deletes.
+   */
+  const [confirmRunId, setConfirmRunId] = useState<string | null>(null);
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  const tickets = useTickets(projectId);
+  // Source kind drives which sort options are usable. GitHub Issues doesn't
+  // expose a priority sort server-side, so we degrade to id-only there.
+  const sourceKind = state.kind === 'ready' ? state.project.tickets.source : 'jira';
+  const isGithubSource = sourceKind === 'github-issues';
+
+  const defaultSort: DataTableSortState = isGithubSource
+    ? { key: 'id', dir: 'desc' }
+    : { key: 'priority', dir: 'desc' };
+  const effectiveSort: DataTableSortState = sortState ?? defaultSort;
+
+  // Build the server-paginated query. Memoized so identical sort/search
+  // values don't reset pagination on unrelated re-renders.
+  const ticketQuery: TicketPagesQuery = useMemo(() => {
+    const q: TicketPagesQuery = {
+      sortBy: effectiveSort.key as TicketsSortBy,
+      sortDir: effectiveSort.dir as TicketsSortDir,
+      search: undefined,
+    };
+    if (committedSearch.trim() !== '') q.search = committedSearch.trim();
+    return q;
+  }, [effectiveSort.key, effectiveSort.dir, committedSearch]);
+
+  const pages = useTicketPages(projectId, ticketQuery);
   const activeRun = useActiveRun(projectId);
   const [autoMode, setAutoMode] = useAutoMode(projectId);
+
+  // Debounce search keystrokes → committedSearch. 300ms feels responsive
+  // without firing on every character. The hook restarts pagination from
+  // page-1 whenever `ticketQuery.search` changes.
+  useEffect(() => {
+    if (ticketSearchInput === committedSearch) return;
+    const handle = window.setTimeout(() => {
+      setCommittedSearch(ticketSearchInput);
+    }, 300);
+    return () => {
+      window.clearTimeout(handle);
+    };
+  }, [ticketSearchInput, committedSearch]);
+
+  /**
+   * Infinite-scroll sentinel for the tickets table. The ref callback is
+   * declared up here (above the early returns) so React's hook order is
+   * stable across `state.kind` transitions. It's a ref-callback rather
+   * than a `useRef` because the sentinel mounts and unmounts as the table
+   * empty/skeleton/loaded states swap — re-attaching the observer on each
+   * mount is the reliable shape. Stored observer in a ref so the cleanup
+   * effect below can disconnect on unmount.
+   */
+  const sentinelObserver = useRef<IntersectionObserver | null>(null);
+  const loadMoreRef = useRef(pages.loadMore);
+  loadMoreRef.current = pages.loadMore;
+
+  const sentinelRef = useCallback((node: HTMLDivElement | null) => {
+    if (sentinelObserver.current !== null) {
+      sentinelObserver.current.disconnect();
+      sentinelObserver.current = null;
+    }
+    if (node === null) return;
+    // Walk up to the DataTable's scroll-root; null root falls back to
+    // the document viewport (fine for SSR/test environments).
+    const root = node.closest('[data-scroll-root]') as Element | null;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            void loadMoreRef.current();
+          }
+        }
+      },
+      // 200px rootMargin pre-loads the next page before the sentinel
+      // scrolls fully into view — keeps the feed feeling continuous.
+      { root, rootMargin: '0px 0px 200px 0px' },
+    );
+    observer.observe(node);
+    sentinelObserver.current = observer;
+  }, []);
+
+  // Tear down the observer on unmount.
+  useEffect(() => {
+    return () => {
+      if (sentinelObserver.current !== null) {
+        sentinelObserver.current.disconnect();
+        sentinelObserver.current = null;
+      }
+    };
+  }, []);
 
   /**
    * Start a run for `key`. On error, surface an inline banner. We don't
@@ -223,6 +345,41 @@ export function ProjectDetail({
     });
   };
 
+  /**
+   * Delete a finished run. Confirmation lives in `confirmRunId`; this is
+   * called from the dialog's confirm button. On success: drop the row from
+   * the in-memory history, close the dialog. On failure: surface in the
+   * dialog (rather than the page banner) so the user can retry without
+   * losing context.
+   */
+  const handleConfirmDeleteRun = useCallback(async (): Promise<void> => {
+    const runId = confirmRunId;
+    if (runId === null) return;
+    if (typeof window === 'undefined' || !window.api) {
+      setDeleteError('IPC bridge unavailable');
+      return;
+    }
+    setDeletingRunId(runId);
+    setDeleteError(null);
+    try {
+      const res = await window.api.runs.delete({ runId });
+      if (!res.ok) {
+        setDeleteError(res.error.message || res.error.code || 'Failed to delete run');
+        setDeletingRunId(null);
+        return;
+      }
+      setRunHistory((prev) => ({
+        ...prev,
+        runs: prev.runs.filter((r) => r.id !== runId),
+      }));
+      setConfirmRunId(null);
+      setDeletingRunId(null);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+      setDeletingRunId(null);
+    }
+  }, [confirmRunId]);
+
   // -- Fetch the project on mount --
   useEffect(() => {
     let cancelled = false;
@@ -260,30 +417,73 @@ export function ProjectDetail({
     };
   }, [projectId]);
 
-  // -- Reset selection whenever the ticket list changes (rule from spec) --
+  // -- Reset selection whenever the ticket list changes (rule from spec).
+  // With pagination, the visible set grows as the user scrolls — we only
+  // drop selections that are no longer in `pages.rows`, so a select-then-
+  // scroll-then-load flow still preserves the user's checkboxes.
   useEffect(() => {
     setSelected((prev) => {
       if (prev.size === 0) return prev;
-      const visible = new Set(tickets.tickets.map((t) => t.key));
+      const visible = new Set(pages.rows.map((t) => t.key));
       const next = new Set<string>();
       for (const key of prev) {
         if (visible.has(key)) next.add(key);
       }
       return next.size === prev.size ? prev : next;
     });
-  }, [tickets.tickets]);
+  }, [pages.rows]);
 
   const orderedSelectedKeys = useMemo<string[]>(() => {
-    return tickets.tickets.filter((t) => selected.has(t.key)).map((t) => t.key);
-  }, [tickets.tickets, selected]);
+    return pages.rows.filter((t) => selected.has(t.key)).map((t) => t.key);
+  }, [pages.rows, selected]);
+
+  // Fetch run history for the Runs tab. Refetches whenever the user
+  // switches to the Runs tab so a freshly-completed run shows up without
+  // a manual refresh. The poller / WorkflowRunner doesn't push completed
+  // runs over the IPC bus today; this lazy fetch is the lightest path
+  // to fix #33.
+  useEffect(() => {
+    if (tab !== 'runs') return;
+    if (state.kind !== 'ready') return;
+    if (typeof window === 'undefined' || !window.api) return;
+    const api = window.api;
+    const projectId = state.project.id;
+    let cancelled = false;
+    setRunHistory((prev) => ({ ...prev, loading: true, error: null }));
+    void (async () => {
+      try {
+        const result = await api.runs.listHistory({
+          projectId,
+          limit: 50,
+        });
+        if (cancelled) return;
+        if (result.ok) {
+          setRunHistory({ runs: result.data.runs, loading: false, error: null });
+        } else {
+          setRunHistory({
+            runs: [],
+            loading: false,
+            error: result.error.message || result.error.code,
+          });
+        }
+      } catch (err) {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : String(err);
+        setRunHistory({ runs: [], loading: false, error: message });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, state]);
 
   const allSelected =
-    tickets.tickets.length > 0 && selected.size === tickets.tickets.length;
+    pages.rows.length > 0 && selected.size === pages.rows.length;
   const someSelected = selected.size > 0 && !allSelected;
 
   const toggleAll = (next: boolean): void => {
     if (next) {
-      setSelected(new Set(tickets.tickets.map((t) => t.key)));
+      setSelected(new Set(pages.rows.map((t) => t.key)));
     } else {
       setSelected(new Set());
     }
@@ -368,7 +568,9 @@ export function ProjectDetail({
     {
       id: 'tickets',
       label: 'Tickets',
-      badge: tickets.tickets.length > 0 ? tickets.tickets.length : undefined,
+      // Show the loaded count — "20+" hint is implicit via the row count
+      // jumping when the user scrolls past the sentinel.
+      badge: pages.rows.length > 0 ? pages.rows.length : undefined,
     },
     { id: 'runs', label: 'Runs' },
     { id: 'prs', label: 'Pull Requests' },
@@ -401,6 +603,8 @@ export function ProjectDetail({
       key: 'id',
       header: 'ID',
       width: '120px',
+      sortable: true,
+      defaultSortDir: 'desc',
       render: (row) => <span className={styles.idCell}>{row.key}</span>,
     },
     {
@@ -416,6 +620,11 @@ export function ProjectDetail({
       key: 'priority',
       header: 'Priority',
       width: '120px',
+      sortable: true,
+      defaultSortDir: 'desc',
+      // GitHub's repo issues endpoint can't sort by label-driven priority;
+      // the column header degrades to plain text on GitHub-backed projects.
+      sortDisabled: isGithubSource,
       render: (row) => {
         const bucket = normalizePriority(row.priority);
         return (
@@ -437,9 +646,9 @@ export function ProjectDetail({
       render: () => (
         <span className={styles.sourceCell}>
           <span className={styles.sourceIcon}>
-            <IconJira size={14} />
+            {isGithubSource ? <IconGitHub size={14} /> : <IconJira size={14} />}
           </span>
-          Jira
+          {isGithubSource ? 'GitHub' : 'Jira'}
         </span>
       ),
     },
@@ -473,59 +682,289 @@ export function ProjectDetail({
     },
   ];
 
-  const ticketsBody = ((): JSX.Element => {
-    if (tickets.loading && tickets.tickets.length === 0) {
-      return (
-        <div className={styles.tableSkeleton} data-testid="tickets-loading">
-          <div className={styles.skeletonRow} style={{ width: '40%' }} />
-          <div className={styles.skeletonRow} style={{ width: '88%' }} />
-          <div className={styles.skeletonRow} style={{ width: '72%' }} />
-          <div className={styles.skeletonRow} style={{ width: '80%' }} />
-        </div>
-      );
+  // Run-row helpers (used by the Runs tab — #33).
+  const runStatusBadge = (run: Run): JSX.Element => {
+    let variant: BadgeVariant = 'neutral';
+    let label: string = run.status;
+    switch (run.status) {
+      case 'pending':
+      case 'running':
+        variant = 'running';
+        label = run.state === 'awaitingApproval' ? 'Awaiting' : 'Running';
+        break;
+      case 'done':
+        variant = 'success';
+        label = 'Done';
+        break;
+      case 'failed':
+        variant = 'danger';
+        label = 'Failed';
+        break;
+      case 'cancelled':
+        variant = 'warning';
+        label = 'Cancelled';
+        break;
     }
-    if (!tickets.loading && tickets.tickets.length === 0) {
+    return (
+      <Badge variant={variant} pulse={run.status === 'running'}>
+        {label}
+      </Badge>
+    );
+  };
+
+  const formatDuration = (start: number, end: number | undefined): string => {
+    if (typeof end !== 'number') return '—';
+    const ms = Math.max(0, end - start);
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const remS = s % 60;
+    if (m < 60) return remS === 0 ? `${m}m` : `${m}m ${remS}s`;
+    const h = Math.floor(m / 60);
+    const remM = m % 60;
+    return remM === 0 ? `${h}h` : `${h}h ${remM}m`;
+  };
+
+  const runColumns: DataTableColumn<Run>[] = [
+      {
+        key: 'status',
+        header: 'Status',
+        render: (row) => runStatusBadge(row),
+      },
+      {
+        key: 'ticketKey',
+        header: 'Ticket',
+        render: (row) => (
+          <span className={styles.runTicketKey}>{row.ticketKey}</span>
+        ),
+      },
+      {
+        key: 'branch',
+        header: 'Branch',
+        render: (row) => (
+          <span className={styles.runBranch}>{row.branchName}</span>
+        ),
+      },
+      {
+        key: 'started',
+        header: 'Started',
+        render: (row) => (
+          <span className={styles.runStartedAt}>
+            {formatRelative(new Date(row.startedAt).toISOString())}
+          </span>
+        ),
+      },
+      {
+        key: 'duration',
+        header: 'Duration',
+        render: (row) => (
+          <span className={styles.runDuration}>
+            {formatDuration(row.startedAt, row.finishedAt)}
+          </span>
+        ),
+      },
+      {
+        key: 'pr',
+        header: 'PR',
+        render: (row) =>
+          row.prUrl ? (
+            <a
+              href={row.prUrl}
+              target="_blank"
+              rel="noreferrer"
+              className={styles.runPrLink}
+              onClick={(e) => e.stopPropagation()}
+              data-testid={`run-pr-${row.id}`}
+            >
+              View
+            </a>
+          ) : (
+            <span className={styles.runPrEmpty}>—</span>
+          ),
+      },
+      {
+        key: 'actions',
+        header: '',
+        align: 'right',
+        width: '180px',
+        render: (row) => {
+          const isActive = activeRun !== null && activeRun.id === row.id;
+          return (
+            <span className={styles.runActions}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenExecution?.(row.id);
+                }}
+                data-testid={`run-view-${row.id}`}
+              >
+                View
+              </Button>
+              {!isActive && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  leadingIcon={<IconTrash size={14} />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeleteError(null);
+                    setConfirmRunId(row.id);
+                  }}
+                  data-testid={`run-delete-${row.id}`}
+                  aria-label={`Delete run for ${row.ticketKey}`}
+                />
+              )}
+            </span>
+          );
+        },
+      },
+    ];
+
+  const runsBody = ((): JSX.Element => {
+    const isReloading = runHistory.loading;
+    const hasRuns = runHistory.runs.length > 0;
+    if (!isReloading && runHistory.error !== null && !hasRuns) {
       return (
         <EmptyState
-          icon={<IconJira size={26} />}
-          title="No eligible tickets"
-          description={
-            tickets.error
-              ? 'We couldn’t reach Jira — check the project’s credentials and try refreshing.'
-              : 'Nothing matches this project’s JQL right now. New tickets will land here automatically.'
-          }
-          action={
-            <Button
-              variant="ghost"
-              size="sm"
-              leadingIcon={<IconRefresh />}
-              onClick={() => {
-                void tickets.refresh();
-              }}
-              data-testid="tickets-empty-refresh"
-            >
-              Refresh
-            </Button>
-          }
-          data-testid="tickets-empty"
+          icon={<IconRuns size={26} />}
+          title="Couldn't load run history"
+          description={runHistory.error}
+          data-testid="runs-error"
+        />
+      );
+    }
+    if (!isReloading && !hasRuns) {
+      return (
+        <EmptyState
+          icon={<IconRuns size={26} />}
+          title="No runs yet"
+          description="Once you trigger a run from the Tickets tab, the timeline lands here — status, branch, duration, PR link, and a button to open the live log."
+          data-testid="tab-empty-runs"
         />
       );
     }
     return (
       <DataTable
-        columns={ticketColumns}
-        rows={tickets.tickets}
-        rowKey={(row) => row.key}
-        rowTestId={(row) => `ticket-row-${row.key}`}
-        data-testid="tickets-table"
+        columns={runColumns}
+        rows={runHistory.runs}
+        rowKey={(row) => row.id}
+        rowTestId={(row) => `run-row-${row.id}`}
+        onRowClick={(row) => onOpenExecution?.(row.id)}
+        fillHeight
+        loadingRows={isReloading && !hasRuns ? 5 : undefined}
+        data-testid="runs-tab-table"
       />
+    );
+  })();
+
+  const ticketsBody = ((): JSX.Element => {
+    const isReloading = pages.loading;
+    const hasRows = pages.rows.length > 0;
+
+    const tableFooter: JSX.Element | undefined = pages.hasMore || pages.loadingMore
+      ? (
+          <div className={styles.scrollSentinelRow}>
+            <div ref={sentinelRef} className={styles.scrollSentinel} aria-hidden="true" />
+            {pages.loadingMore && (
+              <span data-testid="tickets-loading-more">Loading more…</span>
+            )}
+          </div>
+        )
+      : undefined;
+
+    /**
+     * Empty-state branch: only when we've actually finished loading and
+     * there are zero rows. During a reload we keep the table mounted
+     * (sticky headers + skeleton rows) so the column context doesn't
+     * vanish on every sort flip.
+     */
+    const showEmpty = !isReloading && !hasRows;
+    const emptyContent = showEmpty
+      ? committedSearch.trim() !== ''
+        ? (
+            <EmptyState
+              icon={<IconJira size={26} />}
+              title={`No tickets match "${committedSearch}"`}
+              description="Try a different keyword, or clear the search to see everything."
+              data-testid="tickets-empty-filter"
+            />
+          )
+        : (
+            <EmptyState
+              icon={<IconJira size={26} />}
+              title="No eligible tickets"
+              description={
+                pages.error
+                  ? 'We couldn’t reach the ticket source — check the project’s credentials and try refreshing.'
+                  : 'Nothing matches this project’s configured filter right now. New tickets will land here automatically.'
+              }
+              action={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  leadingIcon={<IconRefresh />}
+                  onClick={() => {
+                    void pages.refresh();
+                  }}
+                  data-testid="tickets-empty-refresh"
+                >
+                  Refresh
+                </Button>
+              }
+              data-testid="tickets-empty"
+            />
+          )
+      : null;
+
+    return (
+      <div className={styles.ticketsTableWrap}>
+        <div className={styles.ticketsSearchRow}>
+          <Input
+            value={ticketSearchInput}
+            onChange={(e) => setTicketSearchInput(e.target.value)}
+            placeholder={
+              isGithubSource
+                ? 'Search tickets (filters loaded pages on GitHub sources)'
+                : 'Search tickets by key, summary, status, or assignee…'
+            }
+            leadingIcon={<IconSearch />}
+            data-testid="tickets-search-input"
+            name="ticketSearch"
+          />
+        </div>
+        {showEmpty ? (
+          emptyContent
+        ) : (
+          <DataTable
+            columns={ticketColumns}
+            rows={pages.rows}
+            rowKey={(row) => row.key}
+            rowTestId={(row) => `ticket-row-${row.key}`}
+            fillHeight
+            sort={effectiveSort}
+            onSortChange={(next) => setSortState(next)}
+            footer={tableFooter}
+            // 8 placeholder rows when we're actively fetching the first
+            // page (mount, sort flip, or refresh) — keeps the sticky
+            // headers in place during the round-trip.
+            loadingRows={isReloading && !hasRows ? 8 : undefined}
+            data-testid="tickets-table"
+          />
+        )}
+      </div>
     );
   })();
 
   const runSelectedDisabled = orderedSelectedKeys.length === 0;
 
   return (
-    <div className={styles.page} data-testid="project-detail-page">
+    <div
+      className={styles.page}
+      data-testid="project-detail-page"
+      data-active-run={activeRun !== null ? 'true' : 'false'}
+    >
       <header className={styles.header}>
         <div className={styles.crumbs}>
           <button
@@ -593,14 +1032,14 @@ export function ProjectDetail({
               variant="ghost"
               size="sm"
               leadingIcon={
-                <span className={tickets.refreshing ? styles.refreshSpinning : undefined}>
+                <span className={pages.refreshing ? styles.refreshSpinning : undefined}>
                   <IconRefresh size={14} />
                 </span>
               }
               onClick={() => {
-                void tickets.refresh();
+                void pages.refresh();
               }}
-              disabled={tickets.refreshing}
+              disabled={pages.refreshing}
               data-testid="refresh-button"
             >
               Refresh
@@ -609,21 +1048,21 @@ export function ProjectDetail({
         </div>
       </header>
 
-      {tickets.error && (
+      {pages.error && (
         <div
           className={styles.banner}
           role="alert"
           data-testid="tickets-error-banner"
         >
           <span>
-            <strong>Couldn’t refresh tickets.</strong> {tickets.error}
+            <strong>Couldn’t refresh tickets.</strong> {pages.error}
           </span>
           <Button
             variant="ghost"
             size="sm"
             leadingIcon={<IconClose size={12} />}
             onClick={() => {
-              void tickets.refresh();
+              void pages.refresh();
             }}
             data-testid="tickets-error-retry"
           >
@@ -679,14 +1118,7 @@ export function ProjectDetail({
           data-testid={`tab-panel-${tab}`}
         >
           {tab === 'tickets' && ticketsBody}
-          {tab === 'runs' && (
-            <EmptyState
-              icon={<IconRuns size={26} />}
-              title="Run history is on the way"
-              description="The full timeline of agent runs — with logs, durations, and outcomes — will land alongside the workflow runner."
-              data-testid="tab-empty-runs"
-            />
-          )}
+          {tab === 'runs' && runsBody}
           {tab === 'prs' && (
             <EmptyState
               icon={<IconPullRequest size={26} />}
@@ -705,6 +1137,69 @@ export function ProjectDetail({
           )}
         </div>
       </div>
+
+      {(() => {
+        const target = runHistory.runs.find((r) => r.id === confirmRunId);
+        const open = confirmRunId !== null && target !== undefined;
+        const isDeleting = deletingRunId !== null;
+        return (
+          <Dialog
+            open={open}
+            onClose={() => {
+              if (isDeleting) return; // don't dismiss mid-flight
+              setConfirmRunId(null);
+              setDeleteError(null);
+            }}
+            title="Delete run?"
+            subtitle={
+              target !== undefined
+                ? `Run for ${target.ticketKey} on branch ${target.branchName}`
+                : undefined
+            }
+            data-testid="run-delete-dialog"
+          >
+            <div className={styles.deleteDialogBody}>
+              <p>
+                This permanently deletes the run’s metadata and the streamed log.
+                The PR (if any) is left alone.
+              </p>
+              {deleteError !== null && (
+                <div
+                  className={styles.deleteDialogError}
+                  role="alert"
+                  data-testid="run-delete-error"
+                >
+                  {deleteError}
+                </div>
+              )}
+              <div className={styles.deleteDialogActions}>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setConfirmRunId(null);
+                    setDeleteError(null);
+                  }}
+                  disabled={isDeleting}
+                  data-testid="run-delete-cancel"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  leadingIcon={<IconTrash size={12} />}
+                  onClick={() => {
+                    void handleConfirmDeleteRun();
+                  }}
+                  disabled={isDeleting}
+                  data-testid="run-delete-confirm"
+                >
+                  {isDeleting ? 'Deleting…' : 'Delete run'}
+                </Button>
+              </div>
+            </div>
+          </Dialog>
+        );
+      })()}
 
       {activeRun && (() => {
         const { progress, index, total } = progressForRun(activeRun);

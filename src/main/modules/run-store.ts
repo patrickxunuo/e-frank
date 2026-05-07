@@ -174,6 +174,32 @@ export class RunStore {
   }
 
   /**
+   * Delete a single run sidecar. The IPC handler is responsible for
+   * refusing to delete the currently-running run; this method just removes
+   * the file. ENOENT is treated as success — idempotent delete is the
+   * least-surprising semantics when the renderer triggers two clicks in
+   * quick succession.
+   *
+   * The sibling `.log` file (managed by RunLogStore) is NOT touched here —
+   * the log directory is a different fs surface. The IPC handler chains a
+   * `runLogStore.delete(runId)` after this returns so they cleanup
+   * together; if either fails, the IPC handler surfaces the error.
+   */
+  async delete(runId: string): Promise<RunStoreResult<{ runId: string }>> {
+    return this.enqueue(async () => {
+      try {
+        await this.fs.unlink(this.fileFor(runId));
+        return { ok: true, data: { runId } };
+      } catch (err) {
+        if (isENOENT(err)) {
+          return { ok: true, data: { runId } };
+        }
+        return { ok: false, error: { code: 'IO_FAILURE', message: errMessage(err) } };
+      }
+    });
+  }
+
+  /**
    * List runs for a project, newest-first, capped at `limit` (default 50).
    * Per-file errors are skipped (logged) so one corrupt sidecar doesn't
    * crash the whole list; the runner-history equivalent for the user is

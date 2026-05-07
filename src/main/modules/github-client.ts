@@ -324,15 +324,30 @@ export class GithubClient {
    */
   async listIssues(
     slug: string,
-    opts: { state?: 'open' | 'closed' | 'all'; labels?: string; perPage?: number } = {},
+    opts: {
+      state?: 'open' | 'closed' | 'all';
+      labels?: string;
+      perPage?: number;
+      /** 1-based page index. Defaults to 1. */
+      page?: number;
+      /** Defaults to 'created'. */
+      sort?: 'created' | 'updated' | 'comments';
+      direction?: 'asc' | 'desc';
+    } = {},
   ): Promise<GithubResult<unknown[]>> {
     const state = opts.state ?? 'open';
     const perPage = opts.perPage ?? 100;
+    const page = opts.page ?? 1;
+    const sort = opts.sort ?? 'created';
+    const direction = opts.direction ?? 'desc';
     const labelsParam =
       opts.labels !== undefined && opts.labels !== ''
         ? `&labels=${encodeURIComponent(opts.labels)}`
         : '';
-    const url = `${this.host}/repos/${slug}/issues?state=${state}&per_page=${perPage}${labelsParam}`;
+    const url =
+      `${this.host}/repos/${slug}/issues` +
+      `?state=${state}&per_page=${perPage}&page=${page}` +
+      `&sort=${sort}&direction=${direction}${labelsParam}`;
     const httpReq: HttpRequest = {
       method: 'GET',
       url,

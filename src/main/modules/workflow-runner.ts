@@ -48,6 +48,7 @@ import type { GitManager } from './git-manager.js';
 import type { PrCreator } from './pr-creator.js';
 import type { JiraUpdater } from './jira-updater.js';
 import type { RunStore } from './run-store.js';
+import type { Ticket } from '../../shared/schema/ticket.js';
 
 const TICKET_KEY_REGEX = /^[A-Z][A-Z0-9_]*-\d+$/;
 
@@ -93,6 +94,15 @@ export interface WorkflowRunnerOptions {
   gitManager: GitManager;
   prCreator: PrCreator;
   jiraUpdater: JiraUpdater;
+  /**
+   * Read-only adapter over the ticket poller's per-project cache. The runner
+   * uses it ONLY to resolve a ticket's `summary` by `key` so branch + commit
+   * derivation reads "feat/GH-31-show-app-version" instead of the previous
+   * "feat/GH-31-gh-31" (#35). Optional — runner falls back to using the key
+   * as the summary if the ticket isn't in the cache (e.g. a fresh process
+   * before the first poll, or a ticket the poller never saw).
+   */
+  ticketPoller?: { list: (projectId: string) => Ticket[] };
   /** Test injection. Defaults to `Date.now()`. */
   clock?: { now: () => number };
 }
@@ -259,10 +269,19 @@ export class WorkflowRunner extends EventEmitter {
     const project = projectRes.data;
     const mode: RunMode = req.modeOverride ?? project.workflow.mode;
 
-    // TODO(#13): replace ticketKey-as-summary with a real lookup against
-    // the Jira poller cache once #13 lands. For #7 we use the ticketKey as
-    // the summary stand-in so branch + commit + PR title all line up.
-    const ticketSummary = req.ticketKey;
+    // Resolve the ticket summary from the poller's cached list. Without
+    // this, branch + commit + PR title all use the ticket key as the
+    // summary, producing nonsense like `feat/GH-31-gh-31` and
+    // `feat(GH-31): GH-31`. The poller's `list()` is an in-memory snapshot
+    // (cheap). Defensive fallback to ticketKey if not in cache (#35).
+    let ticketSummary = req.ticketKey;
+    if (this.options.ticketPoller !== undefined) {
+      const cachedTickets = this.options.ticketPoller.list(req.projectId);
+      const found = cachedTickets.find((t) => t.key === req.ticketKey);
+      if (found !== undefined && found.summary !== '') {
+        ticketSummary = found.summary;
+      }
+    }
     const branchName = deriveBranchName(
       project.workflow.branchFormat,
       req.ticketKey,
