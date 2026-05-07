@@ -297,9 +297,10 @@ export function ProjectDetail({
   }, []);
 
   /**
-   * Start a run for `key`. On error, surface an inline banner. We don't
-   * await the IPC round-trip from the click handler — the runner emits
-   * `current-changed` events that the active panel subscribes to.
+   * Start a run for `key`. On success, route the user to the live
+   * ExecutionView so they can see Claude's output stream from the first
+   * second — and so the stdin textarea is mounted in time to answer any
+   * mid-run question. On error, surface an inline banner.
    */
   const startRun = (key: string): void => {
     if (typeof window === 'undefined' || !window.api) {
@@ -319,7 +320,14 @@ export function ProjectDetail({
               result.error.code ||
               'Failed to start run',
           });
+          return;
         }
+        // Auto-navigate to the ExecutionView so the input textarea is
+        // mounted before Claude's CLI hits its 3-second stdin window.
+        // The active-run panel on this page is also fine for casual
+        // observation, but the ExecutionView is the only place with
+        // the textarea wired to `claude.write`.
+        onOpenExecution?.(result.data.run.id);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setRunBanner({ kind: 'error', message });

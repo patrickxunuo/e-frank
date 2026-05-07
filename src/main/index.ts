@@ -81,6 +81,7 @@ import { NodeGitManager } from './modules/git-manager.js';
 import { StubPrCreator } from './modules/pr-creator.js';
 import { StubJiraUpdater } from './modules/jira-updater.js';
 import { WorkflowRunner } from './modules/workflow-runner.js';
+import { installEfFeatureSkill } from './modules/skill-installer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1884,8 +1885,55 @@ async function initStores(): Promise<void> {
   }
 }
 
+/**
+ * Dev-mode sync of the bundled ef-feature skill into the user's home
+ * directory. See `skill-installer.ts` for rationale. Runs on every app
+ * start; the installer is a no-op when contents already match.
+ *
+ * Source path resolution:
+ *   - In dev mode, the main process runs from `out/main/index.js` and
+ *     `process.cwd()` is the repo root (where `npm run dev` was
+ *     invoked), so `<cwd>/.claude/skills/ef-feature/SKILL.md` is the
+ *     right path.
+ *   - In packaged builds, that path doesn't exist and the installer
+ *     returns `source-missing` — which we log at info level and move
+ *     on. Production bundling is a future TODO (electron-builder
+ *     `extraResources` to ship the skill at `process.resourcesPath`).
+ */
+async function syncBundledSkill(): Promise<void> {
+  const sourcePath = join(process.cwd(), '.claude', 'skills', 'ef-feature', 'SKILL.md');
+  const result = await installEfFeatureSkill({ sourcePath });
+  switch (result.status) {
+    case 'installed':
+      console.log(
+        `[skill-installer] installed ef-feature skill at ${result.destPath}`,
+      );
+      return;
+    case 'updated':
+      console.log(
+        `[skill-installer] updated ef-feature skill at ${result.destPath}`,
+      );
+      return;
+    case 'unchanged':
+      // Quiet — happens on every restart while the skill is stable.
+      return;
+    case 'source-missing':
+      console.log(
+        `[skill-installer] bundled skill not found at ${result.sourcePath}; ` +
+          `running in production mode? (skip)`,
+      );
+      return;
+    case 'io-failure':
+      console.warn(
+        `[skill-installer] failed to sync ef-feature skill: ${result.error ?? 'unknown error'}`,
+      );
+      return;
+  }
+}
+
 app.whenReady().then(async () => {
   await initStores();
+  await syncBundledSkill();
   registerIpcHandlers();
   createWindow();
 
