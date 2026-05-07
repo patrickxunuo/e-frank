@@ -823,16 +823,9 @@ export function ProjectDetail({
     ];
 
   const runsBody = ((): JSX.Element => {
-    if (runHistory.loading && runHistory.runs.length === 0) {
-      return (
-        <div className={styles.tableSkeleton} data-testid="runs-loading">
-          <div className={styles.skeletonRow} style={{ width: '40%' }} />
-          <div className={styles.skeletonRow} style={{ width: '88%' }} />
-          <div className={styles.skeletonRow} style={{ width: '72%' }} />
-        </div>
-      );
-    }
-    if (runHistory.error !== null) {
+    const isReloading = runHistory.loading;
+    const hasRuns = runHistory.runs.length > 0;
+    if (!isReloading && runHistory.error !== null && !hasRuns) {
       return (
         <EmptyState
           icon={<IconRuns size={26} />}
@@ -842,7 +835,7 @@ export function ProjectDetail({
         />
       );
     }
-    if (runHistory.runs.length === 0) {
+    if (!isReloading && !hasRuns) {
       return (
         <EmptyState
           icon={<IconRuns size={26} />}
@@ -860,25 +853,15 @@ export function ProjectDetail({
         rowTestId={(row) => `run-row-${row.id}`}
         onRowClick={(row) => onOpenExecution?.(row.id)}
         fillHeight
+        loadingRows={isReloading && !hasRuns ? 5 : undefined}
         data-testid="runs-tab-table"
       />
     );
   })();
 
   const ticketsBody = ((): JSX.Element => {
-    if (pages.loading && pages.rows.length === 0) {
-      return (
-        <div className={styles.tableSkeleton} data-testid="tickets-loading">
-          <div className={styles.skeletonRow} style={{ width: '40%' }} />
-          <div className={styles.skeletonRow} style={{ width: '88%' }} />
-          <div className={styles.skeletonRow} style={{ width: '72%' }} />
-          <div className={styles.skeletonRow} style={{ width: '80%' }} />
-        </div>
-      );
-    }
-
-    const showSearch = !isGithubSource;
-    const hasResults = pages.rows.length > 0;
+    const isReloading = pages.loading;
+    const hasRows = pages.rows.length > 0;
 
     const tableFooter: JSX.Element | undefined = pages.hasMore || pages.loadingMore
       ? (
@@ -891,29 +874,24 @@ export function ProjectDetail({
         )
       : undefined;
 
-    return (
-      <div className={styles.ticketsTableWrap}>
-        {showSearch && (
-          <div className={styles.ticketsSearchRow}>
-            <Input
-              value={ticketSearchInput}
-              onChange={(e) => setTicketSearchInput(e.target.value)}
-              placeholder="Search tickets by key, summary, status, or assignee…"
-              leadingIcon={<IconSearch />}
-              data-testid="tickets-search-input"
-              name="ticketSearch"
-            />
-          </div>
-        )}
-        {!hasResults ? (
-          committedSearch.trim() !== '' ? (
+    /**
+     * Empty-state branch: only when we've actually finished loading and
+     * there are zero rows. During a reload we keep the table mounted
+     * (sticky headers + skeleton rows) so the column context doesn't
+     * vanish on every sort flip.
+     */
+    const showEmpty = !isReloading && !hasRows;
+    const emptyContent = showEmpty
+      ? committedSearch.trim() !== ''
+        ? (
             <EmptyState
               icon={<IconJira size={26} />}
               title={`No tickets match "${committedSearch}"`}
               description="Try a different keyword, or clear the search to see everything."
               data-testid="tickets-empty-filter"
             />
-          ) : (
+          )
+        : (
             <EmptyState
               icon={<IconJira size={26} />}
               title="No eligible tickets"
@@ -938,6 +916,26 @@ export function ProjectDetail({
               data-testid="tickets-empty"
             />
           )
+      : null;
+
+    return (
+      <div className={styles.ticketsTableWrap}>
+        <div className={styles.ticketsSearchRow}>
+          <Input
+            value={ticketSearchInput}
+            onChange={(e) => setTicketSearchInput(e.target.value)}
+            placeholder={
+              isGithubSource
+                ? 'Search tickets (filters loaded pages on GitHub sources)'
+                : 'Search tickets by key, summary, status, or assignee…'
+            }
+            leadingIcon={<IconSearch />}
+            data-testid="tickets-search-input"
+            name="ticketSearch"
+          />
+        </div>
+        {showEmpty ? (
+          emptyContent
         ) : (
           <DataTable
             columns={ticketColumns}
@@ -948,6 +946,10 @@ export function ProjectDetail({
             sort={effectiveSort}
             onSortChange={(next) => setSortState(next)}
             footer={tableFooter}
+            // 8 placeholder rows when we're actively fetching the first
+            // page (mount, sort flip, or refresh) — keeps the sticky
+            // headers in place during the round-trip.
+            loadingRows={isReloading && !hasRows ? 8 : undefined}
             data-testid="tickets-table"
           />
         )}
@@ -958,7 +960,11 @@ export function ProjectDetail({
   const runSelectedDisabled = orderedSelectedKeys.length === 0;
 
   return (
-    <div className={styles.page} data-testid="project-detail-page">
+    <div
+      className={styles.page}
+      data-testid="project-detail-page"
+      data-active-run={activeRun !== null ? 'true' : 'false'}
+    >
       <header className={styles.header}>
         <div className={styles.crumbs}>
           <button

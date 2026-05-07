@@ -216,10 +216,25 @@ export async function buildGithubIssuesSource(
           }
           return out;
         }
-        const rows = mapIssues(res.data);
+        let rows = mapIssues(res.data);
+        // Client-side post-filter for `search` on GitHub. The repo-issues
+        // endpoint doesn't accept a search param; proper full-text search
+        // would require switching to `/search/issues?q=repo:owner/name $q`
+        // (different shape, tighter rate limit). For now we filter the
+        // loaded page in-memory against key / summary / status / assignee.
+        // Limitation: filter only sees the current page, so paging through
+        // filtered results undercounts.
+        if (opts.search !== undefined && opts.search.trim() !== '') {
+          const q = opts.search.trim().toLowerCase();
+          rows = rows.filter((t) => {
+            const fields = [t.key, t.summary, t.status, t.assignee ?? ''];
+            return fields.some((f) => f.toLowerCase().includes(q));
+          });
+        }
         // GitHub doesn't return a total — infer "no more pages" from a
-        // short page (fewer rows than requested limit). For a full page
-        // assume there's another and let the next call surface the truth.
+        // short raw page. The post-search filter shrinks `rows` separately;
+        // nextCursor stays based on raw page size so the renderer can keep
+        // walking subsequent pages even when many rows fall out of filter.
         const data: TicketListPage = {
           rows,
           nextCursor: res.data.length < opts.limit ? undefined : String(page + 1),

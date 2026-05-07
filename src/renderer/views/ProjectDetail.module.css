@@ -6,12 +6,13 @@
   width: 100%;
   margin: 0 auto;
   /* Fill the AppShell main so the inner tab panel can claim the leftover
-   * height and scroll on its own. The breathing room for the sticky
-   * Active Execution panel lives inside `.tabPanel` (the scroll region)
-   * rather than out here, so the last row clears the overlay even when
-   * the panel is mounted. */
+   * height and the table card inside scrolls its rows. Bottom-clearance
+   * for the fixed Active Execution panel is opt-in via `--active-clearance`
+   * (toggled by `[data-active-run='true']` below) so we don't reserve
+   * 200px when no run is in flight. */
   height: 100%;
   min-height: 0;
+  --active-clearance: 0px;
 }
 
 /* ---- Header ---- */
@@ -181,11 +182,21 @@
   flex: 1 1 auto;
   min-height: 0;
   /* The panel itself does NOT scroll — the table card inside it does.
-   * Reserve clearance for the fixed Active Execution panel (~200px tall
-   * with its bottom padding) so the bottom of the scrollable card sits
-   * above the overlay. */
-  padding-bottom: 200px;
+   * Active-execution-panel clearance is applied conditionally inside the
+   * DataTable's scroll wrapper via the `--active-clearance` custom prop
+   * driven by `.page[data-active-run]`, so we don't waste 200px when no
+   * run is in flight. */
   overflow: hidden;
+}
+
+/*
+ * `--active-clearance` is read by the table's fillHeight scroll wrapper
+ * (DataTable.module.css). Default 0 (set on `.page`); bumps to 200px
+ * when the active execution panel is mounted so the last table row
+ * scrolls clear of the fixed overlay.
+ */
+.page[data-active-run='true'] {
+  --active-clearance: 200px;
 }
 
 /* ---- Ticket table cells ---- */

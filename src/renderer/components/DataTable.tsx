@@ -62,6 +62,13 @@ export interface DataTableProps<Row> {
    * the bottom of the loaded rows.
    */
   footer?: ReactNode;
+  /**
+   * When set, the body renders this many shimmer-only `<tr>`s in place of
+   * real rows. Used when sort/search restarts pagination — keeps the
+   * sticky `<thead>` visible so column labels don't flash off-screen
+   * during a re-fetch. Ignored when `rows.length > 0`.
+   */
+  loadingRows?: number;
 }
 
 /**
@@ -81,8 +88,17 @@ export function DataTable<Row>({
   sort,
   onSortChange,
   footer,
+  loadingRows,
 }: DataTableProps<Row>): JSX.Element {
-  if (rows.length === 0 && emptyState && footer === undefined) {
+  // Standalone empty branch: only when there's truly nothing to show —
+  // no rows, no skeleton, no footer. Keeps the "no tickets" full-card
+  // empty state working for non-fillHeight callers.
+  if (
+    rows.length === 0 &&
+    emptyState &&
+    footer === undefined &&
+    loadingRows === undefined
+  ) {
     return <div className={styles.empty}>{emptyState}</div>;
   }
 
@@ -164,6 +180,19 @@ export function DataTable<Row>({
           </tr>
         </thead>
         <tbody>
+          {rows.length === 0 &&
+            loadingRows !== undefined &&
+            Array.from({ length: loadingRows }).map((_, i) => (
+              <tr
+                key={`skel-${i}`}
+                className={styles.skeletonRow}
+                data-testid="data-table-skeleton-row"
+              >
+                <td colSpan={columns.length}>
+                  <div className={styles.skeletonBar} />
+                </td>
+              </tr>
+            ))}
           {rows.map((row, index) => {
             const rowClasses = [styles.row];
             if (!onRowClick) rowClasses.push(styles.unclickable);
@@ -186,7 +215,7 @@ export function DataTable<Row>({
               </tr>
             );
           })}
-          {rows.length === 0 && emptyState && (
+          {rows.length === 0 && loadingRows === undefined && emptyState && (
             <tr>
               <td
                 colSpan={columns.length}
