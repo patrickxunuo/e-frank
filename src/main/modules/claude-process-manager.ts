@@ -159,9 +159,17 @@ export class ClaudeProcessManager extends EventEmitter {
 
     let child: SpawnedProcess;
     try {
+      // `--dangerously-skip-permissions` skips Claude's per-tool confirmation
+      // prompts. Necessary because e-frank doesn't have a stdin channel to
+      // relay "yes" back to Claude — the ApprovalPanel's marker contract is
+      // a higher-level plan review, not per-edit gating. Without this flag,
+      // Claude prints "I need write permissions to proceed" and hangs. This
+      // is a stop-gap; a future issue should add proper prompt templating
+      // (system prompt + ticket title/body) and a real tool-allowlist
+      // policy instead of a blanket skip.
       child = this.spawner.spawn({
         command: this.command,
-        args: [req.ticketKey],
+        args: ['--dangerously-skip-permissions', req.ticketKey],
         cwd: req.cwd,
       });
     } catch (err) {
