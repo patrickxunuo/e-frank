@@ -5,6 +5,7 @@ import { Button } from '../components/Button';
 import { Checkbox } from '../components/Checkbox';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { EmptyState } from '../components/EmptyState';
+import { Input } from '../components/Input';
 import { LogPreview } from '../components/LogPreview';
 import { ProgressBar } from '../components/ProgressBar';
 import { Tabs, type TabItem } from '../components/Tabs';
@@ -21,6 +22,7 @@ import {
   IconPullRequest,
   IconRefresh,
   IconRuns,
+  IconSearch,
   IconSettings,
 } from '../components/icons';
 import { normalizePriority, type PriorityBucket } from '../lib/priority';
@@ -155,6 +157,12 @@ export function ProjectDetail({
   const [state, setState] = useState<ProjectState>({ kind: 'loading' });
   const [tab, setTab] = useState<TabId>('tickets');
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [ticketSearchQuery, setTicketSearchQuery] = useState<string>('');
+  const [runHistory, setRunHistory] = useState<{
+    runs: Run[];
+    loading: boolean;
+    error: string | null;
+  }>({ runs: [], loading: false, error: null });
   const [runBanner, setRunBanner] = useState<
     | { kind: 'error'; message: string }
     | { kind: 'queued'; firstKey: string; remaining: number }
@@ -276,6 +284,46 @@ export function ProjectDetail({
   const orderedSelectedKeys = useMemo<string[]>(() => {
     return tickets.tickets.filter((t) => selected.has(t.key)).map((t) => t.key);
   }, [tickets.tickets, selected]);
+
+  // Fetch run history for the Runs tab. Refetches whenever the user
+  // switches to the Runs tab so a freshly-completed run shows up without
+  // a manual refresh. The poller / WorkflowRunner doesn't push completed
+  // runs over the IPC bus today; this lazy fetch is the lightest path
+  // to fix #33.
+  useEffect(() => {
+    if (tab !== 'runs') return;
+    if (state.kind !== 'ready') return;
+    if (typeof window === 'undefined' || !window.api) return;
+    const api = window.api;
+    const projectId = state.project.id;
+    let cancelled = false;
+    setRunHistory((prev) => ({ ...prev, loading: true, error: null }));
+    void (async () => {
+      try {
+        const result = await api.runs.listHistory({
+          projectId,
+          limit: 50,
+        });
+        if (cancelled) return;
+        if (result.ok) {
+          setRunHistory({ runs: result.data.runs, loading: false, error: null });
+        } else {
+          setRunHistory({
+            runs: [],
+            loading: false,
+            error: result.error.message || result.error.code,
+          });
+        }
+      } catch (err) {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : String(err);
+        setRunHistory({ runs: [], loading: false, error: message });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, state]);
 
   const allSelected =
     tickets.tickets.length > 0 && selected.size === tickets.tickets.length;
@@ -473,6 +521,178 @@ export function ProjectDetail({
     },
   ];
 
+  // Run-row helpers (used by the Runs tab — #33).
+  const runStatusBadge = (run: Run): JSX.Element => {
+    let variant: BadgeVariant = 'neutral';
+    let label: string = run.status;
+    switch (run.status) {
+      case 'pending':
+      case 'running':
+        variant = 'running';
+        label = run.state === 'awaitingApproval' ? 'Awaiting' : 'Running';
+        break;
+      case 'done':
+        variant = 'success';
+        label = 'Done';
+        break;
+      case 'failed':
+        variant = 'danger';
+        label = 'Failed';
+        break;
+      case 'cancelled':
+        variant = 'warning';
+        label = 'Cancelled';
+        break;
+    }
+    return (
+      <Badge variant={variant} pulse={run.status === 'running'}>
+        {label}
+      </Badge>
+    );
+  };
+
+  const formatDuration = (start: number, end: number | undefined): string => {
+    if (typeof end !== 'number') return '—';
+    const ms = Math.max(0, end - start);
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const remS = s % 60;
+    if (m < 60) return remS === 0 ? `${m}m` : `${m}m ${remS}s`;
+    const h = Math.floor(m / 60);
+    const remM = m % 60;
+    return remM === 0 ? `${h}h` : `${h}h ${remM}m`;
+  };
+
+  const runColumns: DataTableColumn<Run>[] = [
+      {
+        key: 'status',
+        header: 'Status',
+        render: (row) => runStatusBadge(row),
+      },
+      {
+        key: 'ticketKey',
+        header: 'Ticket',
+        render: (row) => (
+          <span className={styles.runTicketKey}>{row.ticketKey}</span>
+        ),
+      },
+      {
+        key: 'branch',
+        header: 'Branch',
+        render: (row) => (
+          <span className={styles.runBranch}>{row.branchName}</span>
+        ),
+      },
+      {
+        key: 'started',
+        header: 'Started',
+        render: (row) => (
+          <span className={styles.runStartedAt}>
+            {formatRelative(new Date(row.startedAt).toISOString())}
+          </span>
+        ),
+      },
+      {
+        key: 'duration',
+        header: 'Duration',
+        render: (row) => (
+          <span className={styles.runDuration}>
+            {formatDuration(row.startedAt, row.finishedAt)}
+          </span>
+        ),
+      },
+      {
+        key: 'pr',
+        header: 'PR',
+        render: (row) =>
+          row.prUrl ? (
+            <a
+              href={row.prUrl}
+              target="_blank"
+              rel="noreferrer"
+              className={styles.runPrLink}
+              onClick={(e) => e.stopPropagation()}
+              data-testid={`run-pr-${row.id}`}
+            >
+              View
+            </a>
+          ) : (
+            <span className={styles.runPrEmpty}>—</span>
+          ),
+      },
+      {
+        key: 'actions',
+        header: '',
+        align: 'right',
+        width: '120px',
+        render: (row) => (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenExecution?.(row.id);
+            }}
+            data-testid={`run-view-${row.id}`}
+          >
+            View
+          </Button>
+        ),
+      },
+    ];
+
+  const runsBody = ((): JSX.Element => {
+    if (runHistory.loading && runHistory.runs.length === 0) {
+      return (
+        <div className={styles.tableSkeleton} data-testid="runs-loading">
+          <div className={styles.skeletonRow} style={{ width: '40%' }} />
+          <div className={styles.skeletonRow} style={{ width: '88%' }} />
+          <div className={styles.skeletonRow} style={{ width: '72%' }} />
+        </div>
+      );
+    }
+    if (runHistory.error !== null) {
+      return (
+        <EmptyState
+          icon={<IconRuns size={26} />}
+          title="Couldn't load run history"
+          description={runHistory.error}
+          data-testid="runs-error"
+        />
+      );
+    }
+    if (runHistory.runs.length === 0) {
+      return (
+        <EmptyState
+          icon={<IconRuns size={26} />}
+          title="No runs yet"
+          description="Once you trigger a run from the Tickets tab, the timeline lands here — status, branch, duration, PR link, and a button to open the live log."
+          data-testid="tab-empty-runs"
+        />
+      );
+    }
+    return (
+      <DataTable
+        columns={runColumns}
+        rows={runHistory.runs}
+        rowKey={(row) => row.id}
+        rowTestId={(row) => `run-row-${row.id}`}
+        onRowClick={(row) => onOpenExecution?.(row.id)}
+        data-testid="runs-tab-table"
+      />
+    );
+  })();
+
+  const trimmedQuery = ticketSearchQuery.trim().toLowerCase();
+  const filteredTickets =
+    trimmedQuery === ''
+      ? tickets.tickets
+      : tickets.tickets.filter((t) => {
+          const fields = [t.key, t.summary, t.status, t.assignee ?? ''];
+          return fields.some((f) => f.toLowerCase().includes(trimmedQuery));
+        });
+
   const ticketsBody = ((): JSX.Element => {
     if (tickets.loading && tickets.tickets.length === 0) {
       return (
@@ -511,14 +731,39 @@ export function ProjectDetail({
         />
       );
     }
+    // We have tickets — render the search box + table. Filter is
+    // case-insensitive substring match across key/summary/status/assignee
+    // (#36). Search input value persists across re-fetches because it's
+    // stored on the ProjectDetail component, not derived from `tickets`.
     return (
-      <DataTable
-        columns={ticketColumns}
-        rows={tickets.tickets}
-        rowKey={(row) => row.key}
-        rowTestId={(row) => `ticket-row-${row.key}`}
-        data-testid="tickets-table"
-      />
+      <div className={styles.ticketsTableWrap}>
+        <div className={styles.ticketsSearchRow}>
+          <Input
+            value={ticketSearchQuery}
+            onChange={(e) => setTicketSearchQuery(e.target.value)}
+            placeholder="Search tickets by key, summary, status, or assignee…"
+            leadingIcon={<IconSearch />}
+            data-testid="tickets-search-input"
+            name="ticketSearch"
+          />
+        </div>
+        {filteredTickets.length === 0 ? (
+          <EmptyState
+            icon={<IconJira size={26} />}
+            title={`No tickets match "${ticketSearchQuery}"`}
+            description="Try a different keyword, or clear the search to see everything."
+            data-testid="tickets-empty-filter"
+          />
+        ) : (
+          <DataTable
+            columns={ticketColumns}
+            rows={filteredTickets}
+            rowKey={(row) => row.key}
+            rowTestId={(row) => `ticket-row-${row.key}`}
+            data-testid="tickets-table"
+          />
+        )}
+      </div>
     );
   })();
 
@@ -679,14 +924,7 @@ export function ProjectDetail({
           data-testid={`tab-panel-${tab}`}
         >
           {tab === 'tickets' && ticketsBody}
-          {tab === 'runs' && (
-            <EmptyState
-              icon={<IconRuns size={26} />}
-              title="Run history is on the way"
-              description="The full timeline of agent runs — with logs, durations, and outcomes — will land alongside the workflow runner."
-              data-testid="tab-empty-runs"
-            />
-          )}
+          {tab === 'runs' && runsBody}
           {tab === 'prs' && (
             <EmptyState
               icon={<IconPullRequest size={26} />}

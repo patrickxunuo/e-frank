@@ -277,3 +277,12 @@ export function IconChevronDown({ size = 12, ...rest }: IconProps): JSX.Element 
     </svg>
   );
 }
+
+export function IconSearch({ size = 14, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m21 21-4.3-4.3" />
+    </svg>
+  );
+}

@@ -384,3 +384,65 @@
   flex-direction: column;
   min-width: 0;
 }
+
+/*
+ * Tickets tab: a search box above the table. Filter is client-side
+ * (#36); the box is sticky-ish only in the sense that its value
+ * persists across `tickets.refresh()` cycles because state lives on
+ * `ProjectDetail`, not on the tickets hook.
+ */
+.ticketsTableWrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ticketsSearchRow {
+  display: flex;
+}
+
+.ticketsSearchRow > :global(.field),
+.ticketsSearchRow > div:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Runs tab cells (#33). */
+.runTicketKey {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+}
+
+.runBranch {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.runStartedAt,
+.runDuration {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.runPrLink {
+  font-family: var(--font-display);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.runPrLink:hover {
+  text-decoration: underline;
+}
+
+.runPrEmpty {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}

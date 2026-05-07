@@ -1704,6 +1704,10 @@ async function initStores(): Promise<void> {
       gitManager: new NodeGitManager({ spawner: new NodeSpawner() }),
       prCreator: new StubPrCreator(),
       jiraUpdater: new StubJiraUpdater(),
+      // Read-only adapter — runner uses this only to resolve a ticket's
+      // summary by key for branch/commit derivation. Returns mutable copy
+      // since the poller's internal cache is ReadonlyArray.
+      ticketPoller: { list: (id) => [...poller.list(id)] },
     });
     runner.on('state-changed', (e: RunStateEvent) => {
       broadcastToWindows(IPC_CHANNELS.RUNS_STATE_CHANGED, e);

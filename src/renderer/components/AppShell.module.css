@@ -17,6 +17,15 @@
   padding: var(--space-7) var(--space-7) var(--space-7);
 }
 
+/*
+ * Execution route is dense — log + approval pane fight for space and
+ * the page already manages its own header/footer/body padding. Drop
+ * the outer buffer so it can claim the full content width.
+ */
+.main[data-route='execution'] {
+  padding: 0;
+}
+
 @media (max-width: 900px) {
   .shell {
     grid-template-columns: 200px 1fr;
