@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import {
-  act,
   cleanup,
   fireEvent,
   render,
@@ -15,7 +14,6 @@ import { useActiveRun } from '../../src/renderer/state/active-run';
 import type {
   IpcApi,
   IpcResult,
-  JiraTicketsChangedEvent,
   ProjectInstanceDto,
   TicketDto,
 } from '../../src/shared/ipc';
@@ -47,6 +45,7 @@ interface ApiStub {
   projectsList: Mock;
   jiraList: Mock;
   jiraRefresh: Mock;
+  ticketsList: Mock;
   jiraOnTicketsChanged: Mock;
   jiraOnError: Mock;
 }
@@ -127,6 +126,13 @@ function installApi(opts?: {
   const jiraRefreshResult: IpcResult<{ tickets: TicketDto[] }> = opts?.jiraRefreshError
     ? { ok: false, error: opts.jiraRefreshError }
     : { ok: true, data: { tickets: ticketsList } };
+  // Paged-tickets contract (PR #40 expansion): same seed array, served as
+  // a single page with no `nextCursor` so the infinite-scroll sentinel
+  // doesn't fire in the unit env.
+  const ticketsListResult: IpcResult<{ rows: TicketDto[]; nextCursor?: string }> =
+    opts?.jiraListError
+      ? { ok: false, error: opts.jiraListError }
+      : { ok: true, data: { rows: ticketsList } };
 
   const projectsGet = vi.fn().mockResolvedValue(projectGetResult);
   const projectsList = vi.fn().mockResolvedValue({ ok: true, data: [] } as IpcResult<
@@ -134,6 +140,7 @@ function installApi(opts?: {
   >);
   const jiraList = vi.fn().mockResolvedValue(jiraListResult);
   const jiraRefresh = vi.fn().mockResolvedValue(jiraRefreshResult);
+  const ticketsListFn = vi.fn().mockResolvedValue(ticketsListResult);
   const jiraOnTicketsChanged = vi.fn(() => () => {});
   const jiraOnError = vi.fn(() => () => {});
 
@@ -207,6 +214,9 @@ function installApi(opts?: {
     dialog: {
       selectFolder: vi.fn() as unknown as IpcApi['dialog']['selectFolder'],
     },
+    tickets: {
+      list: ticketsListFn as unknown as IpcApi['tickets']['list'],
+    },
   };
 
   (window as { api?: IpcApi }).api = api;
@@ -216,6 +226,7 @@ function installApi(opts?: {
     projectsList,
     jiraList,
     jiraRefresh,
+    ticketsList: ticketsListFn,
     jiraOnTicketsChanged,
     jiraOnError,
   };
@@ -294,7 +305,7 @@ describe('<ProjectDetail /> — DET', () => {
   });
 
   describe('DET-003 ticket list seeded on mount', () => {
-    it('DET-003: calls jira.list for the projectId; tickets render', async () => {
+    it('DET-003: calls tickets.list (paged) for the projectId; tickets render', async () => {
       const tickets = [
         makeTicket('ABC-1', { summary: 'First ticket' }),
         makeTicket('ABC-2', { summary: 'Second ticket' }),
@@ -309,8 +320,13 @@ describe('<ProjectDetail /> — DET', () => {
       );
 
       await waitFor(() => {
-        expect(stub.jiraList).toHaveBeenCalledWith({ projectId: 'p-1' });
+        expect(stub.ticketsList).toHaveBeenCalled();
       });
+      // First call must be for this project, page-1 (no cursor), with the
+      // hook's PAGE_SIZE limit. Sort defaults to priority desc for Jira.
+      const firstCall = stub.ticketsList.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(firstCall).toMatchObject({ projectId: 'p-1', limit: 20 });
+      expect(firstCall.cursor).toBeUndefined();
 
       await waitFor(() => {
         expect(screen.getByTestId('ticket-row-ABC-1')).toBeInTheDocument();
@@ -320,7 +336,7 @@ describe('<ProjectDetail /> — DET', () => {
   });
 
   describe('DET-004 refresh', () => {
-    it('DET-004: refresh button click calls jira.refresh', async () => {
+    it('DET-004: refresh button restarts pagination via tickets.list', async () => {
       const tickets = [makeTicket('ABC-1')];
       const stub = installApi({ tickets });
 
@@ -333,13 +349,18 @@ describe('<ProjectDetail /> — DET', () => {
 
       // Wait for initial load to settle.
       await screen.findByTestId('ticket-row-ABC-1');
+      const initialCalls = stub.ticketsList.mock.calls.length;
 
       const refreshBtn = screen.getByTestId('refresh-button');
       fireEvent.click(refreshBtn);
 
+      // Refresh fires another page-1 request.
       await waitFor(() => {
-        expect(stub.jiraRefresh).toHaveBeenCalledWith({ projectId: 'p-1' });
+        expect(stub.ticketsList.mock.calls.length).toBeGreaterThan(initialCalls);
       });
+      const lastCall = stub.ticketsList.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+      expect(lastCall).toMatchObject({ projectId: 'p-1', limit: 20 });
+      expect(lastCall.cursor).toBeUndefined();
     });
   });
 
@@ -777,62 +798,13 @@ describe('<ProjectDetail /> — DET', () => {
   });
 
   describe('DET-014 ticket subscription event filter', () => {
-    it('DET-014: onTicketsChanged for THIS projectId updates table; events for other projects do NOT', async () => {
-      // Capture the registered listener so we can fire events at it.
-      let ticketsChangedListener:
-        | ((e: JiraTicketsChangedEvent) => void)
-        | null = null;
-      const stub = installApi({ tickets: [makeTicket('ABC-1')] });
-      stub.jiraOnTicketsChanged.mockImplementation(
-        (listener: (e: JiraTicketsChangedEvent) => void) => {
-          ticketsChangedListener = listener;
-          return () => {
-            ticketsChangedListener = null;
-          };
-        },
-      );
-
-      render(
-        <ProjectDetail
-          projectId="p-1"
-          onBack={noop}
-        />,
-      );
-
-      // Wait for mount + initial seed.
-      await screen.findByTestId('ticket-row-ABC-1');
-      // Listener was registered on mount.
-      expect(stub.jiraOnTicketsChanged).toHaveBeenCalledTimes(1);
-      expect(ticketsChangedListener).not.toBeNull();
-
-      // Fire an event for a DIFFERENT project — should NOT update the table.
-      act(() => {
-        ticketsChangedListener?.({
-          projectId: 'OTHER',
-          tickets: [makeTicket('OTHER-1')],
-          timestamp: Date.now(),
-        });
-      });
-      // Still only the original ABC-1 row.
-      expect(screen.getByTestId('ticket-row-ABC-1')).toBeInTheDocument();
-      expect(screen.queryByTestId('ticket-row-OTHER-1')).not.toBeInTheDocument();
-
-      // Fire an event for THIS project — table updates.
-      act(() => {
-        ticketsChangedListener?.({
-          projectId: 'p-1',
-          tickets: [makeTicket('XYZ-9'), makeTicket('XYZ-10')],
-          timestamp: Date.now(),
-        });
-      });
-
-      await waitFor(() => {
-        expect(screen.getByTestId('ticket-row-XYZ-9')).toBeInTheDocument();
-        expect(screen.getByTestId('ticket-row-XYZ-10')).toBeInTheDocument();
-      });
-      // Old row gone.
-      expect(screen.queryByTestId('ticket-row-ABC-1')).not.toBeInTheDocument();
-    });
+    // Superseded by the server-paginated read path (PR #40 expansion). The
+    // renderer no longer subscribes to `jira.onTicketsChanged` for the
+    // tickets table — the table re-fetches `tickets.list` whenever the
+    // sort/search query changes and on Refresh. The push-based ticket-
+    // changed event still fires from main but is not wired into the
+    // renderer's tickets state, so this test no longer applies.
+    it.skip('DET-014 (superseded): onTicketsChanged event filter — tickets table is now server-paginated, no subscription', () => {});
   });
 
   // ---------------------------------------------------------------------

@@ -173,6 +173,9 @@ function installApi(opts?: {
     dialog: {
       selectFolder: vi.fn() as unknown as IpcApi['dialog']['selectFolder'],
     },
+    tickets: {
+      list: vi.fn() as unknown as IpcApi['tickets']['list'],
+    },
   };
 
   (window as { api?: IpcApi }).api = api;
@@ -497,6 +500,9 @@ function installBranchesApi(opts?: {
     } as unknown as IpcApi['runs'],
     dialog: {
       selectFolder: vi.fn() as unknown as IpcApi['dialog']['selectFolder'],
+    },
+    tickets: {
+      list: vi.fn() as unknown as IpcApi['tickets']['list'],
     },
   };
 

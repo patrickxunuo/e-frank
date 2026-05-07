@@ -132,9 +132,13 @@ function installApi(opts?: {
       modify: modify as unknown as IpcApi['runs']['modify'],
       current: vi.fn() as unknown as IpcApi['runs']['current'],
       listHistory: vi.fn() as unknown as IpcApi['runs']['listHistory'],
+      delete: vi.fn() as unknown as IpcApi['runs']['delete'],
       readLog: vi.fn() as unknown as IpcApi['runs']['readLog'],
       onCurrentChanged: vi.fn(() => () => {}) as unknown as IpcApi['runs']['onCurrentChanged'],
       onStateChanged: vi.fn(() => () => {}) as unknown as IpcApi['runs']['onStateChanged'],
+    },
+    tickets: {
+      list: vi.fn() as unknown as IpcApi['tickets']['list'],
     },
   };
 

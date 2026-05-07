@@ -29,8 +29,12 @@ import {
   type RunsCurrentResponse,
   type RunsListHistoryRequest,
   type RunsListHistoryResponse,
+  type RunsDeleteRequest,
+  type RunsDeleteResponse,
   type RunsReadLogRequest,
   type RunsReadLogResponse,
+  type TicketsListRequest,
+  type TicketsListResponse,
   type RunsCurrentChangedEvent,
   type ConnectionsCreateRequest,
   type ConnectionsUpdateRequest,
@@ -397,6 +401,69 @@ function validateRunsReadLogRequest(raw: unknown): IpcResult<RunsReadLogRequest>
     };
   }
   return { ok: true, data: { runId: raw['runId'] } };
+}
+
+function validateRunsDeleteRequest(raw: unknown): IpcResult<RunsDeleteRequest> {
+  if (!isPlainObject(raw) || typeof raw['runId'] !== 'string' || raw['runId'] === '') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'runId must be a non-empty string' },
+    };
+  }
+  return { ok: true, data: { runId: raw['runId'] } };
+}
+
+function validateTicketsListRequest(raw: unknown): IpcResult<TicketsListRequest> {
+  if (!isPlainObject(raw) || typeof raw['projectId'] !== 'string' || raw['projectId'] === '') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'projectId must be a non-empty string' },
+    };
+  }
+  const limit = raw['limit'];
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit <= 0 || limit > 100) {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'limit must be a finite number in (0, 100]' },
+    };
+  }
+  const cursor = raw['cursor'];
+  if (cursor !== undefined && typeof cursor !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'cursor must be a string when present' },
+    };
+  }
+  const sortBy = raw['sortBy'];
+  if (sortBy !== undefined && sortBy !== 'id' && sortBy !== 'priority') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'sortBy must be "id" or "priority"' },
+    };
+  }
+  const sortDir = raw['sortDir'];
+  if (sortDir !== undefined && sortDir !== 'asc' && sortDir !== 'desc') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'sortDir must be "asc" or "desc"' },
+    };
+  }
+  const search = raw['search'];
+  if (search !== undefined && typeof search !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'search must be a string when present' },
+    };
+  }
+  const req: TicketsListRequest = {
+    projectId: raw['projectId'],
+    limit,
+  };
+  if (typeof cursor === 'string') req.cursor = cursor;
+  if (sortBy === 'id' || sortBy === 'priority') req.sortBy = sortBy;
+  if (sortDir === 'asc' || sortDir === 'desc') req.sortDir = sortDir;
+  if (typeof search === 'string') req.search = search;
+  return { ok: true, data: req };
 }
 
 function validateJiraTestConnectionRequest(raw: unknown): IpcResult<JiraTestConnectionRequest> {
@@ -1504,6 +1571,75 @@ function registerIpcHandlers(): void {
         return { ok: false, error: { code: res.error.code, message: res.error.message } };
       }
       return { ok: true, data: { entries: res.data } };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.RUNS_DELETE,
+    async (_event, raw): Promise<IpcResult<RunsDeleteResponse>> => {
+      const validated = validateRunsDeleteRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (runStore === null) {
+        return notInitialized('RunStore');
+      }
+      const { runId } = validated.data;
+      // Refuse to drop an in-flight run — its sidecar is still being
+      // written to and the renderer would lose its current view of state.
+      if (workflowRunner !== null) {
+        const active = workflowRunner.current();
+        if (active !== null && active.id === runId) {
+          return {
+            ok: false,
+            error: { code: 'ACTIVE_RUN', message: 'cannot delete a run while it is running' },
+          };
+        }
+      }
+      const res = await runStore.delete(runId);
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      // Drop the sibling NDJSON log too. RunStore and RunLogStore live in
+      // the same `runsDir` but are separate fs surfaces. Either failing
+      // surfaces back to the renderer; we don't want to half-delete a run
+      // and leave 80MB of log behind.
+      if (runLogStore !== null) {
+        const logRes = await runLogStore.delete(runId);
+        if (!logRes.ok) {
+          return { ok: false, error: { code: logRes.error.code, message: logRes.error.message } };
+        }
+      }
+      return { ok: true, data: { runId } };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.TICKETS_LIST,
+    async (_event, raw): Promise<IpcResult<TicketsListResponse>> => {
+      const validated = validateTicketsListRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (jiraPoller === null) {
+        return notInitialized('TicketPoller');
+      }
+      const opts = validated.data;
+      const res = await jiraPoller.listPage(opts.projectId, {
+        cursor: opts.cursor,
+        limit: opts.limit,
+        sortBy: opts.sortBy,
+        sortDir: opts.sortDir,
+        search: opts.search,
+      });
+      if (!res.ok) {
+        return { ok: false, error: { code: res.code, message: res.message } };
+      }
+      const out: TicketsListResponse = { rows: res.data.rows };
+      if (res.data.nextCursor !== undefined) {
+        out.nextCursor = res.data.nextCursor;
+      }
+      return { ok: true, data: out };
     },
   );
 }

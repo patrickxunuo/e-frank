@@ -45,10 +45,15 @@ export interface JiraSearchOptions {
   maxResults?: number;
   /** Fields to fetch. Defaults to ['summary','status','priority','assignee','updated']. */
   fields?: ReadonlyArray<string>;
+  /** 0-based offset into the result set. Defaults to 0 — the first page. */
+  startAt?: number;
 }
 
 export interface JiraSearchResponse {
+  /** Total matching the JQL. Used by the IPC handler to compute hasMore. */
   total: number;
+  /** 0-based offset of this page (echoes back what was requested). */
+  startAt: number;
   tickets: Ticket[];
 }
 
@@ -152,15 +157,17 @@ export class JiraClient {
    *
    * URL template:
    *   ${host}/rest/api/3/search?jql=${encodeURIComponent(jql)}
-   *     &maxResults=${maxResults}&fields=${fields.join(',')}
+   *     &startAt=${startAt}&maxResults=${maxResults}&fields=${fields.join(',')}
    */
   async search(jql: string, opts: JiraSearchOptions = {}): Promise<JiraResult<JiraSearchResponse>> {
     const maxResults = opts.maxResults ?? DEFAULT_MAX_RESULTS;
     const fields = opts.fields ?? DEFAULT_FIELDS;
+    const startAt = opts.startAt ?? 0;
 
     const url =
       `${this.host}/rest/api/3/search` +
       `?jql=${encodeURIComponent(jql)}` +
+      `&startAt=${startAt}` +
       `&maxResults=${maxResults}` +
       `&fields=${encodeURIComponent(fields.join(','))}`;
 
@@ -170,6 +177,9 @@ export class JiraClient {
       }
       const totalRaw = parsed['total'];
       const total = typeof totalRaw === 'number' && Number.isFinite(totalRaw) ? totalRaw : 0;
+      const startAtRaw = parsed['startAt'];
+      const echoedStartAt =
+        typeof startAtRaw === 'number' && Number.isFinite(startAtRaw) ? startAtRaw : startAt;
       const issues = parsed['issues'];
       if (!Array.isArray(issues)) {
         return null;
@@ -181,7 +191,7 @@ export class JiraClient {
           tickets.push(t);
         }
       }
-      return { total, tickets };
+      return { total, startAt: echoedStartAt, tickets };
     });
   }
 

@@ -12,6 +12,24 @@
    * the wrapper sits on an opaque card background anyway. */
 }
 
+/*
+ * Opt-in scroll-container mode (used by ProjectDetail's tickets + runs
+ * tables). The wrapper claims the parent's leftover height and scrolls
+ * its rows internally. Combined with `theadSticky`, the column labels
+ * stay pinned at the top of the card while the user scrolls.
+ *
+ * Parent must be a flex column with a constrained height; the panel CSS
+ * in ProjectDetail handles that.
+ */
+.fillHeight {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Replace `overflow-x: auto` with both axes — vertical scrolling is the
+   * point of fillHeight, and a single overflow rule lets the sticky
+   * thead resolve to this wrapper as its scroll container. */
+  overflow: auto;
+}
+
 .table {
   width: 100%;
   border-collapse: separate;
@@ -31,6 +49,54 @@
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-overlay-subtle);
   white-space: nowrap;
+}
+
+/*
+ * Sticky thead — only attached when the wrapper is the scroll container
+ * (`.fillHeight`). `top: 0` resolves to the wrapper because that's the
+ * nearest ancestor with overflow. We bump the z-index above the row
+ * stagger animation so the header doesn't get repainted under its own
+ * border during the keyframe.
+ */
+.theadSticky th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.sortButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.sortButton:hover {
+  color: var(--text-secondary);
+}
+
+.sortLabel {
+  display: inline-block;
+}
+
+.sortIndicator {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.sortIndicator[data-active='true'] {
+  color: var(--accent);
 }
 
 .thead th.alignRight {
@@ -75,6 +141,22 @@
 
 .empty {
   padding: var(--space-7) var(--space-5);
+}
+
+.inlineEmpty {
+  padding: var(--space-7) var(--space-5);
+  text-align: center;
+}
+
+.footer {
+  border-top: 1px solid var(--border-subtle);
+  padding: var(--space-3) var(--space-5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  background: var(--bg-card);
 }
 
 @keyframes rowEnter {

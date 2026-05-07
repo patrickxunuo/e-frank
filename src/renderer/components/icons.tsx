@@ -286,3 +286,15 @@ export function IconSearch({ size = 14, ...rest }: IconProps): JSX.Element {
     </svg>
   );
 }
+
+export function IconTrash({ size = 14, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="m6 6 1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
+  );
+}

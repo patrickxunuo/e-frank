@@ -121,7 +121,10 @@ export const IPC_CHANNELS = {
   RUNS_MODIFY: 'runs:modify',
   RUNS_CURRENT: 'runs:current',
   RUNS_LIST_HISTORY: 'runs:list-history',
+  RUNS_DELETE: 'runs:delete',
   RUNS_READ_LOG: 'runs:read-log',
+  // -- Paginated tickets (PR #40 expansion) --
+  TICKETS_LIST: 'tickets:list',
   /** event channel (main -> renderer) */
   RUNS_CURRENT_CHANGED: 'runs:current-changed',
   /** event channel (main -> renderer) */
@@ -263,6 +266,43 @@ export interface JiraErrorEvent {
   consecutiveErrors: number;
 }
 
+// -- Paginated tickets IPC payloads (PR #40 expansion) -----------------------
+//
+// Server-side pagination + sort + search. Replaces the cache-backed
+// `jira.list` for the main ticket grid. The poller keeps its `fetchTickets`
+// pathway for diff detection / eligibility caching, but the renderer no
+// longer subscribes to those cached snapshots.
+//
+// `cursor` is opaque to the renderer — Jira encodes `startAt`, GitHub
+// encodes `page`. The renderer just round-trips whatever `nextCursor` came
+// back on the previous page. `nextCursor === undefined` means no more rows.
+
+export type TicketsSortBy = 'id' | 'priority';
+export type TicketsSortDir = 'asc' | 'desc';
+
+export interface TicketsListRequest {
+  projectId: string;
+  /** Opaque cursor from the previous page's `nextCursor`. Omit for first page. */
+  cursor?: string;
+  /** Page size. Renderer requests 20; main may cap at the source's max. */
+  limit: number;
+  /** Default 'priority' for Jira, 'id' for GitHub (priority not supported there). */
+  sortBy?: TicketsSortBy;
+  sortDir?: TicketsSortDir;
+  /**
+   * Free-text search. Jira routes this through JQL `text ~ "query*"`.
+   * GitHub source ignores it (server-side search isn't supported for the
+   * repo-issues endpoint and the renderer hides the input there).
+   */
+  search?: string;
+}
+
+export interface TicketsListResponse {
+  rows: TicketDto[];
+  /** Undefined when there are no more pages. */
+  nextCursor?: string;
+}
+
 // -- Workflow Runner IPC payloads --------------------------------------------
 
 export interface RunsStartRequest {
@@ -306,6 +346,14 @@ export interface RunsListHistoryRequest {
 
 export interface RunsListHistoryResponse {
   runs: Run[];
+}
+
+export interface RunsDeleteRequest {
+  runId: string;
+}
+
+export interface RunsDeleteResponse {
+  runId: string;
 }
 
 export interface RunsReadLogRequest {
@@ -475,10 +523,14 @@ export interface IpcApi {
     listHistory: (
       req: RunsListHistoryRequest,
     ) => Promise<IpcResult<RunsListHistoryResponse>>;
+    delete: (req: RunsDeleteRequest) => Promise<IpcResult<RunsDeleteResponse>>;
     readLog: (req: RunsReadLogRequest) => Promise<IpcResult<RunsReadLogResponse>>;
     /** Subscribe to current-changed events (run starts / advances / completes). Returns unsubscribe fn. */
     onCurrentChanged: (listener: (e: RunsCurrentChangedEvent) => void) => () => void;
     /** Subscribe to fine-grained state-changed events (every state entry/exit). Returns unsubscribe fn. */
     onStateChanged: (listener: (e: RunStateEvent) => void) => () => void;
+  };
+  tickets: {
+    list: (req: TicketsListRequest) => Promise<IpcResult<TicketsListResponse>>;
   };
 }

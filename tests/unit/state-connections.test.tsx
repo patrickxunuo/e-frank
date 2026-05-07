@@ -162,6 +162,9 @@ function installApi(opts?: {
         .fn()
         .mockResolvedValue({ ok: true, data: { path: null } }),
     } as unknown as IpcApi['dialog'],
+    tickets: {
+      list: vi.fn().mockResolvedValue(unusedErr()),
+    } as unknown as IpcApi['tickets'],
   } as IpcApi;
 
   (window as { api?: IpcApi }).api = api;

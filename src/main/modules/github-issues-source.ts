@@ -28,6 +28,8 @@ import type {
   ConnectionStoreLike,
   PollerErrorCode,
   SecretsManagerLike,
+  TicketListOptions,
+  TicketListPage,
   TicketSourceClient,
 } from './ticket-poller-types.js';
 
@@ -126,6 +128,22 @@ export async function buildGithubIssuesSource(
   const repoSlug = tickets.repoSlug;
   const labels = tickets.labels;
 
+  /**
+   * Map a raw GitHub issues response array to Tickets. The mapper filters
+   * out PRs (`pull_request !== undefined`) and any object that doesn't look
+   * like an issue. Belt-and-suspender filter for the same — defensive
+   * against a future change to `ticketFromGithubIssue`.
+   */
+  function mapIssues(raw: unknown[]): Ticket[] {
+    const out: Ticket[] = [];
+    for (const item of raw) {
+      if (isPlainObject(item) && item['pull_request'] !== undefined) continue;
+      const t = ticketFromGithubIssue(item, repoSlug);
+      if (t !== null) out.push(t);
+    }
+    return out;
+  }
+
   const sourceClient: TicketSourceClient = {
     // Non-async wrapper: same rationale as jira-source — keep the await
     // depth shallow so the existing POLLER-005 mutex test's microtask
@@ -153,17 +171,60 @@ export async function buildGithubIssuesSource(
           }
           return out;
         }
-        // Map raw GitHub issue objects → Ticket. The mapper filters out PRs
-        // (presence of `pull_request`) and any object that doesn't look like
-        // an issue. We belt-and-suspender that filter here too — defensive
-        // against a future mapper change.
-        const tickets: Ticket[] = [];
-        for (const raw of res.data) {
-          if (isPlainObject(raw) && raw['pull_request'] !== undefined) continue;
-          const t = ticketFromGithubIssue(raw, repoSlug);
-          if (t !== null) tickets.push(t);
+        return { ok: true, tickets: mapIssues(res.data) };
+      });
+    },
+
+    listPage(opts: TicketListOptions): ReturnType<TicketSourceClient['listPage']> {
+      // Cursor encodes the GitHub `page` parameter (1-based). Treat a
+      // missing/malformed cursor as page 1.
+      const parsedPage =
+        opts.cursor !== undefined ? Number.parseInt(opts.cursor, 10) : 1;
+      const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+
+      // GitHub's `/repos/{slug}/issues` doesn't expose a priority sort —
+      // priorities come from labels and the API doesn't sort by label
+      // contents. Degrade silently to id-order; the renderer hides the
+      // priority sort option for GitHub-backed projects.
+      const direction: 'asc' | 'desc' = opts.sortDir === 'asc' ? 'asc' : 'desc';
+
+      const callOpts: Parameters<typeof client.listIssues>[1] = {
+        perPage: opts.limit,
+        page,
+        sort: 'created',
+        direction,
+      };
+      if (labels !== undefined && labels !== '') {
+        callOpts.labels = labels;
+      }
+
+      return client.listIssues(repoSlug, callOpts).then((res) => {
+        if (!res.ok) {
+          const code = githubCodeToPollerCode(res.error.code);
+          const out: {
+            ok: false;
+            code: PollerErrorCode;
+            message: string;
+            httpStatus?: number;
+          } = {
+            ok: false,
+            code,
+            message: `GitHub issues fetch failed: ${code}`,
+          };
+          if (typeof res.error.status === 'number') {
+            out.httpStatus = res.error.status;
+          }
+          return out;
         }
-        return { ok: true, tickets };
+        const rows = mapIssues(res.data);
+        // GitHub doesn't return a total — infer "no more pages" from a
+        // short page (fewer rows than requested limit). For a full page
+        // assume there's another and let the next call surface the truth.
+        const data: TicketListPage = {
+          rows,
+          nextCursor: res.data.length < opts.limit ? undefined : String(page + 1),
+        };
+        return { ok: true, data };
       });
     },
   };
