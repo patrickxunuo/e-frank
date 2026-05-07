@@ -307,9 +307,14 @@ export async function runGit(
 
 /**
  * Scrub inline credentials embedded in remote URLs that git happily echoes
- * to stderr — e.g. `Authentication failed for 'https://x-access-token:ghp_xxx@github.com/foo/bar.git/'`.
- * Replaces the userinfo half before the `@` with `***`. Runs before byte-cap
- * so we never surface a trailing partial token.
+ * to stderr. When a push fails, git prints the remote URL verbatim, and on
+ * HTTPS-with-token setups that URL carries the credential in the userinfo
+ * portion (everything before the `@`). This regex replaces that whole
+ * portion with `***` so callers (and surfaced error messages, and any
+ * downstream logs) never see the secret.
+ *
+ * Runs before byte-cap so we can't accidentally surface a trailing partial
+ * token if the substitution falls within the truncation boundary.
  */
 function scrubStderr(s: string): string {
   return s.replace(/(https?:\/\/)[^@\s/]+@/g, '$1***@');
