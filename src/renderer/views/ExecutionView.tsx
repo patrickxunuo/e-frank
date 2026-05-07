@@ -58,11 +58,20 @@ function isTerminal(run: Run): boolean {
 function statusBadge(run: Run): JSX.Element {
   let variant: BadgeVariant = 'neutral';
   let label: string = run.state;
+  let pulse: 'active' | 'waiting' | false = false;
   switch (run.status) {
     case 'pending':
     case 'running':
       variant = 'running';
-      label = run.state === 'awaitingApproval' ? 'Awaiting' : 'Running';
+      // Differentiate the two "alive" states: actively pushing forward vs
+      // paused on a checkpoint. Different cadence reads at a glance.
+      if (run.state === 'awaitingApproval') {
+        label = 'Awaiting';
+        pulse = 'waiting';
+      } else {
+        label = 'Running';
+        pulse = 'active';
+      }
       break;
     case 'done':
       variant = 'success';
@@ -78,11 +87,7 @@ function statusBadge(run: Run): JSX.Element {
       break;
   }
   return (
-    <Badge
-      variant={variant}
-      pulse={run.status === 'running'}
-      data-testid="execution-status-badge"
-    >
+    <Badge variant={variant} pulse={pulse} data-testid="execution-status-badge">
       {label}
     </Badge>
   );

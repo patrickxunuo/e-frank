@@ -57,16 +57,59 @@
   position: relative;
 }
 
-.dotPulse {
-  animation: pulse 1.6s var(--ease-in-out) infinite;
+/*
+ * Two pulse cadences communicate two distinct states:
+ *
+ *  - .dotPulseActive — the run is making progress. A heartbeat-style
+ *    radiating halo + tiny scale that reads as "pushing forward". 1.8s
+ *    cycle, ease-in-out. Same energy as the prior single-pulse but with
+ *    a slight scale so the dot feels embodied, not just a flat dot with
+ *    a CSS shadow.
+ *
+ *  - .dotPulseWaiting — the run is paused at a checkpoint, waiting on
+ *    the user. A slower opacity + scale breath, no radiating ring —
+ *    reads as "still here, just on hold" without insisting on attention.
+ *    2.8s cycle is ~real-breath cadence; meditative rather than urgent.
+ */
+.dotPulseActive {
+  animation: dotPulseActive 1.8s var(--ease-in-out) infinite;
+  will-change: transform, box-shadow;
 }
 
-@keyframes pulse {
+.dotPulseWaiting {
+  animation: dotPulseWaiting 2.8s var(--ease-in-out) infinite;
+  will-change: transform, opacity;
+}
+
+@keyframes dotPulseActive {
   0%,
   100% {
     box-shadow: 0 0 0 0 var(--accent-glow);
+    transform: scale(1);
   }
   50% {
-    box-shadow: 0 0 0 5px transparent;
+    box-shadow: 0 0 0 6px transparent;
+    transform: scale(1.15);
+  }
+}
+
+@keyframes dotPulseWaiting {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dotPulseActive,
+  .dotPulseWaiting {
+    animation: none;
+    opacity: 1;
+    transform: none;
   }
 }
