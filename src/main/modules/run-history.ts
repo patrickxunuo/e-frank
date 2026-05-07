@@ -1,9 +1,20 @@
 /**
- * RunHistory — persists which Jira tickets are "running" or "processed" per
- * project, so the poller can filter them out of the eligible-tickets list.
+ * RunHistory — persists which tickets are currently running per project, so
+ * the poller can filter them out of the eligible-tickets list while a
+ * workflow is in flight (prevents two concurrent runs on the same ticket).
+ *
+ * The persisted JSON used to also track "processed" tickets — keys whose
+ * runs had completed at least once. The poller would hide them, on the
+ * theory that you wouldn't want to re-run on the same ticket. That was
+ * leaky semantics — the source of truth for "this ticket is done" lives
+ * in Jira / GitHub (closed status, in-review label, etc.). The local
+ * processed set was removed; the source-side state is now authoritative.
+ *
+ * For back-compat the persisted JSON may still contain a `processed`
+ * array on older files. The init validator silently drops it.
  *
  * Mirrors `SecretsManager` / `ProjectStore`:
- *   - schema-versioned envelope (`{ schemaVersion: 1, runs: { [projectId]: { processed, running } } }`)
+ *   - schema-versioned envelope (`{ schemaVersion: 1, runs: { [projectId]: { running } } }`)
  *   - atomic writes (temp + rename)
  *   - single-Promise write mutex
  *   - mutators guard on `initialized` (refuse to clobber an unread file)
@@ -34,7 +45,6 @@ export type RunHistoryResult<T> =
   | { ok: false; error: { code: RunHistoryErrorCode; message: string } };
 
 interface ProjectRuns {
-  processed: string[];
   running: string[];
 }
 
@@ -73,7 +83,7 @@ function errMessage(err: unknown): string {
 }
 
 function emptyProjectRuns(): ProjectRuns {
-  return { processed: [], running: [] };
+  return { running: [] };
 }
 
 export class RunHistory {
@@ -161,17 +171,7 @@ export class RunHistory {
             error: { code: 'CORRUPT', message: `runs["${projectId}"] must be an object` },
           };
         }
-        const processed = value['processed'];
         const running = value['running'];
-        if (!Array.isArray(processed) || !processed.every((k) => typeof k === 'string')) {
-          return {
-            ok: false,
-            error: {
-              code: 'CORRUPT',
-              message: `runs["${projectId}"].processed must be a string[]`,
-            },
-          };
-        }
         if (!Array.isArray(running) || !running.every((k) => typeof k === 'string')) {
           return {
             ok: false,
@@ -181,8 +181,10 @@ export class RunHistory {
             },
           };
         }
+        // `processed` is intentionally not read — older files (pre-removal
+        // of the local processed filter) may still carry the field; we
+        // accept the file but silently drop the field on the next write.
         cleaned[projectId] = {
-          processed: [...processed],
           running: [...running],
         };
       }
@@ -199,13 +201,6 @@ export class RunHistory {
   // (or if init() hasn't been called yet). The poller consults them on every
   // tick and we don't want to await per-tick — the price is that pre-init
   // reads see an empty store, which is a safe default.
-
-  /** Returns processed keys for a project (empty array if none). */
-  getProcessed(projectId: string): ReadonlyArray<string> {
-    const runs = this.envelope.runs[projectId];
-    if (runs === undefined) return [];
-    return runs.processed;
-  }
 
   /** Returns running keys for a project. */
   getRunning(projectId: string): ReadonlyArray<string> {
@@ -235,24 +230,6 @@ export class RunHistory {
         return false;
       }
       project.running = project.running.filter((k) => k !== key);
-      return true;
-    });
-  }
-
-  async markProcessed(projectId: string, key: string): Promise<RunHistoryResult<void>> {
-    return this.mutate((next) => {
-      const project = ensureProject(next, projectId);
-      if (project.processed.includes(key)) {
-        return false;
-      }
-      project.processed = [...project.processed, key];
-      // Marking processed implicitly clears running for the same key — this
-      // matches the workflow where a ticket finishes a Claude run and gets
-      // archived. (Spec rule 1: a ticket should be eligible iff !processed
-      // AND !running; once processed, running is irrelevant anyway.)
-      if (project.running.includes(key)) {
-        project.running = project.running.filter((k) => k !== key);
-      }
       return true;
     });
   }
@@ -365,7 +342,7 @@ function ensureProject(env: RunHistoryEnvelope, projectId: string): ProjectRuns 
 function cloneRuns(runs: Record<string, ProjectRuns>): Record<string, ProjectRuns> {
   const out: Record<string, ProjectRuns> = {};
   for (const [k, v] of Object.entries(runs)) {
-    out[k] = { processed: [...v.processed], running: [...v.running] };
+    out[k] = { running: [...v.running] };
   }
   return out;
 }

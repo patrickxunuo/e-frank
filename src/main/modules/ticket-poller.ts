@@ -427,14 +427,14 @@ export class TicketPoller extends EventEmitter {
       return { ok: false, code: pageRes.code, message: pageRes.message };
     }
 
-    // Eligibility filter — same predicate the polling tick uses. Mid-run
-    // and already-processed tickets shouldn't show in the picker even when
-    // they match the source-side filter.
-    const processed = new Set(this.runHistory.getProcessed(projectId));
+    // Eligibility filter — same predicate the polling tick uses. Drop
+    // tickets currently mid-run so the user can't accidentally start a
+    // second concurrent workflow on the same ticket. Tickets that have
+    // *already* completed a run still appear here — source-side state
+    // (Jira closed, GitHub closed/merged-PR auto-close) is the source of
+    // truth for "this ticket is done."
     const running = new Set(this.runHistory.getRunning(projectId));
-    const filtered = pageRes.data.rows.filter(
-      (t) => !processed.has(t.key) && !running.has(t.key),
-    );
+    const filtered = pageRes.data.rows.filter((t) => !running.has(t.key));
     return {
       ok: true,
       data: { rows: filtered, nextCursor: pageRes.data.nextCursor },
@@ -599,12 +599,13 @@ export class TicketPoller extends EventEmitter {
         return this.handleError(state, fetchRes.code, fetchRes.message, skipBackoff);
       }
 
-      // Eligibility filter.
-      const processed = new Set(this.runHistory.getProcessed(projectId));
+      // Eligibility filter — drop currently-running tickets so the
+      // background poll's cached snapshot stays consistent with what the
+      // paginated `listPage` returns. Source-side state is the source of
+      // truth for "this ticket is done"; we no longer maintain a local
+      // processed set.
       const running = new Set(this.runHistory.getRunning(projectId));
-      const eligible = fetchRes.tickets.filter(
-        (t) => !processed.has(t.key) && !running.has(t.key),
-      );
+      const eligible = fetchRes.tickets.filter((t) => !running.has(t.key));
 
       // Diff and emit.
       if (ticketsDiffer(state.lastTickets, eligible)) {

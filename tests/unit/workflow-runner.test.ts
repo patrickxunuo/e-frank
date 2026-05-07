@@ -354,7 +354,6 @@ interface Harness {
   /** Spies for verifying RunHistory calls. Typed loosely because Vitest's
    * spy type is strict-per-method and the harness shares one Harness shape. */
   markRunningSpy: MockInstance;
-  markProcessedSpy: MockInstance;
   clearRunningSpy: MockInstance;
   /** Spy for verifying RunStore.save was called. */
   saveSpy: MockInstance;
@@ -382,7 +381,6 @@ async function buildHarness(opts: HarnessOptions = {}): Promise<Harness> {
   const claudeManager = fakeClaude as unknown as ClaudeProcessManager;
 
   const markRunningSpy = vi.spyOn(runHistory, 'markRunning');
-  const markProcessedSpy = vi.spyOn(runHistory, 'markProcessed');
   const clearRunningSpy = vi.spyOn(runHistory, 'clearRunning');
   const saveSpy = vi.spyOn(runStore, 'save');
 
@@ -419,7 +417,6 @@ async function buildHarness(opts: HarnessOptions = {}): Promise<Harness> {
     stateEvents,
     currentEvents,
     markRunningSpy,
-    markProcessedSpy,
     clearRunningSpy,
     saveSpy,
   };
@@ -506,9 +503,10 @@ describe('WorkflowRunner', () => {
       expect(final.state).toBe('done');
       expect(final.status).toBe('done');
 
-      // RunHistory locks engaged + cleared.
+      // RunHistory: lock engaged + released. The processed-set machinery
+      // was removed; source-side state (issue closed) is now authoritative
+      // for "this ticket is done."
       expect(h.markRunningSpy).toHaveBeenCalledWith('p-1', VALID_TICKET);
-      expect(h.markProcessedSpy).toHaveBeenCalledWith('p-1', VALID_TICKET);
       expect(h.clearRunningSpy).toHaveBeenCalledWith('p-1', VALID_TICKET);
 
       // RunStore.save was called at least once (per WFR-026 — ideally per

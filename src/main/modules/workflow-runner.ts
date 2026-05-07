@@ -10,8 +10,10 @@
  *   3. updates `Run.state` when Claude emits a phase marker,
  *   4. pauses on approval markers (interactive mode) and resumes on
  *      approve / reject / modify,
- *   5. on Claude exit, releases the lock (RunHistory.clearRunning,
- *      and on success markProcessed) and lands in a terminal state.
+ *   5. on Claude exit, releases the lock (RunHistory.clearRunning) and
+ *      lands in a terminal state. Whether the ticket re-appears in the
+ *      eligible list is decided by source-side state (issue closed in
+ *      Jira/GitHub, PR merged, etc.), not a local processed set.
  *
  *   start()
  *     -> locking          (RunHistory.markRunning)
@@ -20,7 +22,8 @@
  *            (driven by `<<<EF_PHASE>>>{...}<<<END_EF_PHASE>>>` markers)
  *         <- awaitingApproval (driven by approval markers; resumes to
  *            whatever phase was active before the pause)
- *     -> unlocking        (RunHistory.{markProcessed,clearRunning})
+
+ *     -> unlocking        (RunHistory.clearRunning)
  *     -> done | failed | cancelled
  *
  * The collapsed state machine deletes `preparing` from the driven flow.
@@ -495,21 +498,13 @@ export class WorkflowRunner extends EventEmitter {
     // -- unlocking -- (always runs, even on failure / cancel)
     try {
       await this.runState(ctx, 'unlocking', async () => {
-        // Spec rule: success → markProcessed + clearRunning. Cancel / failure
-        // → clearRunning only (ticket stays eligible for a retry).
-        // markProcessed implicitly clears running, but we call clearRunning
-        // explicitly so the call sequence is observable and idempotent.
-        if (pipelineError === null && !cancelled) {
-          const mp = await this.options.runHistory.markProcessed(
-            ctx.run.projectId,
-            ctx.run.ticketKey,
-          );
-          if (!mp.ok) {
-            console.warn(
-              `[workflow-runner] run-history.markProcessed failed: ${mp.error.code} - ${mp.error.message}`,
-            );
-          }
-        }
+        // The runner used to also call `runHistory.markProcessed` on the
+        // success path so a freshly-finished ticket would drop out of the
+        // eligible list. That filter was leaky semantics: source-side
+        // status (Jira closed, GitHub merged-PR auto-close) is the real
+        // source of truth for "this ticket is done." We now release only
+        // the per-ticket lock; whether the ticket re-appears in the list
+        // is decided by the source query.
         const cr = await this.options.runHistory.clearRunning(
           ctx.run.projectId,
           ctx.run.ticketKey,
