@@ -140,18 +140,20 @@ describe('ticketFromGithubIssue — GH-ISSUES-MAP', () => {
   // -------------------------------------------------------------------------
   // GH-ISSUES-MAP-004 — key format
   // -------------------------------------------------------------------------
-  it('GH-ISSUES-MAP-004: key is `${repoSlug}#${number}`', () => {
+  it('GH-ISSUES-MAP-004: key is `GH-{number}` (workflow runner regex compliant)', () => {
     const t = ticketFromGithubIssue(ghIssueRaw, REPO_SLUG);
     expect(t).not.toBeNull();
     if (!t) return;
-    expect(t.key).toBe('gazhang/foo#123');
+    expect(t.key).toBe('GH-123');
+    // Must match the workflow runner's ticket-key regex.
+    expect(t.key).toMatch(/^[A-Z][A-Z0-9_]*-\d+$/);
   });
 
-  it('GH-ISSUES-MAP-004: different repoSlug + number flow into the key', () => {
+  it('GH-ISSUES-MAP-004: different issue numbers flow into the key', () => {
     const t = ticketFromGithubIssue({ ...ghIssueRaw, number: 9 }, 'octocat/hello');
     expect(t).not.toBeNull();
     if (!t) return;
-    expect(t.key).toBe('octocat/hello#9');
+    expect(t.key).toBe('GH-9');
   });
 
   // -------------------------------------------------------------------------

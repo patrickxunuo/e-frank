@@ -99,7 +99,12 @@ export function ticketFromJiraIssue(input: unknown, host: string): Ticket | null
  *   - issues missing a numeric `number` or string `title`
  *
  * Mapping rules:
- *   - `key`     = `${repoSlug}#${number}` (e.g. "gazhang/foo#123")
+ *   - `key`     = `GH-${number}` (e.g. "GH-123"). The workflow runner's
+ *     ticket-key regex (`/^[A-Z][A-Z0-9_]*-\\d+$/`) and the branch /
+ *     commit-scope formats both require this shape. `repoSlug` is no longer
+ *     part of the key — keys are scoped per-project (a project has exactly
+ *     one issues repo), so the bare `GH-N` stays unique within a project's
+ *     run history.
  *   - `summary` = `title`
  *   - `status`  = "Open" | "Closed" derived from `state`
  *   - `priority`= derived from `priority/high|medium|low` labels (case-
@@ -111,7 +116,11 @@ export function ticketFromJiraIssue(input: unknown, host: string): Ticket | null
  */
 export function ticketFromGithubIssue(
   input: unknown,
-  repoSlug: string,
+  // `repoSlug` was previously used to construct `${slug}#${number}` keys.
+  // Kept in the signature for call-site compatibility; intentionally
+  // unprefixed-underscored. The current key format is `GH-{number}` which
+  // satisfies the workflow runner's ticket-key regex.
+  _repoSlug: string,
 ): Ticket | null {
   if (!isPlainObject(input)) {
     return null;
@@ -176,7 +185,7 @@ export function ticketFromGithubIssue(
   const url = typeof input['html_url'] === 'string' ? (input['html_url'] as string) : '';
 
   return {
-    key: `${repoSlug}#${numberRaw}`,
+    key: `GH-${numberRaw}`,
     summary: titleRaw,
     status,
     priority,

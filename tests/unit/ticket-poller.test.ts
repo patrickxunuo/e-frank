@@ -1029,11 +1029,13 @@ describe('TicketPoller', () => {
       expect(refresh.ok).toBe(true);
       if (!refresh.ok) return;
 
-      // Tickets came from GitHub, not Jira — keys are `slug#number` shaped.
+      // Tickets came from GitHub, not Jira — keys are `GH-{number}` shaped
+      // (matches the workflow runner's regex; was `slug#number` before but
+      // that didn't pass `[A-Z][A-Z0-9_]*-\d+`).
       const keys = refresh.data.tickets.map((t) => t.key);
-      expect(keys).toEqual(
-        expect.arrayContaining([`${REPO_SLUG}#1`, `${REPO_SLUG}#2`]),
-      );
+      expect(keys).toEqual(expect.arrayContaining(['GH-1', 'GH-2']));
+      // Silence unused-fixture lint.
+      void REPO_SLUG;
 
       // The HTTP layer was hit at the GitHub issues URL prefix at least once,
       // and never at the Jira /search prefix.
@@ -1112,10 +1114,8 @@ describe('TicketPoller', () => {
       if (!refresh.ok) return;
 
       const keys = refresh.data.tickets.map((t) => t.key);
-      expect(keys).toEqual(
-        expect.arrayContaining([`${REPO_SLUG}#1`, `${REPO_SLUG}#3`]),
-      );
-      expect(keys).not.toContain(`${REPO_SLUG}#2`);
+      expect(keys).toEqual(expect.arrayContaining(['GH-1', 'GH-3']));
+      expect(keys).not.toContain('GH-2');
     });
   });
 });
