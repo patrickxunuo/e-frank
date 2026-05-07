@@ -35,6 +35,11 @@ export interface DropdownProps {
   options: ReadonlyArray<DropdownOption>;
   /** Placeholder shown when value is empty / not in options. */
   placeholder?: string;
+  /**
+   * When true, a search input is rendered above the option list. Filters
+   * options client-side via case-insensitive substring match. Default: false.
+   */
+  searchable?: boolean;
   /** Goes on the hidden native <select> so existing fireEvent.change tests keep working. */
   'data-testid'?: string;
   name?: string;
@@ -49,7 +54,8 @@ export interface DropdownProps {
  *
  * The hidden `<select>` carries the `data-testid` prop verbatim. The
  * trigger and menu items get suffixed testids (`-trigger`, `-menu`,
- * `-option-{value}`) for new tests.
+ * `-option-{value}`) for new tests. When `searchable` is true, a search
+ * input also appears with testid `{testid}-search`.
  */
 export function Dropdown({
   label,
@@ -61,6 +67,7 @@ export function Dropdown({
   onChange,
   options,
   placeholder,
+  searchable = false,
   'data-testid': testId = 'dropdown',
   name,
 }: DropdownProps): JSX.Element {
@@ -71,15 +78,26 @@ export function Dropdown({
   const [open, setOpen] = useState<boolean>(false);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
   const [menuRect, setMenuRect] = useState<MenuRect | null>(null);
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLUListElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedOption = useMemo(
     () => options.find((o) => o.value === value),
     [options, value],
   );
+
+  // The "visible" option set after applying the search filter. When
+  // searchable is false (or query is empty), this is the original list.
+  const visibleOptions = useMemo<ReadonlyArray<DropdownOption>>(() => {
+    if (!searchable) return options;
+    const q = searchQuery.trim().toLowerCase();
+    if (q === '') return options;
+    return options.filter((o) => o.label.toLowerCase().includes(q));
+  }, [options, searchable, searchQuery]);
 
   const describedBy: string[] = [];
   if (error) describedBy.push(`${reactId}-error`);
@@ -101,6 +119,21 @@ export function Dropdown({
       document.removeEventListener('mousedown', handler);
     };
   }, [open]);
+
+  // Reset the search query whenever the menu closes — opening it again
+  // should always start from a clean filter.
+  useEffect(() => {
+    if (!open) {
+      setSearchQuery('');
+    }
+  }, [open]);
+
+  // Auto-focus the search input on open. Done in a layout effect so the
+  // input exists before focus is requested.
+  useLayoutEffect(() => {
+    if (!open || !searchable) return;
+    searchInputRef.current?.focus();
+  }, [open, searchable]);
 
   // Measure the trigger when opening (and reposition on scroll/resize while
   // open). The menu is portaled to <body>, so its layout uses viewport
@@ -130,20 +163,21 @@ export function Dropdown({
   }, [open]);
 
   // When opening, seed the highlight to the current value (or the first
-  // non-disabled option if not present).
+  // non-disabled option of the FILTERED set). Re-runs when the visible set
+  // changes (i.e. the user types in the search box).
   useEffect(() => {
     if (!open) {
       setHighlightedIndex(-1);
       return;
     }
-    const idx = options.findIndex((o) => o.value === value);
+    const idx = visibleOptions.findIndex((o) => o.value === value);
     if (idx >= 0) {
       setHighlightedIndex(idx);
-    } else {
-      const firstEnabled = options.findIndex((o) => !o.disabled);
-      setHighlightedIndex(firstEnabled);
+      return;
     }
-  }, [open, options, value]);
+    const firstEnabled = visibleOptions.findIndex((o) => !o.disabled);
+    setHighlightedIndex(firstEnabled);
+  }, [open, visibleOptions, value]);
 
   const commit = useCallback(
     (next: string): void => {
@@ -157,19 +191,20 @@ export function Dropdown({
 
   const moveHighlight = useCallback(
     (direction: 1 | -1): void => {
-      if (options.length === 0) return;
+      if (visibleOptions.length === 0) return;
       setHighlightedIndex((prev) => {
-        const start = prev < 0 ? (direction === 1 ? -1 : options.length) : prev;
+        const start =
+          prev < 0 ? (direction === 1 ? -1 : visibleOptions.length) : prev;
         let i = start;
-        for (let step = 0; step < options.length; step += 1) {
-          i = (i + direction + options.length) % options.length;
-          const opt = options[i];
+        for (let step = 0; step < visibleOptions.length; step += 1) {
+          i = (i + direction + visibleOptions.length) % visibleOptions.length;
+          const opt = visibleOptions[i];
           if (opt && !opt.disabled) return i;
         }
         return prev;
       });
     },
-    [options],
+    [visibleOptions],
   );
 
   const handleTriggerKeyDown = useCallback(
@@ -207,7 +242,7 @@ export function Dropdown({
           return;
         }
         if (highlightedIndex >= 0) {
-          const opt = options[highlightedIndex];
+          const opt = visibleOptions[highlightedIndex];
           if (opt && !opt.disabled) {
             event.preventDefault();
             commit(opt.value);
@@ -215,7 +250,39 @@ export function Dropdown({
         }
       }
     },
-    [commit, disabled, highlightedIndex, moveHighlight, open, options],
+    [commit, disabled, highlightedIndex, moveHighlight, open, visibleOptions],
+  );
+
+  // Search input shares the trigger's keyboard handling so arrow keys still
+  // navigate (and Enter still commits) while the input is focused.
+  const handleSearchKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpen(false);
+        return;
+      }
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        moveHighlight(1);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        moveHighlight(-1);
+        return;
+      }
+      if (event.key === 'Enter') {
+        if (highlightedIndex >= 0) {
+          const opt = visibleOptions[highlightedIndex];
+          if (opt && !opt.disabled) {
+            event.preventDefault();
+            commit(opt.value);
+          }
+        }
+      }
+    },
+    [commit, highlightedIndex, moveHighlight, visibleOptions],
   );
 
   const handleTriggerClick = useCallback((): void => {
@@ -308,27 +375,54 @@ export function Dropdown({
                 width: `${menuRect.width}px`,
               }}
             >
-              {options.map((o, idx) => (
-                <li key={o.value} role="presentation">
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={value === o.value}
-                    disabled={o.disabled}
-                    className={styles.option}
-                    data-disabled={o.disabled ? 'true' : undefined}
-                    data-active={value === o.value ? 'true' : undefined}
-                    data-highlighted={highlightedIndex === idx ? 'true' : undefined}
-                    data-testid={`${testId}-option-${o.value}`}
-                    onClick={() => handleOptionClick(o)}
-                    onMouseEnter={() => {
-                      if (!o.disabled) setHighlightedIndex(idx);
-                    }}
-                  >
-                    {o.label}
-                  </button>
+              {searchable && (
+                <li role="presentation" className={styles.searchRow}>
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    className={styles.search}
+                    placeholder="Search…"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={handleSearchKeyDown}
+                    data-testid={`${testId}-search`}
+                    aria-label="Search options"
+                  />
                 </li>
-              ))}
+              )}
+              {visibleOptions.length === 0 && searchable ? (
+                <li
+                  role="presentation"
+                  className={styles.empty}
+                  data-testid={`${testId}-empty`}
+                >
+                  No matches
+                </li>
+              ) : (
+                visibleOptions.map((o, idx) => (
+                  <li key={o.value} role="presentation">
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={value === o.value}
+                      disabled={o.disabled}
+                      className={styles.option}
+                      data-disabled={o.disabled ? 'true' : undefined}
+                      data-active={value === o.value ? 'true' : undefined}
+                      data-highlighted={
+                        highlightedIndex === idx ? 'true' : undefined
+                      }
+                      data-testid={`${testId}-option-${o.value}`}
+                      onClick={() => handleOptionClick(o)}
+                      onMouseEnter={() => {
+                        if (!o.disabled) setHighlightedIndex(idx);
+                      }}
+                    >
+                      {o.label}
+                    </button>
+                  </li>
+                ))
+              )}
             </ul>,
             document.body,
           )

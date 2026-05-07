@@ -132,6 +132,18 @@ function makeIpcApiStub(
       update: vi.fn<IpcApi['connections']['update']>().mockResolvedValue(unusedErr()),
       delete: vi.fn<IpcApi['connections']['delete']>().mockResolvedValue(unusedErr()),
       test: vi.fn<IpcApi['connections']['test']>().mockResolvedValue(unusedErr()),
+      listRepos: vi.fn<IpcApi['connections']['listRepos']>().mockResolvedValue(unusedErr()),
+      listJiraProjects: vi
+        .fn<IpcApi['connections']['listJiraProjects']>()
+        .mockResolvedValue(unusedErr()),
+      listBranches: vi
+        .fn<IpcApi['connections']['listBranches']>()
+        .mockResolvedValue(unusedErr()),
+    },
+    dialog: {
+      selectFolder: vi
+        .fn<IpcApi['dialog']['selectFolder']>()
+        .mockResolvedValue({ ok: true, data: { path: null } }),
     },
   };
 }
@@ -144,9 +156,13 @@ function makeProject(id: string, name: string): ProjectInstanceDto {
       type: 'github',
       localPath: '/tmp/' + id,
       baseBranch: 'main',
+      connectionId: 'conn-gh-1',
+      slug: 'gazhang/repo',
     },
     tickets: {
       source: 'jira',
+      connectionId: 'conn-jr-1',
+      projectKey: 'ABC',
       query: 'project = ABC',
     },
     workflow: {

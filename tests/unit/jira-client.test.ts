@@ -379,4 +379,146 @@ describe('JiraClient', () => {
     expect(res.data.tickets).toHaveLength(1);
     expect(res.data.tickets[0]?.key).toBe('ABC-1');
   });
+
+  // -------------------------------------------------------------------------
+  // JC-LP-001..005 — `listProjects()` (issue #25)
+  //
+  // The listProjects URL is a known prefix; we register on the prefix because
+  // the implementation may add other query params (orderBy, expand). Same
+  // matching strategy as `search()`.
+  // -------------------------------------------------------------------------
+  describe('JC-LP-001..005 listProjects()', () => {
+    const PROJECT_SEARCH_PREFIX = `${HOST}/rest/api/3/project/search`;
+
+    it('JC-LP-001: GETs ${host}/rest/api/3/project/search with maxResults=100 and orderBy=key', async () => {
+      http.expectPrefix(
+        'GET',
+        PROJECT_SEARCH_PREFIX,
+        jsonOk({
+          values: [
+            { id: '10000', key: 'PROJ', name: 'Project' },
+            { id: '10001', key: 'OPS', name: 'Ops' },
+          ],
+        }),
+      );
+
+      const res = await client.listProjects();
+      expect(res.ok).toBe(true);
+
+      expect(http.calls).toHaveLength(1);
+      const url = http.calls[0]?.url ?? '';
+      expect(url.startsWith(PROJECT_SEARCH_PREFIX)).toBe(true);
+      expect(url).toContain('maxResults=100');
+      expect(url).toContain('orderBy=key');
+    });
+
+    it('JC-LP-002: 200 with valid body → array of { key, name }', async () => {
+      http.expectPrefix(
+        'GET',
+        PROJECT_SEARCH_PREFIX,
+        jsonOk({
+          values: [
+            { id: '10000', key: 'PROJ', name: 'Project', projectTypeKey: 'software' },
+            { id: '10001', key: 'OPS', name: 'Ops' },
+          ],
+        }),
+      );
+
+      const res = await client.listProjects();
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.data).toHaveLength(2);
+      const proj = res.data.find((p) => p.key === 'PROJ');
+      const ops = res.data.find((p) => p.key === 'OPS');
+      expect(proj).toBeDefined();
+      expect(proj?.name).toBe('Project');
+      expect(ops).toBeDefined();
+      expect(ops?.name).toBe('Ops');
+    });
+
+    it('JC-LP-003: 200 with malformed body → INVALID_RESPONSE', async () => {
+      http.expectPrefix(
+        'GET',
+        PROJECT_SEARCH_PREFIX,
+        jsonOk('{ this is { not valid json'),
+      );
+      const res = await client.listProjects();
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe('INVALID_RESPONSE');
+    });
+
+    it('JC-LP-004: 401 → AUTH', async () => {
+      http.expectPrefix('GET', PROJECT_SEARCH_PREFIX, jsonStatus(401, {}));
+      const res = await client.listProjects();
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe('AUTH');
+    });
+
+    it('JC-LP-004: 403 → AUTH', async () => {
+      http.expectPrefix('GET', PROJECT_SEARCH_PREFIX, jsonStatus(403, {}));
+      const res = await client.listProjects();
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe('AUTH');
+    });
+
+    it('JC-LP-004: 404 → NOT_FOUND', async () => {
+      http.expectPrefix('GET', PROJECT_SEARCH_PREFIX, jsonStatus(404, {}));
+      const res = await client.listProjects();
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe('NOT_FOUND');
+    });
+
+    it('JC-LP-004: 429 → RATE_LIMITED', async () => {
+      http.expectPrefix('GET', PROJECT_SEARCH_PREFIX, jsonStatus(429, {}));
+      const res = await client.listProjects();
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe('RATE_LIMITED');
+    });
+
+    it('JC-LP-004: 500 → SERVER_ERROR', async () => {
+      http.expectPrefix('GET', PROJECT_SEARCH_PREFIX, jsonStatus(500, {}));
+      const res = await client.listProjects();
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe('SERVER_ERROR');
+    });
+
+    it('JC-LP-005: token never appears in error.message (401 with token in body)', async () => {
+      http.expectPrefix(
+        'GET',
+        PROJECT_SEARCH_PREFIX,
+        jsonStatus(401, { errorMessages: [TOKEN] }),
+      );
+      const res = await client.listProjects();
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.message).not.toContain(TOKEN);
+    });
+
+    it('JC-LP-005: token never appears in error.message (5xx with token echoed)', async () => {
+      http.expectPrefix(
+        'GET',
+        PROJECT_SEARCH_PREFIX,
+        jsonStatus(500, { detail: TOKEN }),
+      );
+      const res = await client.listProjects();
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.message).not.toContain(TOKEN);
+    });
+
+    it('JC-LP-005: token never appears in error.message (network error with token in headers)', async () => {
+      // Unmatched call → FakeHttpClient returns NETWORK; we just verify the
+      // sanitized message never echoes the token.
+      const res = await client.listProjects();
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.message).not.toContain(TOKEN);
+    });
+  });
 });

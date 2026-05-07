@@ -50,6 +50,14 @@ import {
   type ConnectionsDeleteRequest,
   type ConnectionsTestRequest,
   type ConnectionsTestResponse,
+  type ConnectionsListReposRequest,
+  type ConnectionsListReposResponse,
+  type ConnectionsListJiraProjectsRequest,
+  type ConnectionsListJiraProjectsResponse,
+  type ConnectionsListBranchesRequest,
+  type ConnectionsListBranchesResponse,
+  type DialogSelectFolderRequest,
+  type DialogSelectFolderResponse,
 } from '../shared/ipc.js';
 
 const api: IpcApi = {
@@ -211,6 +219,36 @@ const api: IpcApi = {
     test: (req: ConnectionsTestRequest): Promise<IpcResult<ConnectionsTestResponse>> =>
       ipcRenderer.invoke(IPC_CHANNELS.CONNECTIONS_TEST, req) as Promise<
         IpcResult<ConnectionsTestResponse>
+      >,
+
+    listRepos: (
+      req: ConnectionsListReposRequest,
+    ): Promise<IpcResult<ConnectionsListReposResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONNECTIONS_LIST_REPOS, req) as Promise<
+        IpcResult<ConnectionsListReposResponse>
+      >,
+
+    listJiraProjects: (
+      req: ConnectionsListJiraProjectsRequest,
+    ): Promise<IpcResult<ConnectionsListJiraProjectsResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONNECTIONS_LIST_JIRA_PROJECTS, req) as Promise<
+        IpcResult<ConnectionsListJiraProjectsResponse>
+      >,
+
+    listBranches: (
+      req: ConnectionsListBranchesRequest,
+    ): Promise<IpcResult<ConnectionsListBranchesResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONNECTIONS_LIST_BRANCHES, req) as Promise<
+        IpcResult<ConnectionsListBranchesResponse>
+      >,
+  },
+
+  dialog: {
+    selectFolder: (
+      req: DialogSelectFolderRequest,
+    ): Promise<IpcResult<DialogSelectFolderResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.DIALOG_SELECT_FOLDER, req) as Promise<
+        IpcResult<DialogSelectFolderResponse>
       >,
   },
 

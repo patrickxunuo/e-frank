@@ -44,7 +44,7 @@ function pathIsAbsolute(p: string): boolean {
 export const REPO_TYPES = ['github', 'bitbucket'] as const;
 export type RepoType = (typeof REPO_TYPES)[number];
 
-export const TICKET_SOURCES = ['jira'] as const;
+export const TICKET_SOURCES = ['jira', 'github-issues'] as const;
 export type TicketSource = (typeof TICKET_SOURCES)[number];
 
 export const WORKFLOW_MODES = ['interactive', 'yolo'] as const;
@@ -54,31 +54,47 @@ export type WorkflowMode = (typeof WORKFLOW_MODES)[number];
 
 export interface RepoConfig {
   type: RepoType;
-  /** Absolute path. */
+  /** Absolute path on disk — the workflow runner clones / cd's here. */
   localPath: string;
   baseBranch: string;
-  /** Optional ref into SecretsManager (e.g. "github-default"). Plaintext tokens NEVER live in this struct. */
-  tokenRef?: string;
+  /** ID of a Connection (the connection's `provider` MUST equal `type`). */
+  connectionId: string;
+  /** 'owner/name' for github, 'workspace/repo' for bitbucket. Comes from listRepos. */
+  slug: string;
 }
 
-export interface TicketsConfig {
-  source: TicketSource;
-  /** JQL or equivalent — non-empty after trim. */
-  query: string;
-  /** Optional ref into SecretsManager for Jira/Bitbucket creds. */
-  tokenRef?: string;
+/**
+ * `TicketsConfig` is a discriminated union on `source`. Each branch carries
+ * the fields the poller needs for that provider; field shapes intentionally
+ * differ (e.g. Jira has `projectKey` + `query`; GitHub Issues has `repoSlug`
+ * + `labels`).
+ */
+export type TicketsConfig = TicketsJiraConfig | TicketsGithubIssuesConfig;
+
+export interface TicketsJiraConfig {
+  source: 'jira';
+  /** ID of a Connection (provider === 'jira'). */
+  connectionId: string;
+  /** Jira project key (e.g. 'PROJ'). */
+  projectKey: string;
   /**
-   * Jira account email — needed for Basic auth alongside the apiToken stored
-   * at `tokenRef`. Optional; the poller emits a NO_TOKEN-equivalent error if
-   * email is missing when `tokenRef` is set.
+   * JQL override. Optional — when omitted, the poller defaults to
+   * `project = "{projectKey}"`.
    */
-  email?: string;
+  query?: string;
+}
+
+export interface TicketsGithubIssuesConfig {
+  source: 'github-issues';
+  /** ID of a Connection (provider === 'github'). */
+  connectionId: string;
   /**
-   * Jira base URL (e.g. `https://example.atlassian.net`). Optional; the poller
-   * emits a NETWORK-style error if host is missing when `tokenRef` is set.
-   * Must be a string starting with `http://` or `https://` if present.
+   * Repo to read issues from. Defaults to the project's source repo
+   * (`repo.slug`) on first switch in the UI; user can override via the picker.
    */
-  host?: string;
+  repoSlug: string;
+  /** Optional comma-separated label filter, matches GitHub's API. */
+  labels?: string;
 }
 
 export interface WorkflowConfig {
@@ -132,7 +148,14 @@ export type ValidationErrorCode =
   | 'INVALID_ENUM'
   | 'NOT_ABSOLUTE'
   | 'INVALID_BRANCH_FORMAT'
-  | 'INVALID_ID';
+  | 'INVALID_ID'
+  /**
+   * Reserved for future cross-checks (e.g. main verifying that a repo's
+   * `connectionId.provider` matches `repo.type` against the live
+   * ConnectionStore). The renderer-safe validator can't consult the store,
+   * so it never emits this code today.
+   */
+  | 'MISMATCHED_PROVIDER';
 
 export type ValidationResult =
   | { ok: true; value: ProjectInstance }
@@ -178,25 +201,6 @@ function checkString(
   return value;
 }
 
-function checkOptionalString(
-  errors: ValidationError[],
-  path: string,
-  value: unknown,
-): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  // null is treated like absent — silently dropped.
-  if (value === null) {
-    return undefined;
-  }
-  if (typeof value !== 'string') {
-    errors.push({ path, code: 'NOT_STRING', message: `${path} must be a string` });
-    return undefined;
-  }
-  return value;
-}
-
 function checkEnum<T extends string>(
   errors: ValidationError[],
   path: string,
@@ -231,6 +235,25 @@ function validateRepo(
     errors.push({ path, code: 'NOT_OBJECT', message: `${path} must be an object` });
     return undefined;
   }
+
+  // Drift guard — pre-#25 records carried these fields. They are removed by
+  // the schema break in #25; reject any record that still has them so a
+  // stale `projects.json` can't slip through with credentials embedded.
+  if ('tokenRef' in raw) {
+    errors.push({
+      path: joinPath(path, 'tokenRef'),
+      code: 'INVALID_ENUM',
+      message: `${joinPath(path, 'tokenRef')} is no longer supported (use repo.connectionId)`,
+    });
+  }
+  if ('host' in raw) {
+    errors.push({
+      path: joinPath(path, 'host'),
+      code: 'INVALID_ENUM',
+      message: `${joinPath(path, 'host')} is no longer supported (host lives on the Connection)`,
+    });
+  }
+
   const type = checkEnum(errors, joinPath(path, 'type'), raw['type'], REPO_TYPES);
   const localPathRaw = checkString(errors, joinPath(path, 'localPath'), raw['localPath']);
   if (localPathRaw !== undefined && !pathIsAbsolute(localPathRaw)) {
@@ -241,21 +264,26 @@ function validateRepo(
     });
   }
   const baseBranch = checkString(errors, joinPath(path, 'baseBranch'), raw['baseBranch']);
-  const tokenRef = checkOptionalString(errors, joinPath(path, 'tokenRef'), raw['tokenRef']);
+  const connectionId = checkString(errors, joinPath(path, 'connectionId'), raw['connectionId']);
+  const slug = checkString(errors, joinPath(path, 'slug'), raw['slug']);
 
   if (
     type === undefined ||
     localPathRaw === undefined ||
     baseBranch === undefined ||
+    connectionId === undefined ||
+    slug === undefined ||
     !pathIsAbsolute(localPathRaw)
   ) {
     return undefined;
   }
-  const result: RepoConfig = { type, localPath: localPathRaw, baseBranch };
-  if (tokenRef !== undefined) {
-    result.tokenRef = tokenRef;
-  }
-  return result;
+  return {
+    type,
+    localPath: localPathRaw,
+    baseBranch,
+    connectionId,
+    slug,
+  };
 }
 
 function validateTickets(
@@ -267,62 +295,123 @@ function validateTickets(
     errors.push({ path, code: 'NOT_OBJECT', message: `${path} must be an object` });
     return undefined;
   }
-  const source = checkEnum(errors, joinPath(path, 'source'), raw['source'], TICKET_SOURCES);
-  const query = checkString(errors, joinPath(path, 'query'), raw['query']);
-  const tokenRef = checkOptionalString(errors, joinPath(path, 'tokenRef'), raw['tokenRef']);
-  // `email` is optional, but if present it must be a non-empty string. Pre-#4
-  // projects without it remain valid; the poller surfaces a NO_TOKEN-style
-  // error when email is missing at poll time.
-  const emailRaw = checkOptionalString(errors, joinPath(path, 'email'), raw['email']);
-  let email: string | undefined;
-  if (emailRaw !== undefined) {
-    if (emailRaw.trim() === '') {
-      errors.push({
-        path: joinPath(path, 'email'),
-        code: 'EMPTY',
-        message: `${joinPath(path, 'email')} must not be empty`,
-      });
-    } else {
-      email = emailRaw;
-    }
+
+  // Drift guard — pre-#25 records carried these fields. They are removed by
+  // the schema break in #25; reject any record that still has them.
+  if ('tokenRef' in raw) {
+    errors.push({
+      path: joinPath(path, 'tokenRef'),
+      code: 'INVALID_ENUM',
+      message: `${joinPath(path, 'tokenRef')} is no longer supported (use tickets.connectionId)`,
+    });
   }
-  // `host` is optional, but if present it must be an http:// or https:// URL.
-  const hostRaw = checkOptionalString(errors, joinPath(path, 'host'), raw['host']);
-  let host: string | undefined;
-  if (hostRaw !== undefined) {
-    const trimmed = hostRaw.trim();
-    if (trimmed === '') {
-      errors.push({
-        path: joinPath(path, 'host'),
-        code: 'EMPTY',
-        message: `${joinPath(path, 'host')} must not be empty`,
-      });
-    } else if (!/^https?:\/\//.test(trimmed)) {
-      errors.push({
-        path: joinPath(path, 'host'),
-        code: 'INVALID_ENUM',
-        message: `${joinPath(path, 'host')} must start with http:// or https://`,
-      });
-    } else {
-      // Strip a trailing slash so URL building stays predictable.
-      host = trimmed.replace(/\/+$/, '');
-    }
+  if ('email' in raw) {
+    errors.push({
+      path: joinPath(path, 'email'),
+      code: 'INVALID_ENUM',
+      message: `${joinPath(path, 'email')} is no longer supported (email lives on the Connection)`,
+    });
+  }
+  if ('host' in raw) {
+    errors.push({
+      path: joinPath(path, 'host'),
+      code: 'INVALID_ENUM',
+      message: `${joinPath(path, 'host')} is no longer supported (host lives on the Connection)`,
+    });
   }
 
-  if (source === undefined || query === undefined) {
-    return undefined;
+  const source = checkEnum(errors, joinPath(path, 'source'), raw['source'], TICKET_SOURCES);
+  const connectionId = checkString(
+    errors,
+    joinPath(path, 'connectionId'),
+    raw['connectionId'],
+  );
+
+  // Dispatch on source for the per-provider field set. We still surface
+  // every per-field error (so the form can show all problems at once) but
+  // the assembled object only goes in the right shape on success.
+  if (source === 'jira') {
+    const projectKey = checkString(
+      errors,
+      joinPath(path, 'projectKey'),
+      raw['projectKey'],
+    );
+
+    // `query` is OPTIONAL. If present, must be a non-empty string after trim.
+    let query: string | undefined;
+    const queryRaw = raw['query'];
+    if (queryRaw !== undefined && queryRaw !== null) {
+      if (typeof queryRaw !== 'string') {
+        errors.push({
+          path: joinPath(path, 'query'),
+          code: 'NOT_STRING',
+          message: `${joinPath(path, 'query')} must be a string`,
+        });
+      } else if (queryRaw.trim() === '') {
+        errors.push({
+          path: joinPath(path, 'query'),
+          code: 'EMPTY',
+          message: `${joinPath(path, 'query')} must not be empty`,
+        });
+      } else {
+        query = queryRaw;
+      }
+    }
+
+    if (connectionId === undefined || projectKey === undefined) {
+      return undefined;
+    }
+    const result: TicketsJiraConfig = { source: 'jira', connectionId, projectKey };
+    if (query !== undefined) {
+      result.query = query;
+    }
+    return result;
   }
-  const result: TicketsConfig = { source, query };
-  if (tokenRef !== undefined) {
-    result.tokenRef = tokenRef;
+
+  if (source === 'github-issues') {
+    const repoSlug = checkString(
+      errors,
+      joinPath(path, 'repoSlug'),
+      raw['repoSlug'],
+    );
+
+    // `labels` is OPTIONAL. If present, must be a non-empty string after trim.
+    let labels: string | undefined;
+    const labelsRaw = raw['labels'];
+    if (labelsRaw !== undefined && labelsRaw !== null) {
+      if (typeof labelsRaw !== 'string') {
+        errors.push({
+          path: joinPath(path, 'labels'),
+          code: 'NOT_STRING',
+          message: `${joinPath(path, 'labels')} must be a string`,
+        });
+      } else if (labelsRaw.trim() === '') {
+        errors.push({
+          path: joinPath(path, 'labels'),
+          code: 'EMPTY',
+          message: `${joinPath(path, 'labels')} must not be empty`,
+        });
+      } else {
+        labels = labelsRaw;
+      }
+    }
+
+    if (connectionId === undefined || repoSlug === undefined) {
+      return undefined;
+    }
+    const result: TicketsGithubIssuesConfig = {
+      source: 'github-issues',
+      connectionId,
+      repoSlug,
+    };
+    if (labels !== undefined) {
+      result.labels = labels;
+    }
+    return result;
   }
-  if (email !== undefined) {
-    result.email = email;
-  }
-  if (host !== undefined) {
-    result.host = host;
-  }
-  return result;
+
+  // Source was missing or invalid — checkEnum already pushed an error.
+  return undefined;
 }
 
 function validateWorkflow(

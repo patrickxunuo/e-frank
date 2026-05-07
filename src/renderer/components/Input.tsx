@@ -6,6 +6,13 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
   error?: string;
   hint?: string;
   leadingIcon?: ReactNode;
+  /**
+   * Element rendered inside the shell, after the native input. Used for
+   * inline action buttons (e.g. Browse… on the Repository Path field) so
+   * the action visually belongs to the input rather than floating beside
+   * it as a separate UI element.
+   */
+  trailing?: ReactNode;
   /** Render value with monospace font (paths, branches, JQL keys). */
   mono?: boolean;
   /** Optional explicit testid override. */
@@ -18,7 +25,18 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
  * read consistently regardless of icon presence.
  */
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { label, error, hint, leadingIcon, mono = false, id, required, disabled, ...rest },
+  {
+    label,
+    error,
+    hint,
+    leadingIcon,
+    trailing,
+    mono = false,
+    id,
+    required,
+    disabled,
+    ...rest
+  },
   ref,
 ) {
   const reactId = useId();
@@ -56,6 +74,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           aria-describedby={describedBy.length ? describedBy.join(' ') : undefined}
           {...rest}
         />
+        {trailing && <span className={styles.trailing}>{trailing}</span>}
       </div>
       {error ? (
         <span id={`${inputId}-error`} className={`${styles.message} ${styles.errorMessage}`}>

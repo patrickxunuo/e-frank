@@ -10,12 +10,15 @@ import {
   type ProjectsUpdateRequest,
   type ProjectsDeleteRequest,
   type ProjectsGetRequest,
+  type RepoConfig,
+  type TicketsConfig,
   type SecretsSetRequest,
   type SecretsGetRequest,
   type SecretsGetResponse,
   type SecretsDeleteRequest,
   type SecretsListResponse,
 } from '../../src/shared/ipc';
+import { validateProjectInstance } from '../../src/shared/schema/project-instance';
 
 /**
  * IPC contract tests for the Project Instance config + Secrets storage
@@ -288,6 +291,290 @@ describe('src/shared/ipc.ts — Project Instance + Secrets extension', () => {
       type SchemaInput = import('../../src/shared/schema/project-instance').ProjectInstanceInput;
       type DtoInput = ProjectsUpdateRequest['input'];
       expectTypeOf<DtoInput>().toEqualTypeOf<SchemaInput>();
+    });
+  });
+
+  // -------------------------------------------------------------
+  // IPC-PROJ-DRIFT — issue #25 schema break
+  //
+  // Compile-time: RepoConfig + TicketsConfig carry the new connectionId/slug/
+  // projectKey fields; old credential fields (host/email/tokenRef) are gone.
+  // Runtime: validateProjectInstance rejects records that still carry the
+  // old fields (drift guard).
+  // -------------------------------------------------------------
+  describe('IPC-PROJ-DRIFT schema break — new connection-ref shape', () => {
+    it('IPC-PROJ-DRIFT: RepoConfig type carries connectionId + slug (compile-time)', () => {
+      expectTypeOf<RepoConfig>().toHaveProperty('connectionId');
+      expectTypeOf<RepoConfig['connectionId']>().toEqualTypeOf<string>();
+      expectTypeOf<RepoConfig>().toHaveProperty('slug');
+      expectTypeOf<RepoConfig['slug']>().toEqualTypeOf<string>();
+      expectTypeOf<RepoConfig>().toHaveProperty('type');
+      expectTypeOf<RepoConfig>().toHaveProperty('localPath');
+      expectTypeOf<RepoConfig>().toHaveProperty('baseBranch');
+    });
+
+    it('IPC-PROJ-DRIFT: TicketsConfig (jira branch) carries connectionId + projectKey (compile-time)', () => {
+      // TicketsConfig is now a discriminated union (TicketsJiraConfig | TicketsGithubIssuesConfig).
+      // Both branches share `source` + `connectionId`; `projectKey` is jira-only.
+      expectTypeOf<TicketsConfig>().toHaveProperty('connectionId');
+      expectTypeOf<TicketsConfig>().toHaveProperty('source');
+      type JiraOnly = Extract<TicketsConfig, { source: 'jira' }>;
+      expectTypeOf<JiraOnly>().toHaveProperty('projectKey');
+      expectTypeOf<JiraOnly['projectKey']>().toEqualTypeOf<string>();
+    });
+
+    it('IPC-PROJ-DRIFT: validator REJECTS a project record with repo.host', () => {
+      const record = {
+        id: '11111111-2222-4333-8444-555555555555',
+        name: 'X',
+        repo: {
+          type: 'github',
+          localPath: '/abs/repo',
+          baseBranch: 'main',
+          connectionId: 'conn-gh-1',
+          slug: 'gazhang/frontend-app',
+          host: 'https://api.github.com', // drift!
+        },
+        tickets: {
+          source: 'jira',
+          connectionId: 'conn-jr-1',
+          projectKey: 'PROJ',
+        },
+        workflow: { mode: 'interactive', branchFormat: 'feat/{ticketKey}' },
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      };
+      const result = validateProjectInstance(record);
+      expect(result.ok).toBe(false);
+    });
+
+    it('IPC-PROJ-DRIFT: validator REJECTS a project record with repo.tokenRef', () => {
+      const record = {
+        id: '11111111-2222-4333-8444-555555555555',
+        name: 'X',
+        repo: {
+          type: 'github',
+          localPath: '/abs/repo',
+          baseBranch: 'main',
+          connectionId: 'conn-gh-1',
+          slug: 'gazhang/frontend-app',
+          tokenRef: 'github-default', // drift!
+        },
+        tickets: {
+          source: 'jira',
+          connectionId: 'conn-jr-1',
+          projectKey: 'PROJ',
+        },
+        workflow: { mode: 'interactive', branchFormat: 'feat/{ticketKey}' },
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      };
+      const result = validateProjectInstance(record);
+      expect(result.ok).toBe(false);
+    });
+
+    it('IPC-PROJ-DRIFT: validator REJECTS a project record with tickets.host', () => {
+      const record = {
+        id: '11111111-2222-4333-8444-555555555555',
+        name: 'X',
+        repo: {
+          type: 'github',
+          localPath: '/abs/repo',
+          baseBranch: 'main',
+          connectionId: 'conn-gh-1',
+          slug: 'gazhang/frontend-app',
+        },
+        tickets: {
+          source: 'jira',
+          connectionId: 'conn-jr-1',
+          projectKey: 'PROJ',
+          host: 'https://acme.atlassian.net', // drift!
+        },
+        workflow: { mode: 'interactive', branchFormat: 'feat/{ticketKey}' },
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      };
+      const result = validateProjectInstance(record);
+      expect(result.ok).toBe(false);
+    });
+
+    it('IPC-PROJ-DRIFT: validator REJECTS a project record with tickets.email', () => {
+      const record = {
+        id: '11111111-2222-4333-8444-555555555555',
+        name: 'X',
+        repo: {
+          type: 'github',
+          localPath: '/abs/repo',
+          baseBranch: 'main',
+          connectionId: 'conn-gh-1',
+          slug: 'gazhang/frontend-app',
+        },
+        tickets: {
+          source: 'jira',
+          connectionId: 'conn-jr-1',
+          projectKey: 'PROJ',
+          email: 'me@example.com', // drift!
+        },
+        workflow: { mode: 'interactive', branchFormat: 'feat/{ticketKey}' },
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      };
+      const result = validateProjectInstance(record);
+      expect(result.ok).toBe(false);
+    });
+
+    it('IPC-PROJ-DRIFT: validator REJECTS a project record with tickets.tokenRef', () => {
+      const record = {
+        id: '11111111-2222-4333-8444-555555555555',
+        name: 'X',
+        repo: {
+          type: 'github',
+          localPath: '/abs/repo',
+          baseBranch: 'main',
+          connectionId: 'conn-gh-1',
+          slug: 'gazhang/frontend-app',
+        },
+        tickets: {
+          source: 'jira',
+          connectionId: 'conn-jr-1',
+          projectKey: 'PROJ',
+          tokenRef: 'jira-default', // drift!
+        },
+        workflow: { mode: 'interactive', branchFormat: 'feat/{ticketKey}' },
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      };
+      const result = validateProjectInstance(record);
+      expect(result.ok).toBe(false);
+    });
+
+    it('IPC-PROJ-DRIFT: validator ACCEPTS a clean record on the new shape (regression)', () => {
+      const record = {
+        id: '11111111-2222-4333-8444-555555555555',
+        name: 'X',
+        repo: {
+          type: 'github',
+          localPath: '/abs/repo',
+          baseBranch: 'main',
+          connectionId: 'conn-gh-1',
+          slug: 'gazhang/frontend-app',
+        },
+        tickets: {
+          source: 'jira',
+          connectionId: 'conn-jr-1',
+          projectKey: 'PROJ',
+        },
+        workflow: { mode: 'interactive', branchFormat: 'feat/{ticketKey}' },
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      };
+      const result = validateProjectInstance(record);
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------
+  // IPC-PROJ-DRIFT-GH — issue #25 polish: github-issues branch of
+  // TicketsConfig is accepted by validateProjectInstance, while jira
+  // branch keeps its existing rules.
+  // -------------------------------------------------------------
+  describe('IPC-PROJ-DRIFT-GH github-issues TicketsConfig branch accepted', () => {
+    it('IPC-PROJ-DRIFT-GH: validator ACCEPTS tickets.source === "github-issues" with connectionId + repoSlug', () => {
+      const record = {
+        id: '11111111-2222-4333-8444-555555555555',
+        name: 'X',
+        repo: {
+          type: 'github',
+          localPath: '/abs/repo',
+          baseBranch: 'main',
+          connectionId: 'conn-gh-1',
+          slug: 'gazhang/foo',
+        },
+        tickets: {
+          source: 'github-issues',
+          connectionId: 'conn-gh-1',
+          repoSlug: 'gazhang/foo',
+        },
+        workflow: { mode: 'interactive', branchFormat: 'feat/{ticketKey}' },
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      };
+      const result = validateProjectInstance(record);
+      expect(result.ok).toBe(true);
+    });
+
+    it('IPC-PROJ-DRIFT-GH: validator ACCEPTS github-issues with optional `labels`', () => {
+      const record = {
+        id: '11111111-2222-4333-8444-555555555555',
+        name: 'X',
+        repo: {
+          type: 'github',
+          localPath: '/abs/repo',
+          baseBranch: 'main',
+          connectionId: 'conn-gh-1',
+          slug: 'gazhang/foo',
+        },
+        tickets: {
+          source: 'github-issues',
+          connectionId: 'conn-gh-1',
+          repoSlug: 'gazhang/foo',
+          labels: 'bug,priority/high',
+        },
+        workflow: { mode: 'interactive', branchFormat: 'feat/{ticketKey}' },
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      };
+      const result = validateProjectInstance(record);
+      expect(result.ok).toBe(true);
+    });
+
+    it('IPC-PROJ-DRIFT-GH: jira branch still rejects `host` (drift guard preserved)', () => {
+      const record = {
+        id: '11111111-2222-4333-8444-555555555555',
+        name: 'X',
+        repo: {
+          type: 'github',
+          localPath: '/abs/repo',
+          baseBranch: 'main',
+          connectionId: 'conn-gh-1',
+          slug: 'gazhang/frontend-app',
+        },
+        tickets: {
+          source: 'jira',
+          connectionId: 'conn-jr-1',
+          projectKey: 'PROJ',
+          host: 'https://acme.atlassian.net', // drift!
+        },
+        workflow: { mode: 'interactive', branchFormat: 'feat/{ticketKey}' },
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      };
+      const result = validateProjectInstance(record);
+      expect(result.ok).toBe(false);
+    });
+
+    it('IPC-PROJ-DRIFT-GH: github-issues branch rejects missing `repoSlug`', () => {
+      const record = {
+        id: '11111111-2222-4333-8444-555555555555',
+        name: 'X',
+        repo: {
+          type: 'github',
+          localPath: '/abs/repo',
+          baseBranch: 'main',
+          connectionId: 'conn-gh-1',
+          slug: 'gazhang/foo',
+        },
+        tickets: {
+          source: 'github-issues',
+          connectionId: 'conn-gh-1',
+          // repoSlug intentionally missing
+        },
+        workflow: { mode: 'interactive', branchFormat: 'feat/{ticketKey}' },
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      };
+      const result = validateProjectInstance(record);
+      expect(result.ok).toBe(false);
     });
   });
 });

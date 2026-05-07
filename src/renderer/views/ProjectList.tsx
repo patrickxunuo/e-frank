@@ -67,6 +67,10 @@ function ticketIconFor(source: ProjectInstanceDto['tickets']['source']): JSX.Ele
   switch (source) {
     case 'jira':
       return <IconJira />;
+    case 'github-issues':
+      // No dedicated GitHub Issues icon yet — fall through to the generic
+      // ticket icon (Jira). The label below disambiguates.
+      return <IconJira />;
     default:
       return <IconJira />;
   }
@@ -76,21 +80,23 @@ function ticketLabelFor(source: ProjectInstanceDto['tickets']['source']): string
   switch (source) {
     case 'jira':
       return 'Jira';
+    case 'github-issues':
+      return 'GitHub Issues';
     default:
       return source;
   }
 }
 
 /**
- * Extract a short, displayable identifier from the JQL `query` so the table
- * has a familiar "AI-TEAM" / "PROJ-123" feel without re-parsing JQL.
- * Falls back to the raw query (truncated) if no `project = X` clause is found.
+ * Returns the ticket-source identifier for the row. The polish bundle
+ * widens `tickets` to a discriminated union — Jira projects show the
+ * `projectKey`, GitHub Issues projects show the `repoSlug`.
  */
-function extractTicketKey(query: string): string {
-  const trimmed = query.trim();
-  const projectMatch = trimmed.match(/project\s*=\s*"?([A-Z0-9_-]+)"?/i);
-  if (projectMatch?.[1]) return projectMatch[1].toUpperCase();
-  return trimmed.length > 28 ? `${trimmed.slice(0, 28)}…` : trimmed;
+function ticketSourceLabel(tickets: ProjectInstanceDto['tickets']): string {
+  if (tickets.source === 'jira') {
+    return tickets.projectKey || 'Jira';
+  }
+  return tickets.repoSlug || 'GitHub Issues';
 }
 
 function basenameOf(p: string): string {
@@ -147,7 +153,7 @@ export function ProjectList({
           <span className={styles.providerBadge}>{ticketIconFor(row.tickets.source)}</span>
           <div className={styles.cellText}>
             <span className={styles.cellPrimary}>{ticketLabelFor(row.tickets.source)}</span>
-            <span className={styles.cellSecondary}>{extractTicketKey(row.tickets.query)}</span>
+            <span className={styles.cellSecondary}>{ticketSourceLabel(row.tickets)}</span>
           </div>
         </div>
       ),

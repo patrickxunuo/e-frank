@@ -116,11 +116,16 @@ function basenameOf(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
-function extractTicketKey(query: string): string {
-  const trimmed = query.trim();
-  const projectMatch = trimmed.match(/project\s*=\s*"?([A-Z0-9_-]+)"?/i);
-  if (projectMatch?.[1]) return projectMatch[1].toUpperCase();
-  return 'Jira';
+/**
+ * Returns the human-facing ticket-source identifier. The polish bundle
+ * widens `tickets` to a discriminated union; this helper does the per-
+ * source narrowing in one place so the JSX stays readable.
+ */
+function ticketProjectLabel(tickets: ProjectInstanceDto['tickets']): string {
+  if (tickets.source === 'jira') {
+    return tickets.projectKey || 'Jira';
+  }
+  return tickets.repoSlug || 'GitHub Issues';
 }
 
 function priorityVariant(p: PriorityBucket): BadgeVariant {
@@ -548,7 +553,7 @@ export function ProjectDetail({
                 </span>
                 Ticket Source
                 <span className={styles.pillMono}>
-                  {extractTicketKey(project.tickets.query)}
+                  {ticketProjectLabel(project.tickets)}
                 </span>
               </span>
               <span className={styles.pill}>

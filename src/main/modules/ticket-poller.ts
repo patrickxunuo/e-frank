@@ -1,8 +1,10 @@
 /**
- * `JiraPoller` — orchestrates per-project Jira polling on a fixed cadence.
+ * `TicketPoller` — orchestrates per-project ticket polling on a fixed cadence,
+ * dispatching to a source-specific strategy (Jira / GitHub Issues / …) for
+ * the actual fetch. Was `JiraPoller` before the project-pickers-polish bundle.
  *
  * Per project we track:
- *   - the project snapshot (used to read JQL fresh on each tick)
+ *   - the project snapshot (used to read the source config fresh on each tick)
  *   - the configured intervalMs
  *   - the timer handle (from injectable `timers.setInterval`)
  *   - a per-project mutex (Promise) so overlapping ticks are silently dropped
@@ -20,20 +22,38 @@
  * Auth errors short-circuit entirely — the timer is cleared and the project
  * state stays in the `Map` only so `refreshNow` / `list` keep working until
  * `start()` is called again with new credentials.
+ *
+ * Source dispatch — `buildSourceClient(project)` looks at
+ * `project.tickets.source` and delegates to `buildJiraSource` /
+ * `buildGithubIssuesSource`. The poller never sees the raw HTTP shape; the
+ * strategy returns mapped `Ticket[]`.
  */
 
 import { EventEmitter } from 'node:events';
-import { FetchHttpClient } from './http-client.js';
+import { FetchHttpClient, type HttpClient } from './http-client.js';
 import {
   JiraClient,
   type JiraAuth,
   type JiraResult,
   type JiraSelfResponse,
-  type JiraErrorCode,
 } from './jira-client.js';
+import { buildJiraSource } from './jira-source.js';
+import { buildGithubIssuesSource } from './github-issues-source.js';
 import type { RunHistory } from './run-history.js';
 import type { ProjectInstance } from '../../shared/schema/project-instance.js';
 import type { Ticket } from '../../shared/schema/ticket.js';
+import type {
+  ConnectionStoreLike,
+  PollerErrorCode,
+  SecretsManagerLike,
+  TicketSourceClient,
+} from './ticket-poller-types.js';
+
+export type {
+  ConnectionStoreLike,
+  PollerErrorCode,
+  TicketSourceClient,
+} from './ticket-poller-types.js';
 
 export interface PollerTimers {
   setInterval: (cb: () => void, ms: number) => unknown;
@@ -44,34 +64,50 @@ interface ProjectStoreLike {
   list(): Promise<{ ok: true; data: ProjectInstance[] } | { ok: false; error: unknown }>;
 }
 
-interface SecretsManagerLike {
-  get(
-    ref: string,
-  ): Promise<{ ok: true; data: { plaintext: string } } | { ok: false; error: unknown }>;
+/**
+ * Per-poll context for the legacy `jiraClientFactory` test seam. Kept around
+ * because the existing JP-CONN tests inject it directly; the default Jira
+ * source factory honors it (so the recorded `host` + `auth` still flow
+ * through unchanged).
+ */
+export interface JiraClientFactoryContext {
+  project: ProjectInstance;
+  host: string;
+  auth: JiraAuth;
 }
 
-export interface JiraPollerOptions {
+/**
+ * Strategy factory — builds a `TicketSourceClient` for one poll. Default
+ * implementation dispatches by `project.tickets.source`. Tests that want
+ * to inject a fake source-builder can pass `sourceFactory` directly.
+ */
+export type SourceFactory = (
+  project: ProjectInstance,
+) => Promise<
+  | { ok: true; client: TicketSourceClient }
+  | { ok: false; code: PollerErrorCode; message: string }
+>;
+
+export interface TicketPollerOptions {
   projectStore: ProjectStoreLike;
+  connectionStore: ConnectionStoreLike;
   secretsManager: SecretsManagerLike;
   runHistory: RunHistory;
   /**
-   * Build a JiraClient for a given project. Default uses `FetchHttpClient`.
-   * Tests can override to inject a `FakeHttpClient`.
+   * Legacy test hook: build a JiraClient for a given project. If supplied,
+   * the default Jira source factory routes through it so the ProjectStore +
+   * ConnectionStore plumbing still runs but the actual JiraClient is the
+   * test's fake. Tests that want a different source strategy entirely should
+   * pass `sourceFactory` instead.
    */
-  jiraClientFactory?: (project: ProjectInstance, auth: JiraAuth) => JiraClient;
+  jiraClientFactory?: (ctx: JiraClientFactoryContext) => JiraClient;
+  /** Test injection for the source-strategy dispatcher. */
+  sourceFactory?: SourceFactory;
   /** Test injection for setInterval / clearInterval. Default uses globalThis. */
   timers?: PollerTimers;
+  /** Test injection for the underlying HTTP client used by source strategies. */
+  httpClient?: HttpClient;
 }
-
-export type PollerErrorCode =
-  | 'AUTH'
-  | 'NETWORK'
-  | 'TIMEOUT'
-  | 'RATE_LIMITED'
-  | 'SERVER_ERROR'
-  | 'NO_TOKEN'
-  | 'PROJECT_NOT_FOUND'
-  | 'INVALID_RESPONSE';
 
 export interface PollerErrorEvent {
   projectId: string;
@@ -111,39 +147,6 @@ function defaultTimers(): PollerTimers {
   };
 }
 
-function defaultJiraClientFactory(project: ProjectInstance, auth: JiraAuth): JiraClient {
-  // `tickets.host` is the validated Jira base URL (added in #4's schema
-  // extension; required at runtime — the poller will surface a NETWORK error
-  // via testConnection/search if it's missing).
-  const host = project.tickets.host ?? '';
-  return new JiraClient({ httpClient: new FetchHttpClient(), host, auth });
-}
-
-/**
- * Map a `JiraErrorCode` to the poller's narrower `PollerErrorCode`. They
- * overlap mostly 1:1; the poller adds NO_TOKEN / PROJECT_NOT_FOUND, and we
- * never expose `NOT_FOUND` from Jira (which would mean "wrong endpoint" —
- * surface it as INVALID_RESPONSE).
- */
-function jiraCodeToPollerCode(code: JiraErrorCode): PollerErrorCode {
-  switch (code) {
-    case 'AUTH':
-      return 'AUTH';
-    case 'NETWORK':
-      return 'NETWORK';
-    case 'TIMEOUT':
-      return 'TIMEOUT';
-    case 'RATE_LIMITED':
-      return 'RATE_LIMITED';
-    case 'SERVER_ERROR':
-      return 'SERVER_ERROR';
-    case 'INVALID_RESPONSE':
-      return 'INVALID_RESPONSE';
-    case 'NOT_FOUND':
-      return 'INVALID_RESPONSE';
-  }
-}
-
 /**
  * Compare two ticket arrays for "visible" equality. The spec's diff is over
  * a SET (eligible ticket keys + visible fields), not a list — Jira can return
@@ -173,22 +176,77 @@ function ticketsDiffer(a: ReadonlyArray<Ticket>, b: ReadonlyArray<Ticket>): bool
   return false;
 }
 
-export class JiraPoller extends EventEmitter {
+export class TicketPoller extends EventEmitter {
   private readonly projectStore: ProjectStoreLike;
+  private readonly connectionStore: ConnectionStoreLike;
   private readonly secretsManager: SecretsManagerLike;
   private readonly runHistory: RunHistory;
-  private readonly jiraClientFactory: (project: ProjectInstance, auth: JiraAuth) => JiraClient;
+  private readonly jiraClientFactory:
+    | ((ctx: JiraClientFactoryContext) => JiraClient)
+    | undefined;
+  private readonly sourceFactory: SourceFactory;
   private readonly timers: PollerTimers;
+  private readonly httpClient: HttpClient;
 
   private readonly states: Map<string, ProjectPollState> = new Map();
 
-  constructor(options: JiraPollerOptions) {
+  constructor(options: TicketPollerOptions) {
     super();
     this.projectStore = options.projectStore;
+    this.connectionStore = options.connectionStore;
     this.secretsManager = options.secretsManager;
     this.runHistory = options.runHistory;
-    this.jiraClientFactory = options.jiraClientFactory ?? defaultJiraClientFactory;
+    this.jiraClientFactory = options.jiraClientFactory;
     this.timers = options.timers ?? defaultTimers();
+    this.httpClient = options.httpClient ?? new FetchHttpClient();
+    this.sourceFactory = options.sourceFactory ?? this.defaultSourceFactory();
+  }
+
+  /**
+   * Default source-factory dispatcher — picks a strategy based on
+   * `project.tickets.source`. Honors the legacy `jiraClientFactory` injection
+   * by routing the Jira strategy through it so existing JP-CONN tests don't
+   * need to swap to a full SourceFactory.
+   *
+   * NOTE: this is a NON-async function returning a Promise directly (rather
+   * than `async (...) => buildJiraSource(...)`) so we don't add an extra
+   * microtask wrap around the strategy build. Subtle but real: the existing
+   * POLLER-005 test asserts that exactly one HTTP call occurs after a
+   * specific number of `await Promise.resolve()` flushes; an extra wrap
+   * here pushes the http call past that boundary.
+   */
+  private defaultSourceFactory(): SourceFactory {
+    return (project): ReturnType<SourceFactory> => {
+      const src = project.tickets.source;
+      if (src === 'jira') {
+        const opts: Parameters<typeof buildJiraSource>[1] = {
+          connectionStore: this.connectionStore,
+          secretsManager: this.secretsManager,
+          httpClient: this.httpClient,
+        };
+        if (this.jiraClientFactory !== undefined) {
+          // Bridge the legacy ctx-based factory to the new options-based one.
+          const legacy = this.jiraClientFactory;
+          opts.jiraClientFactory = (clientOpts) =>
+            legacy({ project, host: clientOpts.host, auth: clientOpts.auth });
+        }
+        return buildJiraSource(project, opts);
+      }
+      if (src === 'github-issues') {
+        return buildGithubIssuesSource(project, {
+          connectionStore: this.connectionStore,
+          secretsManager: this.secretsManager,
+          httpClient: this.httpClient,
+        });
+      }
+      // Future-proofing: an unknown discriminator. The validator should
+      // already have rejected this, but stay defensive.
+      return Promise.resolve({
+        ok: false,
+        code: 'INVALID_RESPONSE',
+        message: `unknown ticket source "${src as string}"`,
+      });
+    };
   }
 
   /**
@@ -327,31 +385,49 @@ export class JiraPoller extends EventEmitter {
   }
 
   /**
-   * Verifies credentials without storing anything. Builds a transient
-   * JiraClient via the same factory and calls `/myself`.
+   * Verifies Jira credentials without storing anything. Builds a transient
+   * JiraClient via the legacy `jiraClientFactory` if present (so the
+   * existing JP-CONN tests keep working) or via the default constructor
+   * otherwise. The poller class also exposes this for the renderer's
+   * `jira:test-connection` IPC.
    */
   async testConnection(opts: {
     host: string;
     auth: JiraAuth;
   }): Promise<JiraResult<JiraSelfResponse>> {
-    // Build a synthetic project just to drive the factory — the factory
-    // will read its `host` from us. Most factories (including the test
-    // factory) ignore the project arg entirely.
-    const tickets = {
-      source: 'jira' as const,
-      query: '',
-      host: opts.host,
-    };
-    const synthetic: ProjectInstance = {
-      id: '__test_connection__',
-      name: '',
-      repo: { type: 'github', localPath: '/', baseBranch: 'main' },
-      tickets: tickets as unknown as ProjectInstance['tickets'],
-      workflow: { mode: 'interactive', branchFormat: '{ticketKey}' },
-      createdAt: 0,
-      updatedAt: 0,
-    };
-    const client = this.jiraClientFactory(synthetic, opts.auth);
+    let client: JiraClient;
+    if (this.jiraClientFactory !== undefined) {
+      const synthetic: ProjectInstance = {
+        id: '__test_connection__',
+        name: '',
+        repo: {
+          type: 'github',
+          localPath: '/',
+          baseBranch: 'main',
+          connectionId: '__test_connection__',
+          slug: 'test/test',
+        },
+        tickets: {
+          source: 'jira',
+          connectionId: '__test_connection__',
+          projectKey: 'TEST',
+        },
+        workflow: { mode: 'interactive', branchFormat: '{ticketKey}' },
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      client = this.jiraClientFactory({
+        project: synthetic,
+        host: opts.host,
+        auth: opts.auth,
+      });
+    } else {
+      client = new JiraClient({
+        httpClient: this.httpClient,
+        host: opts.host,
+        auth: opts.auth,
+      });
+    }
     return client.testConnection();
   }
 
@@ -381,9 +457,9 @@ export class JiraPoller extends EventEmitter {
   }
 
   /**
-   * The actual poll body. Reads project state fresh, resolves the secret,
-   * builds a JiraClient, runs the JQL, applies eligibility filters, diffs
-   * against the cached tickets, emits events, updates state.
+   * The actual poll body. Reads project state fresh, builds a source-strategy
+   * client via the SourceFactory, runs the fetch, applies eligibility filters,
+   * diffs against the cached tickets, emits events, updates state.
    */
   private async runPoll(
     projectId: string,
@@ -394,18 +470,15 @@ export class JiraPoller extends EventEmitter {
       return { ok: false, error: { code: 'NETWORK', message: 'no poller state' } };
     }
     // Short-circuit if a previous poll already fired AUTH — don't re-hit
-    // Jira and don't emit a duplicate error event for the same bad creds.
-    // `start()` resets `stoppedDueToAuth`, so the user can retry after
-    // updating credentials.
+    // the source and don't emit a duplicate error event for the same bad
+    // creds. `start()` resets `stoppedDueToAuth`, so the user can retry
+    // after updating credentials.
     if (state.stoppedDueToAuth) {
       return {
         ok: false,
         error: { code: 'AUTH', message: 'auth previously failed; call start() with new credentials' },
       };
     }
-    // The mutex check lives in `tick()` — overlapping timer ticks are
-    // dropped there. `refreshNow` waits for any inflight before calling us.
-    // So at this point we're the sole runner.
 
     let resolveInflight!: () => void;
     state.inflight = new Promise<void>((r) => {
@@ -421,8 +494,8 @@ export class JiraPoller extends EventEmitter {
     const stillTracked = (): boolean => this.states.get(projectId) === state;
 
     try {
-      // Resolve the project from the store fresh — its JQL might have
-      // changed since the timer was scheduled.
+      // Resolve the project from the store fresh — its source config
+      // might have changed since the timer was scheduled.
       const projectsRes = await this.projectStore.list();
       if (!stillTracked()) {
         return { ok: false, error: { code: 'NETWORK', message: 'poll aborted' } };
@@ -451,65 +524,28 @@ export class JiraPoller extends EventEmitter {
       }
       state.project = project;
 
-      // Resolve auth: tokenRef + email.
-      const tokenRef = project.tickets.tokenRef;
-      const email = (project.tickets as { email?: string }).email;
-      if (tokenRef === undefined || tokenRef === '') {
-        return this.handleError(
-          state,
-          'NO_TOKEN',
-          'project has no tickets.tokenRef configured',
-          skipBackoff,
-        );
-      }
-      if (email === undefined || email === '') {
-        return this.handleError(
-          state,
-          'NO_TOKEN',
-          'project has no tickets.email configured',
-          skipBackoff,
-        );
-      }
-      const tokenRes = await this.secretsManager.get(tokenRef);
+      // Build a source-strategy client for this project (auth resolution +
+      // client construction lives inside the strategy).
+      const sourceRes = await this.sourceFactory(project);
       if (!stillTracked()) {
         return { ok: false, error: { code: 'NETWORK', message: 'poll aborted' } };
       }
-      if (!tokenRes.ok) {
-        return this.handleError(
-          state,
-          'NO_TOKEN',
-          `secret "${tokenRef}" could not be resolved`,
-          skipBackoff,
-        );
-      }
-      const apiToken = tokenRes.data.plaintext;
-      if (apiToken === '') {
-        return this.handleError(
-          state,
-          'NO_TOKEN',
-          `secret "${tokenRef}" is empty`,
-          skipBackoff,
-        );
+      if (!sourceRes.ok) {
+        return this.handleError(state, sourceRes.code, sourceRes.message, skipBackoff);
       }
 
-      // Build the client and run the search.
-      const client = this.jiraClientFactory(project, { email, apiToken });
-      const searchRes = await client.search(project.tickets.query);
+      const fetchRes = await sourceRes.client.fetchTickets();
       if (!stillTracked()) {
         return { ok: false, error: { code: 'NETWORK', message: 'poll aborted' } };
       }
-      if (!searchRes.ok) {
-        const code = jiraCodeToPollerCode(searchRes.error.code);
-        // Don't propagate the underlying message verbatim — JiraClient
-        // already sanitizes, but stay defensive: use a fixed message that
-        // includes only the code.
-        return this.handleError(state, code, `Jira search failed: ${code}`, skipBackoff);
+      if (!fetchRes.ok) {
+        return this.handleError(state, fetchRes.code, fetchRes.message, skipBackoff);
       }
 
       // Eligibility filter.
       const processed = new Set(this.runHistory.getProcessed(projectId));
       const running = new Set(this.runHistory.getRunning(projectId));
-      const eligible = searchRes.data.tickets.filter(
+      const eligible = fetchRes.tickets.filter(
         (t) => !processed.has(t.key) && !running.has(t.key),
       );
 
@@ -584,11 +620,12 @@ export class JiraPoller extends EventEmitter {
     }
 
     this.emit('error', evt);
-    // Map back to a JiraResult shape — code is a poller code, but the
-    // returned shape uses Jira's narrower union; pick the closest match.
-    const jiraCode: JiraErrorCode =
-      code === 'NO_TOKEN' || code === 'PROJECT_NOT_FOUND' ? 'NETWORK' : (code as JiraErrorCode);
-    return { ok: false, error: { code: jiraCode, message } };
+    // Map back to a JiraResult-compatible shape — the IPC contract still
+    // names this `JiraResult` to avoid renderer churn. Treat NO_TOKEN /
+    // PROJECT_NOT_FOUND as NETWORK; pass through everything else.
+    const outCode: 'NETWORK' | 'TIMEOUT' | 'AUTH' | 'NOT_FOUND' | 'RATE_LIMITED' | 'SERVER_ERROR' | 'INVALID_RESPONSE' =
+      code === 'NO_TOKEN' || code === 'PROJECT_NOT_FOUND' ? 'NETWORK' : code;
+    return { ok: false, error: { code: outCode, message } };
   }
 
   // -- Typed event listener overloads --------------------------------------
@@ -611,3 +648,11 @@ export class JiraPoller extends EventEmitter {
     return super.emit(event, ...args);
   }
 }
+
+/**
+ * Back-compat alias — old `JiraPoller` import sites keep working without
+ * the rename touching every caller. New code should use `TicketPoller`.
+ */
+export const JiraPoller = TicketPoller;
+export type JiraPoller = TicketPoller;
+export type JiraPollerOptions = TicketPollerOptions;

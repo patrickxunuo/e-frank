@@ -241,8 +241,19 @@ function makeFakeProject(over: Partial<ProjectInstance> = {}): ProjectInstance {
   return {
     id: 'p-1',
     name: 'My Project',
-    repo: { type: 'github', localPath: '/abs/repo', baseBranch: 'main' },
-    tickets: { source: 'jira', query: 'project = ABC', tokenRef: 'jira-default' },
+    repo: {
+      type: 'github',
+      localPath: '/abs/repo',
+      baseBranch: 'main',
+      connectionId: 'conn-gh-1',
+      slug: 'gazhang/repo',
+    },
+    tickets: {
+      source: 'jira',
+      connectionId: 'conn-jr-1',
+      projectKey: 'ABC',
+      query: 'project = ABC',
+    },
     workflow: { mode: 'interactive', branchFormat: 'feature/{ticketKey}-{slug}' },
     createdAt: 1,
     updatedAt: 1,

@@ -145,6 +145,9 @@ function installApi(opts?: {
       update: vi.fn() as unknown as IpcApi['connections']['update'],
       delete: vi.fn() as unknown as IpcApi['connections']['delete'],
       test: vi.fn() as unknown as IpcApi['connections']['test'],
+      listRepos: vi.fn() as unknown as IpcApi['connections']['listRepos'],
+      listJiraProjects: vi.fn() as unknown as IpcApi['connections']['listJiraProjects'],
+      listBranches: vi.fn() as unknown as IpcApi['connections']['listBranches'],
     },
     runs: {
       start: vi.fn() as unknown as IpcApi['runs']['start'],
@@ -160,6 +163,9 @@ function installApi(opts?: {
       // We patch it on the runtime stub via `unknown` cast.
       readLog: readLog,
     } as unknown as IpcApi['runs'],
+    dialog: {
+      selectFolder: vi.fn() as unknown as IpcApi['dialog']['selectFolder'],
+    },
   };
 
   (window as { api?: IpcApi }).api = api;

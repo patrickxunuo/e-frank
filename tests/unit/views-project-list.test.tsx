@@ -22,8 +22,19 @@ function makeProject(id: string, name: string): ProjectInstanceDto {
   return {
     id,
     name,
-    repo: { type: 'github', localPath: '/tmp/' + id, baseBranch: 'main' },
-    tickets: { source: 'jira', query: 'project = ABC' },
+    repo: {
+      type: 'github',
+      localPath: '/tmp/' + id,
+      baseBranch: 'main',
+      connectionId: 'conn-gh-1',
+      slug: 'gazhang/repo',
+    },
+    tickets: {
+      source: 'jira',
+      connectionId: 'conn-jr-1',
+      projectKey: 'ABC',
+      query: 'project = ABC',
+    },
     workflow: { mode: 'interactive', branchFormat: 'feature/{ticketKey}-{slug}' },
     createdAt: 0,
     updatedAt: 0,

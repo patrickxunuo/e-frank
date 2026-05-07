@@ -59,6 +59,15 @@ export interface JiraSelfResponse {
   emailAddress: string;
 }
 
+export interface JiraProjectSummary {
+  /** e.g. 'PROJ' */
+  key: string;
+  /** Human-readable project name. */
+  name: string;
+  /** Cloud-only short type identifier (e.g. 'software'). Optional. */
+  projectTypeKey?: string;
+}
+
 const DEFAULT_FIELDS: ReadonlyArray<string> = [
   'summary',
   'status',
@@ -173,6 +182,38 @@ export class JiraClient {
         }
       }
       return { total, tickets };
+    });
+  }
+
+  /**
+   * GET /rest/api/3/project/search?maxResults=100&orderBy=key — lists the
+   * Jira projects visible to the authenticated user. Single-page MVP (the
+   * AddProject picker only needs the first 100; pagination lands later).
+   */
+  async listProjects(): Promise<JiraResult<JiraProjectSummary[]>> {
+    const url = `${this.host}/rest/api/3/project/search?maxResults=100&orderBy=key`;
+    return this.requestJson<JiraProjectSummary[]>('GET', url, (parsed) => {
+      if (!isPlainObject(parsed)) {
+        return null;
+      }
+      const values = parsed['values'];
+      if (!Array.isArray(values)) {
+        return null;
+      }
+      const out: JiraProjectSummary[] = [];
+      for (const item of values) {
+        if (!isPlainObject(item)) continue;
+        const keyRaw = item['key'];
+        const nameRaw = item['name'];
+        if (typeof keyRaw !== 'string' || typeof nameRaw !== 'string') continue;
+        const summary: JiraProjectSummary = { key: keyRaw, name: nameRaw };
+        const projectTypeKeyRaw = item['projectTypeKey'];
+        if (typeof projectTypeKeyRaw === 'string' && projectTypeKeyRaw !== '') {
+          summary.projectTypeKey = projectTypeKeyRaw;
+        }
+        out.push(summary);
+      }
+      return out;
     });
   }
 
