@@ -311,13 +311,10 @@ function makeFailingGitManager(over: {
   };
 }
 
-function makeFailingPrCreator(result: PrResult<{ url: string; number: number }>): PrCreator {
-  return {
-    async create(_req: CreatePrRequest): Promise<PrResult<{ url: string; number: number }>> {
-      return result;
-    },
-  };
-}
+// `makeFailingPrCreator` was removed — its only consumer was WFR-013, which
+// is now skipped (the runner no longer calls prCreator after #37). The
+// helper would be dead code; the type imports it referenced are still used
+// by the spy harness in WFR-035 (no-git/PR/Jira invariant test).
 
 function makeFailingJiraUpdater(
   result: JiraUpdateResult<{ ticketKey: string }>,
@@ -518,19 +515,17 @@ describe('WorkflowRunner', () => {
       // transition, but this assertion is conservative).
       expect(h.saveSpy).toHaveBeenCalled();
 
-      // The full state pipeline traversed in order. We assert the SET of
-      // state values (not exhaustive ordering) here; ordering is asserted
-      // separately in WFR-024.
+      // The full state pipeline traversed in order. After #37 the runner
+      // is a thin host: only `locking`, `running`, `unlocking`, and the
+      // terminal `done` are entered by the runner itself. The legacy
+      // `preparing | branching | committing | pushing | creatingPr |
+      // updatingTicket` are now driven by phase markers from Claude;
+      // none of those are emitted by `driveClaudeHappyPath` (which just
+      // simulates a clean Claude exit), so they don't appear here.
       const seenStates = new Set(h.stateEvents.map((e) => e.run.state));
       const expected: Run['state'][] = [
         'locking',
-        'preparing',
-        'branching',
         'running',
-        'committing',
-        'pushing',
-        'creatingPr',
-        'updatingTicket',
         'unlocking',
         'done',
       ];
@@ -774,32 +769,13 @@ describe('WorkflowRunner', () => {
   // -------------------------------------------------------------------------
   // WFR-010 — git.prepareRepo fails (PULL_FAILED)
   // -------------------------------------------------------------------------
-  describe('WFR-010 git.prepareRepo fails', () => {
-    it('WFR-010: prepareRepo failure → state=failed, unlocking still runs', async () => {
-      const failingGit = makeFailingGitManager({
-        prepareRepo: {
-          ok: false,
-          error: { code: 'PULL_FAILED', message: 'pull failed' },
-        },
-      });
-      const h = await buildHarness({ gitManager: failingGit });
-      const res = await h.runner.start({
-        projectId: 'p-1',
-        ticketKey: VALID_TICKET,
-      });
-      expect(res.ok).toBe(true);
-
-      const final = await waitForFinal(h);
-      expect(final.state).toBe('failed');
-      expect(final.status).toBe('failed');
-      expect(typeof final.error).toBe('string');
-      expect(final.error).toContain('PULL_FAILED');
-
-      // Cleanup still ran.
-      expect(h.clearRunningSpy).toHaveBeenCalled();
-      const seenStates = new Set(h.stateEvents.map((e) => e.run.state));
-      expect(seenStates.has('unlocking')).toBe(true);
-    });
+  describe('WFR-010 git.prepareRepo fails (superseded by #37)', () => {
+    // Superseded — after the architectural pivot the runner no longer calls
+    // `gitManager.prepareRepo`. Repo preparation (pull, etc.) happens inside
+    // Claude's skill via its own Bash tool. There's no failure path for the
+    // runner to surface here. Kept skipped (rather than deleted) so the WFR
+    // numbering stays stable.
+    it.skip('WFR-010 (superseded): runner no longer calls prepareRepo', () => {});
   });
 
   // -------------------------------------------------------------------------
@@ -845,51 +821,21 @@ describe('WorkflowRunner', () => {
   // -------------------------------------------------------------------------
   // WFR-012 — git.commit fails
   // -------------------------------------------------------------------------
-  describe('WFR-012 git.commit fails', () => {
-    it('WFR-012: commit failure → state=failed; unlocking still runs', async () => {
-      const failingGit = makeFailingGitManager({
-        commit: {
-          ok: false,
-          error: { code: 'COMMIT_FAILED', message: 'no changes to commit' },
-        },
-      });
-      const h = await buildHarness({ gitManager: failingGit });
-      const res = await h.runner.start({
-        projectId: 'p-1',
-        ticketKey: VALID_TICKET,
-      });
-      expect(res.ok).toBe(true);
-
-      void driveClaudeHappyPath(h);
-      const final = await waitForFinal(h);
-      expect(final.state).toBe('failed');
-      const seenStates = new Set(h.stateEvents.map((e) => e.run.state));
-      expect(seenStates.has('unlocking')).toBe(true);
-    });
+  describe('WFR-012 git.commit fails (superseded by #37)', () => {
+    // Superseded — runner no longer commits. Claude's skill runs the commit
+    // via its own Bash tool; commit failure is observable via Claude's exit
+    // code (covered by WFR-011's "non-completed reason" path).
+    it.skip('WFR-012 (superseded): runner no longer calls commit', () => {});
   });
 
   // -------------------------------------------------------------------------
   // WFR-013 — pr.create fails (AUTH)
   // -------------------------------------------------------------------------
-  describe('WFR-013 pr.create fails', () => {
-    it('WFR-013: pr.create AUTH failure → state=failed', async () => {
-      const failingPr = makeFailingPrCreator({
-        ok: false,
-        error: { code: 'AUTH', message: 'token rejected' },
-      });
-      const h = await buildHarness({ prCreator: failingPr });
-      const res = await h.runner.start({
-        projectId: 'p-1',
-        ticketKey: VALID_TICKET,
-      });
-      expect(res.ok).toBe(true);
-
-      void driveClaudeHappyPath(h);
-      const final = await waitForFinal(h);
-      expect(final.state).toBe('failed');
-      const seenStates = new Set(h.stateEvents.map((e) => e.run.state));
-      expect(seenStates.has('unlocking')).toBe(true);
-    });
+  describe('WFR-013 pr.create fails (superseded by #37)', () => {
+    // Superseded — runner no longer opens PRs. Claude's skill calls
+    // `gh pr create` from its Bash tool; PR-creation failure is observable
+    // via Claude's non-zero exit (covered by WFR-011).
+    it.skip('WFR-013 (superseded): runner no longer calls prCreator', () => {});
   });
 
   // -------------------------------------------------------------------------
@@ -1168,6 +1114,240 @@ describe('WorkflowRunner', () => {
   });
 
   // -------------------------------------------------------------------------
+  // WFR-031..035 — phase markers (#37)
+  // -------------------------------------------------------------------------
+  describe('WFR-031 phase marker → state transition', () => {
+    it('WFR-031: a valid phase marker transitions Run.state and pushes a step', async () => {
+      const h = await buildHarness();
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(true);
+
+      await waitForState(h, 'running');
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>\n',
+      );
+      await waitForState(h, 'committing');
+
+      // A second marker advances state again and closes the prior step.
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"pushing"}<<<END_EF_PHASE>>>\n',
+      );
+      await waitForState(h, 'pushing');
+
+      h.fakeClaude.emitExit(0, 'completed');
+      const final = await waitForFinal(h);
+      expect(final.state).toBe('done');
+
+      // Both phase states appear in the steps timeline.
+      const phaseStates = final.steps.map((s) => s.state);
+      expect(phaseStates).toContain('committing');
+      expect(phaseStates).toContain('pushing');
+    });
+  });
+
+  describe('WFR-032 phase marker (unknown phase) ignored', () => {
+    it('WFR-032: unknown phase value is logged + ignored; state does not change', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const h = await buildHarness();
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(true);
+
+      await waitForState(h, 'running');
+      const beforeStep = h.runner.current()?.steps.length ?? 0;
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"frobnicating"}<<<END_EF_PHASE>>>\n',
+      );
+      // Give the parser a tick to dispatch.
+      await new Promise((r) => setTimeout(r, 10));
+
+      const cur = h.runner.current();
+      expect(cur?.state).toBe('running');
+      // No new step was pushed.
+      expect(cur?.steps.length).toBe(beforeStep);
+      // We logged a warn about the unknown phase.
+      expect(warnSpy).toHaveBeenCalled();
+
+      h.fakeClaude.emitExit(0, 'completed');
+      await waitForFinal(h);
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe('WFR-033 phase marker (malformed JSON) ignored', () => {
+    it('WFR-033: malformed JSON is logged + ignored; subsequent valid markers still parse', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const h = await buildHarness();
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(true);
+
+      await waitForState(h, 'running');
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{not valid json}}<<<END_EF_PHASE>>>\n',
+      );
+      await new Promise((r) => setTimeout(r, 10));
+      expect(h.runner.current()?.state).toBe('running');
+
+      // A subsequent VALID marker must still be parsed.
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>\n',
+      );
+      await waitForState(h, 'committing');
+
+      h.fakeClaude.emitExit(0, 'completed');
+      await waitForFinal(h);
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe('WFR-034 approval mid-phase restores phase', () => {
+    it('WFR-034: approval marker during `committing` resumes to `committing`, not `running`', async () => {
+      const h = await buildHarness();
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+
+      await waitForState(h, 'running');
+      // Advance to committing via phase marker.
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>\n',
+      );
+      await waitForState(h, 'committing');
+
+      // Mid-phase, an approval marker arrives → state pauses at
+      // awaitingApproval, then resumes to the prior phase (committing),
+      // NOT to running.
+      h.fakeClaude.emitOutput(
+        '<<<EF_APPROVAL_REQUEST>>>{"plan":"check"}<<<END_EF_APPROVAL_REQUEST>>>\n',
+      );
+      await waitForState(h, 'awaitingApproval');
+      const approveRes = await h.runner.approve({ runId: res.data.run.id });
+      expect(approveRes.ok).toBe(true);
+
+      // After resume, state must return to committing.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(h.runner.current()?.state).toBe('committing');
+
+      h.fakeClaude.emitExit(0, 'completed');
+      await waitForFinal(h);
+    });
+  });
+
+  describe('WFR-034b branching marker carries branchName; creatingPr carries prUrl', () => {
+    it('WFR-034b: payload fields update Run.branchName and Run.prUrl atomically with the state transition', async () => {
+      const h = await buildHarness();
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(true);
+
+      await waitForState(h, 'running');
+      const initialBranch = h.runner.current()?.branchName;
+      // The runner's pre-Claude derivation is non-empty.
+      expect(typeof initialBranch).toBe('string');
+
+      // Branching marker carries the actual branch name. Runner adopts it.
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"branching","branchName":"feat/from-claude"}<<<END_EF_PHASE>>>\n',
+      );
+      await waitForState(h, 'branching');
+      expect(h.runner.current()?.branchName).toBe('feat/from-claude');
+
+      // creatingPr marker carries the PR URL.
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"creatingPr","prUrl":"https://github.com/o/r/pull/42"}<<<END_EF_PHASE>>>\n',
+      );
+      await waitForState(h, 'creatingPr');
+      expect(h.runner.current()?.prUrl).toBe('https://github.com/o/r/pull/42');
+
+      h.fakeClaude.emitExit(0, 'completed');
+      const final = await waitForFinal(h);
+      expect(final.branchName).toBe('feat/from-claude');
+      expect(final.prUrl).toBe('https://github.com/o/r/pull/42');
+    });
+  });
+
+  describe('WFR-035 no git/PR/Jira calls', () => {
+    it('WFR-035: happy path makes ZERO calls to gitManager / prCreator / jiraUpdater', async () => {
+      // Spy on every method that the runner used to call directly.
+      const prepareSpy = vi.fn();
+      const branchSpy = vi.fn();
+      const commitSpy = vi.fn();
+      const pushSpy = vi.fn();
+      const prSpy = vi.fn();
+      const jiraSpy = vi.fn();
+
+      const trackingGit: GitManager = {
+        async prepareRepo(req: PrepareRepoRequest): Promise<GitResult<{ baseSha: string }>> {
+          prepareSpy(req);
+          return { ok: true, data: { baseSha: 'deadbeef' } };
+        },
+        async createBranch(req: CreateBranchRequest): Promise<GitResult<{ branchName: string }>> {
+          branchSpy(req);
+          return { ok: true, data: { branchName: req.branchName } };
+        },
+        async commit(req: CommitRequest): Promise<GitResult<{ sha: string }>> {
+          commitSpy(req);
+          return { ok: true, data: { sha: 'cafebabe' } };
+        },
+        async push(req: PushRequest): Promise<GitResult<{ remoteUrl?: string }>> {
+          pushSpy(req);
+          return { ok: true, data: {} };
+        },
+      };
+      const trackingPr: PrCreator = {
+        async create(
+          req: CreatePrRequest,
+        ): Promise<PrResult<{ url: string; number: number }>> {
+          prSpy(req);
+          return { ok: true, data: { url: 'https://example.com/pr/1', number: 1 } };
+        },
+      };
+      const trackingJira: JiraUpdater = {
+        async update(req: UpdateTicketRequest): Promise<JiraUpdateResult<{ ticketKey: string }>> {
+          jiraSpy(req);
+          return { ok: true, data: { ticketKey: req.ticketKey } };
+        },
+      };
+
+      const h = await buildHarness({
+        gitManager: trackingGit,
+        prCreator: trackingPr,
+        jiraUpdater: trackingJira,
+      });
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(true);
+      void driveClaudeHappyPath(h);
+      const final = await waitForFinal(h);
+      expect(final.state).toBe('done');
+
+      // Crucial #37 invariant: the runner MUST NOT call any of these.
+      expect(prepareSpy).not.toHaveBeenCalled();
+      expect(branchSpy).not.toHaveBeenCalled();
+      expect(commitSpy).not.toHaveBeenCalled();
+      expect(pushSpy).not.toHaveBeenCalled();
+      expect(prSpy).not.toHaveBeenCalled();
+      expect(jiraSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // WFR-022 — current() during run
   // -------------------------------------------------------------------------
   describe('WFR-022 current() during run', () => {
@@ -1216,26 +1396,20 @@ describe('WorkflowRunner', () => {
       await waitForFinal(h);
 
       const states = h.stateEvents.map((e) => e.run.state);
-      // Filter to the canonical pipeline states (so unrelated 'idle' /
-      // re-entered 'running' bookkeeping doesn't break the assertion).
+      // After #37 the runner-driven pipeline is just `locking → running →
+      // unlocking → done`. Phase markers (committing / pushing / creatingPr /
+      // updatingTicket) are tested separately by WFR-032; this test asserts
+      // that the *runner-driven* baseline still goes in order.
       const canonical: Run['state'][] = [
         'locking',
-        'preparing',
-        'branching',
         'running',
-        'committing',
-        'pushing',
-        'creatingPr',
-        'updatingTicket',
         'unlocking',
         'done',
       ];
       const filtered = states.filter((s) => canonical.includes(s));
-      // Each canonical state must appear at least once.
       for (const s of canonical) {
         expect(filtered).toContain(s);
       }
-      // And the FIRST occurrences must be in the canonical order.
       const firstIndices = canonical.map((s) => filtered.indexOf(s));
       for (let i = 1; i < firstIndices.length; i++) {
         expect(firstIndices[i]!).toBeGreaterThan(firstIndices[i - 1]!);
@@ -1328,25 +1502,11 @@ describe('WorkflowRunner', () => {
   // WFR-028 — branchName uses {ticketKey} and {slug}
   // -------------------------------------------------------------------------
   describe('WFR-028 branchName interpolation', () => {
-    it('WFR-028: branchName uses {ticketKey} + {slug} from project workflow', async () => {
-      // Spy on createBranch to see the actual branchName.
-      const created: string[] = [];
-      const spyGit: GitManager = {
-        async prepareRepo(req) {
-          return new StubGitManager().prepareRepo(req);
-        },
-        async createBranch(req) {
-          created.push(req.branchName);
-          return { ok: true, data: { branchName: req.branchName } };
-        },
-        async commit(req) {
-          return new StubGitManager().commit(req);
-        },
-        async push(req) {
-          return new StubGitManager().push(req);
-        },
-      };
-
+    it('WFR-028: branchName interpolates {ticketKey} + {slug} on the Run snapshot', async () => {
+      // After #37 the runner doesn't call createBranch — Claude does. We
+      // assert the derivation by reading `Run.branchName` on the active
+      // run; the same value is what Claude's skill receives via the
+      // initial `start()` snapshot and uses for `git checkout -b`.
       const h = await buildHarness({
         project: makeFakeProject({
           workflow: {
@@ -1354,26 +1514,25 @@ describe('WorkflowRunner', () => {
             branchFormat: 'feat/{ticketKey}-{slug}',
           },
         }),
-        gitManager: spyGit,
       });
       const res = await h.runner.start({
         projectId: 'p-1',
         ticketKey: VALID_TICKET,
       });
       expect(res.ok).toBe(true);
+      if (!res.ok) return;
 
-      void driveClaudeHappyPath(h);
-      const final = await waitForFinal(h);
-      expect(final.state).toBe('done');
-
-      expect(created.length).toBeGreaterThanOrEqual(1);
-      const bn = created[0]!;
+      const bn = res.data.run.branchName;
       // Must contain the ticket key (literal substitution).
       expect(bn).toContain('ABC-1');
       // And must NOT still contain the literal placeholder text.
       expect(bn).not.toContain('{ticketKey}');
       expect(bn).not.toContain('{slug}');
-      // The branchName persisted on the Run reflects the same value.
+
+      // Same value persists on the final Run snapshot.
+      void driveClaudeHappyPath(h);
+      const final = await waitForFinal(h);
+      expect(final.state).toBe('done');
       expect(final.branchName).toBe(bn);
     });
   });
@@ -1381,31 +1540,12 @@ describe('WorkflowRunner', () => {
   // -------------------------------------------------------------------------
   // WFR-029 — PR title format
   // -------------------------------------------------------------------------
-  describe('WFR-029 PR title format', () => {
-    it('WFR-029: PR title === "feat(${ticketKey}): ${ticketSummary}"', async () => {
-      const captured: CreatePrRequest[] = [];
-      const capturePr: PrCreator = {
-        async create(req) {
-          captured.push(req);
-          return new StubPrCreator().create(req);
-        },
-      };
-
-      const h = await buildHarness({ prCreator: capturePr });
-      const res = await h.runner.start({
-        projectId: 'p-1',
-        ticketKey: VALID_TICKET,
-      });
-      expect(res.ok).toBe(true);
-
-      void driveClaudeHappyPath(h);
-      await waitForFinal(h);
-
-      expect(captured).toHaveLength(1);
-      const pr = captured[0]!;
-      // Title MUST match `feat(<ticketKey>): <ticketSummary>` exactly.
-      expect(pr.title).toMatch(/^feat\(ABC-1\):\s+/);
-    });
+  describe('WFR-029 PR title format (superseded by #37)', () => {
+    // Superseded — runner no longer constructs PR titles. Claude's skill
+    // composes the title from the Conventional-Commits format documented
+    // in `.claude/skills/ef-feature/SKILL.md` (Phase 7.3) and runs
+    // `gh pr create` itself.
+    it.skip('WFR-029 (superseded): runner no longer calls prCreator', () => {});
   });
 
   // -------------------------------------------------------------------------

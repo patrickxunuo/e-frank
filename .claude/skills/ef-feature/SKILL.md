@@ -19,7 +19,27 @@ The only allowed stops are hard errors:
 - Memory bank initialization required (Phase 2.1)
 - Review agent verdict requires fixes (Phase 6.2 — fix and re-run, do not ask)
 
-Everything else flows: fetch → context → plan → implement → test → review → completion.
+Everything else flows: fetch → context → plan → implement → test → review → ship.
+
+## Phase Markers (e-frank integration)
+
+When this skill runs inside e-frank's `WorkflowRunner`, the runner watches Claude's stdout for **phase markers** — single-line tags that drive the UI timeline. Emit one with a plain `echo` at the start of each runner-relevant phase:
+
+```bash
+echo '<<<EF_PHASE>>>{"phase":"branching"}<<<END_EF_PHASE>>>'
+```
+
+The marker fits on one line (no embedded newlines). Valid `phase` values:
+
+- `branching` — feature branch is being created (Phase 0). May include a `branchName` field carrying the actual branch — the runner uses it to update `Run.branchName` so the UI shows the real name.
+- `committing` — staging + git commit in progress (Phase 7.1)
+- `pushing` — pushing branch to remote (Phase 7.2)
+- `creatingPr` — opening the pull request (Phase 7.3). May include a `prUrl` field — the runner stores it on `Run.prUrl`.
+- `updatingTicket` — updating the ticket source (Phase 7.4)
+
+Markers are best-effort. If Claude isn't running inside e-frank, the `echo` lines are harmless. The marker contract is documented in `memory-bank/systemPatterns.md`.
+
+The existing approval marker (`<<<EF_APPROVAL_REQUEST>>>...<<<END_EF_APPROVAL_REQUEST>>>`) is unchanged — phase markers are additive.
 
 ## Active Task Tracking
 
@@ -61,7 +81,9 @@ Format:
 
 > **Update `activeTask.md`**: Current phase = Phase 0
 
-Before anything else, create a clean feature branch from `main`.
+Create a clean feature branch from `main`, then emit the phase marker
+**including the actual branch name** so e-frank's UI updates from any
+pre-Claude placeholder to the real name.
 
 ### 0.1: Checkout Main
 
@@ -72,10 +94,20 @@ git pull origin main
 
 ### 0.2: Create Feature Branch
 
-Create a new branch with the naming convention `feat/{short-description}` (kebab-case, no issue number prefix):
+Branch naming convention: `feat/{ticketKey}-{slug}` where `slug` is the
+first 6 words of the issue title (lowercased, alphanumeric+hyphen,
+joined with `-`). This matches the format e-frank pre-derives so the
+runner-side and Claude-side names converge.
 
 ```bash
-git checkout -b feat/{short-description}
+git checkout -b feat/{ticketKey}-{slug}
+```
+
+After creating the branch, emit the phase marker with the actual branch
+name (replace `<actual-branch>` with the real value):
+
+```bash
+echo '<<<EF_PHASE>>>{"phase":"branching","branchName":"<actual-branch>"}<<<END_EF_PHASE>>>'
 ```
 
 Examples: `feat/html-preview`, `feat/response-body-validation`, `feat/workspace-roles`
@@ -88,13 +120,22 @@ Examples: `feat/html-preview`, `feat/response-body-validation`, `feat/workspace-
 
 > **Update `activeTask.md`**: Current phase = Phase 1
 
-### 1.1: Parse the Issue URL
+### 1.1: Parse the Issue Reference
 
-Extract `owner`, `repo`, and `issue number` from the provided URL (`$ARGUMENTS`).
+`$ARGUMENTS` is one of:
 
-Expected format: `https://github.com/{owner}/{repo}/issues/{number}`
+- **A full GitHub issue URL** — `https://github.com/{owner}/{repo}/issues/{number}`. Parse owner / repo / number from the URL.
+- **A bare ticket key** — `GH-31`, `ABC-123`, etc. This is what e-frank passes when the skill is launched as part of a workflow run. Resolve owner / repo from the current git remote:
 
-If the argument is not a valid GitHub issue URL, STOP and ask the developer for the correct URL.
+  ```bash
+  git remote get-url origin
+  # https://github.com/owner/repo.git → owner/repo
+  # git@github.com:owner/repo.git → owner/repo
+  ```
+
+  The number is the digit portion of the ticket key (`GH-31` → `31`, `ABC-123` → `123`).
+
+If the argument matches neither shape, STOP and ask the developer for a valid issue URL or ticket key.
 
 ### 1.2: Fetch Issue Details
 
@@ -346,6 +387,87 @@ When the review agent returns:
 
 ---
 
+## Phase 7: Ship
+
+> **Update `activeTask.md`**: Current phase = Phase 7
+
+After review is `Ready for PR`, ship it. Each sub-phase emits its phase marker first so e-frank's UI timeline reflects the live progress.
+
+### 7.1: Commit
+
+```bash
+echo '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>'
+```
+
+Stage all changes, then commit with a Conventional-Commits-style message keyed to the issue:
+
+```bash
+git add -A
+git commit -m "feat({ticketKey}): {short summary derived from issue title}
+
+Closes #{number}
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+If the working tree is clean (nothing to commit) something has gone wrong — STOP and report back to the developer rather than push an empty commit.
+
+### 7.2: Push
+
+```bash
+echo '<<<EF_PHASE>>>{"phase":"pushing"}<<<END_EF_PHASE>>>'
+git push -u origin HEAD
+```
+
+### 7.3: Open PR
+
+Use `gh` to open the pull request. Title: same Conventional-Commits format. Body: short summary + test plan + closing keyword.
+
+```bash
+PR_URL=$(gh pr create --title "{commit subject}" --body "$(cat <<'EOF'
+## Summary
+{1-3 bullets of what changed and why}
+
+## Test plan
+- [ ] {bullet from acceptance spec}
+- [ ] {bullet from acceptance spec}
+
+Closes #{number}
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)")
+```
+
+Then emit the phase marker carrying the URL so e-frank's UI links it on the run row:
+
+```bash
+echo "<<<EF_PHASE>>>{\"phase\":\"creatingPr\",\"prUrl\":\"$PR_URL\"}<<<END_EF_PHASE>>>"
+```
+
+Use the captured `$PR_URL` in the final summary AND in the ticket update.
+
+### 7.4: Update Ticket
+
+```bash
+echo '<<<EF_PHASE>>>{"phase":"updatingTicket"}<<<END_EF_PHASE>>>'
+```
+
+For Jira tickets, transition to "In Review" (or the project's equivalent) and post the PR URL as a comment:
+
+```bash
+# Jira (if connected): transition + comment
+# GitHub Issues (if the ticket source is GH): just leave the closing keyword
+# in the PR body — GitHub auto-links + auto-closes on merge.
+```
+
+If the ticket source is GitHub Issues and the PR body already contains `Closes #{number}`, no extra ticket update is needed — GitHub handles the link.
+
+If the update fails, log it and continue. Ticket-update failure is **non-fatal** — the run still succeeds because the code is shipped.
+
+---
+
 ## Completion
 
 > **Delete `memory-bank/activeTask.md`** — the workflow is done.
@@ -365,6 +487,7 @@ Present the complete feature summary:
 - Features implemented: X
 - Files created/modified: [list]
 - Branch: [branch name]
+- PR: [URL from Phase 7.3]
 
 ### Test Coverage
 - API tests: X/X PASS
@@ -374,9 +497,4 @@ Present the complete feature summary:
 ### Review
 - Verdict: [Ready for PR / Fixed after review]
 - Issues found: [count or none]
-
-### Next Steps
-1. **Commit** — review staged changes and commit
-2. **PR** — create a pull request linking to issue #{number}
-3. **Worktree cleanup** — after merge: `git worktree remove ../[worktree-name]`
 ```
