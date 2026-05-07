@@ -21,11 +21,16 @@ The only allowed stops are hard errors:
 
 Everything else flows: fetch → context → plan → implement → test → review → ship.
 
-### No interactive prompts
+### Interactive input — what works and what doesn't
 
-When this skill runs inside e-frank's WorkflowRunner, **stdin is not a terminal** — there is no human to type a follow-up answer. Asking a question and waiting for input causes Claude to hang for ~3 seconds, see no stdin, and proceed without it (or print an apology and give up). On any hard error, **print a clear one-line error and exit** instead of asking. The runner surfaces the printed error in the UI; the developer fixes the input and re-runs.
+e-frank's execution view has a free-text textarea wired to Claude's stdin (`api.claude.write`). So **mid-run, you can ask the user a question and they can answer** — the channel exists. What you must NOT do is ask a question during the **first ~3 seconds of the run**: at that moment the user is still on the project page, hasn't navigated to the execution view yet, and Claude's CLI gives up on stdin after a 3-second silence (printing `Warning: no stdin received in 3s, proceeding without it`).
 
-The plan-review approval marker (`<<<EF_APPROVAL_REQUEST>>>`) is the *only* sanctioned interactive checkpoint — e-frank's UI handles it via a dedicated stdin write on `approve\n`. Don't invent other ones.
+So the rule is:
+
+- **Startup errors** (Phases 0–1): the input was determined at spawn time. If it's malformed or missing, *fail loud* with a printed error and exit. Don't ask — the user is not there to answer yet, and the error needs to be fixed in the developer's config, not typed into a prompt.
+- **Mid-run questions** (Phases 4+): asking is fine — the user has likely opened the execution view and can reply via the textarea. Prefer structured checkpoints (the approval marker) over free-text questions when the decision is bounded.
+
+The plan-review approval marker (`<<<EF_APPROVAL_REQUEST>>>`) is the structured form — e-frank's UI handles it via a dedicated stdin write on `approve\n`. Use it whenever the question is "approve / reject / modify."
 
 ## Phase Markers (e-frank integration)
 
