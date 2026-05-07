@@ -60,6 +60,18 @@
   pointer-events: none;
 }
 
+/*
+ * Trailing slot: an inline action element (typically a small Button) that
+ * sits inside the input shell, hugging the right edge. Used for Browse… on
+ * file/folder pickers, copy-to-clipboard, etc.
+ */
+.trailing {
+  display: inline-flex;
+  align-items: center;
+  padding-right: 4px;
+  flex: 0 0 auto;
+}
+
 .input {
   flex: 1 1 auto;
   min-width: 0;

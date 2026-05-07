@@ -98,3 +98,33 @@
   flex: 1 1 auto;
   min-width: 0;
 }
+
+/*
+ * Tickets section, github-issues branch: an info note that the issues are
+ * inherited from the source repo, plus the optional labels input below.
+ */
+.inheritNote {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--border-default);
+  background: var(--surface-overlay-subtle);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.repoSlugInline {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.cellPrimary {
+  color: var(--text-primary);
+}
+
+.cellTertiary {
+  color: var(--text-tertiary);
+}

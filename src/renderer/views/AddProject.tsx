@@ -144,20 +144,11 @@ export function AddProject({ onClose, onCreated, editing }: AddProjectProps): JS
   const ticketsConnectionId =
     form.ticketsConnectionId === '' ? null : form.ticketsConnectionId;
   const repoSlug = form.repoSlug === '' ? null : form.repoSlug;
-  const ticketsRepoConnectionId =
-    form.ticketsSource === 'github-issues' && form.ticketsConnectionId !== ''
-      ? form.ticketsConnectionId
-      : null;
-
   const repoResources = useConnectionRepos(repoConnectionId);
   const branchResources = useConnectionBranches(repoConnectionId, repoSlug);
   const jiraResources = useConnectionJiraProjects(
     form.ticketsSource === 'jira' ? ticketsConnectionId : null,
   );
-  // Tickets-side repo picker (github-issues source) reuses the listRepos
-  // hook against the tickets connection. Independent cache key from the
-  // source-repo picker because the connectionId may differ.
-  const ticketsRepoResources = useConnectionRepos(ticketsRepoConnectionId);
 
   const githubConnections = useMemo(
     () => connectionsState.connections.filter((c) => c.provider === 'github'),
@@ -253,23 +244,36 @@ export function AddProject({ onClose, onCreated, editing }: AddProjectProps): JS
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.repoSlug, repoResources.data]);
 
-  // Defensive prefill: when the user has source='github-issues' and a source
-  // repo is picked but tickets-repo-slug is empty, default it to the source
-  // repo. Belt-and-suspenders alongside `handleTicketsSourceChange`'s seed —
-  // covers the case where the user picks the source repo AFTER switching
-  // tickets source, or where another handler clears ticketsRepoSlug.
+  // For source='github-issues', the tickets ARE the source repo's issues —
+  // mirror repoConnectionId / repoSlug onto the tickets fields whenever the
+  // source side changes. The user doesn't pick a separate connection or
+  // repo for github-issues; that would just be the same selection twice.
+  // (For separate-issues-repo cases, the project schema still allows
+  // distinct values; we just don't expose the picker.)
   useEffect(() => {
     if (form.ticketsSource !== 'github-issues') return;
-    if (form.repoSlug === '') return;
-    if (form.ticketsRepoSlug !== '') return;
+    if (
+      form.ticketsConnectionId === form.repoConnectionId &&
+      form.ticketsRepoSlug === form.repoSlug
+    ) {
+      return;
+    }
     setForm((prev) =>
-      prev.ticketsSource === 'github-issues' &&
-      prev.ticketsRepoSlug === '' &&
-      prev.repoSlug !== ''
-        ? { ...prev, ticketsRepoSlug: prev.repoSlug }
+      prev.ticketsSource === 'github-issues'
+        ? {
+            ...prev,
+            ticketsConnectionId: prev.repoConnectionId,
+            ticketsRepoSlug: prev.repoSlug,
+          }
         : prev,
     );
-  }, [form.ticketsSource, form.repoSlug, form.ticketsRepoSlug]);
+  }, [
+    form.ticketsSource,
+    form.repoConnectionId,
+    form.repoSlug,
+    form.ticketsConnectionId,
+    form.ticketsRepoSlug,
+  ]);
 
   const handleTicketsSourceChange = (next: string): void => {
     if (next !== 'jira' && next !== 'github-issues') return;
@@ -277,14 +281,14 @@ export function AddProject({ onClose, onCreated, editing }: AddProjectProps): JS
       const fresh: FormState = {
         ...prev,
         ticketsSource: next as TicketsSource,
-        // Switching providers means the connection picker has to go back
-        // to empty — connections aren't shared across providers.
-        ticketsConnectionId: '',
         ticketsProjectKey: '',
         ticketLabels: '',
         ticketQuery: '',
-        // For github-issues, default the tickets repo to the source repo
-        // when one's already picked; user can override via the picker.
+        // For github-issues, the tickets connection + repo are the SAME as
+        // the source's — no separate picker. For jira, reset both since the
+        // jira connection picker is separate.
+        ticketsConnectionId:
+          next === 'github-issues' ? prev.repoConnectionId : '',
         ticketsRepoSlug: next === 'github-issues' ? prev.repoSlug : '',
       };
       return fresh;
@@ -476,24 +480,6 @@ export function AddProject({ onClose, onCreated, editing }: AddProjectProps): JS
     return opts;
   }, [jiraResources.data, form.ticketsProjectKey]);
 
-  const ticketsRepoDropdownOptions: DropdownOption[] = useMemo(() => {
-    const opts: DropdownOption[] = ticketsRepoResources.data.map((r) => ({
-      value: r.slug,
-      label: r.slug,
-    }));
-    // The hidden <select> inside Dropdown falls back to '' if `value` isn't
-    // in the rendered options. Pre-pend a synthetic option for the current
-    // form value so the value sticks while the listRepos IPC is in flight
-    // OR if the connection lost access to that specific repo.
-    if (
-      form.ticketsRepoSlug !== '' &&
-      !opts.some((o) => o.value === form.ticketsRepoSlug)
-    ) {
-      opts.unshift({ value: form.ticketsRepoSlug, label: form.ticketsRepoSlug });
-    }
-    return opts;
-  }, [ticketsRepoResources.data, form.ticketsRepoSlug]);
-
   // Pre-fill on `editing` change (rare, but keeps the form coherent if a
   // parent ever swaps which project is being edited without unmounting).
   useEffect(() => {
@@ -659,32 +645,32 @@ export function AddProject({ onClose, onCreated, editing }: AddProjectProps): JS
                 name="repoSlug"
               />
               <div className={styles.grid2}>
-                <div className={styles.repoPathRow}>
-                  <Input
-                    label="Repository Path"
-                    required
-                    value={form.repoLocalPath}
-                    onChange={(e) => set('repoLocalPath', e.target.value)}
-                    placeholder="C:\\Users\\you\\code\\frontend-app"
-                    mono
-                    leadingIcon={<IconFolder />}
-                    hint="Absolute path to the local clone."
-                    error={fieldErrors.get('repo.localPath')}
-                    data-testid="field-repo-local-path"
-                    name="repoLocalPath"
-                  />
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    type="button"
-                    onClick={() => {
-                      void handleBrowseRepoFolder();
-                    }}
-                    data-testid="field-repo-local-path-browse"
-                  >
-                    Browse…
-                  </Button>
-                </div>
+                <Input
+                  label="Repository Path"
+                  required
+                  value={form.repoLocalPath}
+                  onChange={(e) => set('repoLocalPath', e.target.value)}
+                  placeholder="C:\\Users\\you\\code\\frontend-app"
+                  mono
+                  leadingIcon={<IconFolder />}
+                  hint="Absolute path to the local clone."
+                  error={fieldErrors.get('repo.localPath')}
+                  data-testid="field-repo-local-path"
+                  name="repoLocalPath"
+                  trailing={
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      type="button"
+                      onClick={() => {
+                        void handleBrowseRepoFolder();
+                      }}
+                      data-testid="field-repo-local-path-browse"
+                    >
+                      Browse…
+                    </Button>
+                  }
+                />
                 <div>
                   <div className={styles.fieldHeaderRow}>
                     <span className={styles.miniLabel}>Base Branch</span>
@@ -751,47 +737,29 @@ export function AddProject({ onClose, onCreated, editing }: AddProjectProps): JS
             name="ticketsSource"
           />
 
-          {ticketsConnectionList.length === 0 ? (
+          {form.ticketsSource === 'jira' && ticketsConnectionList.length === 0 ? (
             <EmptyState
               icon={<IconKey size={18} />}
-              title={
-                form.ticketsSource === 'github-issues'
-                  ? 'No GitHub connections yet'
-                  : 'No Jira connections yet'
-              }
-              description={
-                form.ticketsSource === 'github-issues'
-                  ? 'Add a GitHub connection to pull issues from.'
-                  : 'Add a Jira connection to pick a project.'
-              }
+              title="No Jira connections yet"
+              description="Add a Jira connection to pick a project."
               action={
                 <Button
                   variant="primary"
                   size="sm"
                   type="button"
                   leadingIcon={<IconPlus size={14} />}
-                  onClick={() =>
-                    setAddConnectionFor(
-                      form.ticketsSource === 'github-issues' ? 'github' : 'jira',
-                    )
-                  }
+                  onClick={() => setAddConnectionFor('jira')}
                   data-testid="add-project-tickets-empty-cta"
                 >
-                  {form.ticketsSource === 'github-issues'
-                    ? 'Add GitHub Connection'
-                    : 'Add Jira Connection'}
+                  Add Jira Connection
                 </Button>
               }
               data-testid="add-project-tickets-empty"
             />
-          ) : (
+          ) : form.ticketsSource === 'jira' ? (
             <>
               <Dropdown
-                label={
-                  form.ticketsSource === 'github-issues'
-                    ? 'GitHub Connection'
-                    : 'Jira Connection'
-                }
+                label="Jira Connection"
                 required
                 value={form.ticketsConnectionId}
                 onChange={handleTicketsConnectionChange}
@@ -863,49 +831,29 @@ export function AddProject({ onClose, onCreated, editing }: AddProjectProps): JS
                     name="ticketQuery"
                   />
                 </>
+              ) : null}
+            </>
+          ) : (
+            // GitHub Issues — connection + repo are inherited from the
+            // project's source repo. No separate pickers; just an info
+            // note + an optional label filter.
+            <div
+              className={styles.inheritNote}
+              data-testid="tickets-inherit-note"
+            >
+              {form.repoSlug === '' ? (
+                <span className={styles.cellTertiary}>
+                  Pick a source repository above first — issues are pulled from
+                  it.
+                </span>
               ) : (
                 <>
-                  <div className={styles.fieldHeaderRow}>
-                    <span className={styles.miniLabel}>Repository</span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      type="button"
-                      leadingIcon={<IconRefresh size={12} />}
-                      onClick={() => {
-                        void ticketsRepoResources.refresh();
-                      }}
-                      disabled={
-                        form.ticketsConnectionId === '' ||
-                        ticketsRepoResources.loading
-                      }
-                      data-testid="add-project-tickets-repo-refresh"
-                    >
-                      Refresh
-                    </Button>
-                  </div>
-                  <Dropdown
-                    value={form.ticketsRepoSlug}
-                    onChange={(value) => set('ticketsRepoSlug', value)}
-                    options={ticketsRepoDropdownOptions}
-                    searchable
-                    disabled={form.ticketsConnectionId === ''}
-                    placeholder={
-                      form.ticketsConnectionId === ''
-                        ? 'Pick a connection first'
-                        : ticketsRepoResources.loading
-                          ? 'Loading repositories…'
-                          : ticketsRepoResources.data.length === 0
-                            ? 'No repositories visible to this token'
-                            : 'Pick a repository…'
-                    }
-                    error={
-                      fieldErrors.get('tickets.repoSlug') ??
-                      (ticketsRepoResources.error ?? undefined)
-                    }
-                    data-testid="field-tickets-repo-slug"
-                    name="ticketsRepoSlug"
-                  />
+                  <span className={styles.cellPrimary}>
+                    Issues will be pulled from{' '}
+                    <strong className={styles.repoSlugInline}>
+                      {form.repoSlug}
+                    </strong>
+                  </span>
                   <Input
                     label="Labels"
                     value={form.ticketLabels}
@@ -919,7 +867,7 @@ export function AddProject({ onClose, onCreated, editing }: AddProjectProps): JS
                   />
                 </>
               )}
-            </>
+            </div>
           )}
         </FormSection>
 

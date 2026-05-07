@@ -806,7 +806,11 @@ describe('<AddProject /> — ADD-PROJ', () => {
       expect(el.tagName.toLowerCase()).toBe('select');
     });
 
-    it('GH-ISSUES-VIEW-002: picking github-issues source filters connection picker to provider==="github"', async () => {
+    it('GH-ISSUES-VIEW-002: picking github-issues source hides the tickets connection picker (inherited from source)', async () => {
+      // For github-issues, the tickets connection + repo are inherited from
+      // the source repo's selection. There's no separate connection picker
+      // and no separate repo picker — just an inheritance info note + the
+      // optional labels filter.
       installApi();
       render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
 
@@ -814,30 +818,24 @@ describe('<AddProject /> — ADD-PROJ', () => {
         expect(screen.queryByTestId('field-tickets-source')).toBeInTheDocument();
       });
 
-      // Default source is 'jira'. Switch to github-issues.
       fireEvent.change(screen.getByTestId('field-tickets-source'), {
         target: { value: 'github-issues' },
       });
 
-      // Tickets connection picker now has only github-provider connections
-      // available. We assert by attempting to set the Jira connection id —
-      // the underlying <select> won't accept a value not in <options>, so
-      // the rendered value should NOT match jiraConn.id.
       await waitFor(() => {
-        const conn = screen.getByTestId(
-          'field-tickets-connection',
-        ) as HTMLSelectElement;
-        const opts = Array.from(conn.options).map((o) => o.value);
-        expect(opts).toContain(ghConn.id);
-        expect(opts).not.toContain(jiraConn.id);
+        expect(screen.queryByTestId('tickets-inherit-note')).toBeInTheDocument();
       });
+      // The separate connection / repo pickers should NOT exist when
+      // source === 'github-issues'.
+      expect(screen.queryByTestId('field-tickets-connection')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('field-tickets-repo-slug')).not.toBeInTheDocument();
     });
 
-    it('GH-ISSUES-VIEW-003: github-issues source shows repo picker pre-filled with source repo slug', async () => {
+    it('GH-ISSUES-VIEW-003: github-issues source displays inherited repo slug from the source side', async () => {
       installApi();
       render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
 
-      // Pick the source repo first so the source slug is known.
+      // Pick the source repo first.
       await waitFor(() => {
         expect(screen.queryByTestId('field-repo-connection')).toBeInTheDocument();
       });
@@ -851,32 +849,14 @@ describe('<AddProject /> — ADD-PROJ', () => {
         target: { value: 'gazhang/frontend-app' },
       });
 
-      // Switch tickets source to github-issues.
-      await waitFor(() => {
-        expect(screen.queryByTestId('field-tickets-source')).toBeInTheDocument();
-      });
       fireEvent.change(screen.getByTestId('field-tickets-source'), {
         target: { value: 'github-issues' },
       });
 
-      // Pick the github connection on the tickets side.
+      // The inherit-note shows the source repo slug as the issues source.
       await waitFor(() => {
-        const conn = screen.getByTestId(
-          'field-tickets-connection',
-        ) as HTMLSelectElement;
-        // Pre-selected to the only available github connection OR user picks.
-        if (conn.value !== ghConn.id) {
-          fireEvent.change(conn, { target: { value: ghConn.id } });
-        }
-      });
-
-      // The new picker — `field-tickets-repo-slug` — appears, and its value
-      // pre-fills with the source repo's slug.
-      await waitFor(() => {
-        const el = screen.getByTestId(
-          'field-tickets-repo-slug',
-        ) as HTMLSelectElement;
-        expect(el.value).toBe('gazhang/frontend-app');
+        const note = screen.getByTestId('tickets-inherit-note');
+        expect(note.textContent ?? '').toContain('gazhang/frontend-app');
       });
     });
 
@@ -909,25 +889,15 @@ describe('<AddProject /> — ADD-PROJ', () => {
         target: { value: 'main' },
       });
 
-      // Switch tickets source to github-issues.
+      // Switch tickets source to github-issues. Connection + repo are
+      // inherited from the source side automatically via the mirroring
+      // effect; no separate pickers to drive.
       fireEvent.change(screen.getByTestId('field-tickets-source'), {
         target: { value: 'github-issues' },
       });
 
-      // Pick the GH tickets connection (same connection as source).
       await waitFor(() => {
-        expect(screen.queryByTestId('field-tickets-connection')).toBeInTheDocument();
-      });
-      fireEvent.change(screen.getByTestId('field-tickets-connection'), {
-        target: { value: ghConn.id },
-      });
-
-      // Repo slug for tickets — pre-filled but we set it explicitly.
-      await waitFor(() => {
-        expect(screen.queryByTestId('field-tickets-repo-slug')).toBeInTheDocument();
-      });
-      fireEvent.change(screen.getByTestId('field-tickets-repo-slug'), {
-        target: { value: 'gazhang/frontend-app' },
+        expect(screen.queryByTestId('tickets-inherit-note')).toBeInTheDocument();
       });
 
       // Optional labels.
