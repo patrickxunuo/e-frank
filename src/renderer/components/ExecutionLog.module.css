@@ -141,6 +141,20 @@
   outline-offset: 2px;
 }
 
+/*
+ * Spacer variant: rendered in place of the chevron-button when a finished
+ * step has no captured output (so the row stays aligned with expandable
+ * peers but offers no expand affordance).
+ */
+.toggleDisabled {
+  cursor: default;
+  pointer-events: none;
+}
+
+.toggleDisabled:hover {
+  background: transparent;
+}
+
 .chevron {
   display: inline-block;
   transition: transform var(--duration-fast) var(--ease-out);

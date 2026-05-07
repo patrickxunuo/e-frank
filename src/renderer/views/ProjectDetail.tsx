@@ -84,11 +84,20 @@ const RUN_STATE_LABELS: Record<RunState, string> = {
  * position so the bar advances monotonically. `awaitingApproval` is a side
  * trip from `running`, so we collapse it to running's slot.
  */
+/**
+ * After #37 the runner only directly enters `locking → running →
+ * unlocking → done`; the legacy `preparing` is gone, and the inner
+ * phases (`branching | committing | pushing | creatingPr |
+ * updatingTicket`) only fire when Claude emits markers — not all skills
+ * emit all phases (e.g. a no-op ticket update). The progression order
+ * is what we *expect* in the canonical happy path; the bar advances
+ * incrementally as markers land, and skipped phases just bump the bar
+ * forward when the next one fires.
+ */
 const STATE_PROGRESS_ORDER: RunState[] = [
   'locking',
-  'preparing',
-  'branching',
   'running',
+  'branching',
   'committing',
   'pushing',
   'creatingPr',
@@ -1202,7 +1211,7 @@ export function ProjectDetail({
       })()}
 
       {activeRun && (() => {
-        const { progress, index, total } = progressForRun(activeRun);
+        const { progress } = progressForRun(activeRun);
         const stateLabel = RUN_STATE_LABELS[activeRun.state];
         // #8 will populate streaming logs; for #7 the panel ships without
         // them. The empty array keeps the LogPreview height stable.
@@ -1244,7 +1253,6 @@ export function ProjectDetail({
                 <ProgressBar
                   value={progress}
                   label={stateLabel}
-                  hint={`Step ${index + 1} of ${total}`}
                   data-testid="active-execution-progress"
                 />
               </div>

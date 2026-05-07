@@ -21,6 +21,12 @@ The only allowed stops are hard errors:
 
 Everything else flows: fetch → context → plan → implement → test → review → ship.
 
+### No interactive prompts
+
+When this skill runs inside e-frank's WorkflowRunner, **stdin is not a terminal** — there is no human to type a follow-up answer. Asking a question and waiting for input causes Claude to hang for ~3 seconds, see no stdin, and proceed without it (or print an apology and give up). On any hard error, **print a clear one-line error and exit** instead of asking. The runner surfaces the printed error in the UI; the developer fixes the input and re-runs.
+
+The plan-review approval marker (`<<<EF_APPROVAL_REQUEST>>>`) is the *only* sanctioned interactive checkpoint — e-frank's UI handles it via a dedicated stdin write on `approve\n`. Don't invent other ones.
+
 ## Phase Markers (e-frank integration)
 
 When this skill runs inside e-frank's `WorkflowRunner`, the runner watches Claude's stdout for **phase markers** — single-line tags that drive the UI timeline. Emit one with a plain `echo` at the start of each runner-relevant phase:
@@ -135,7 +141,7 @@ Examples: `feat/html-preview`, `feat/response-body-validation`, `feat/workspace-
 
   The number is the digit portion of the ticket key (`GH-31` → `31`, `ABC-123` → `123`).
 
-If the argument matches neither shape, STOP and ask the developer for a valid issue URL or ticket key.
+If the argument matches neither shape, **fail loud and exit**: print a one-line error like `[ef-feature] could not parse $ARGUMENTS as a GitHub URL or ticket key (e.g. GH-31)` and stop. **Do NOT prompt the developer interactively.** When this skill runs inside e-frank's WorkflowRunner there is no stdin channel — Claude will hang for ~3 seconds, see no input, then give up. The runner surfaces the printed error in the UI; the developer fixes the input and re-runs.
 
 ### 1.2: Fetch Issue Details
 
@@ -145,7 +151,7 @@ Try fetching the issue using **GitHub MCP** first:
 If MCP fails (e.g., authentication error), fall back to **gh CLI**:
 - `gh issue view {number} --repo {owner}/{repo} --json title,body,labels,assignees,state,comments`
 
-If both fail, STOP and tell the developer to fix GitHub authentication (install `gh` CLI and run `gh auth login`, or configure the GitHub MCP server token).
+If both fail, **fail loud and exit**: print `[ef-feature] GitHub auth failed; run `gh auth login` or configure the GitHub MCP token` and stop. Same rule as Phase 1.1 — no interactive prompts when running under e-frank.
 
 ### 1.3: Summarize the Issue
 

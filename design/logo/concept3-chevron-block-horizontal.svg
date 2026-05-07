@@ -1,0 +1,27 @@
+<!-- Concept 3 — horizontal lockup. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 100" role="img" aria-labelledby="t d">
+  <title id="t">e-frank</title>
+  <desc id="d">e-frank logo: forward chevron block, alongside the wordmark.</desc>
+
+  <!-- Icon (scaled-down version of concept 3) -->
+  <g transform="translate(8, 14) scale(0.72)">
+    <rect x="6" y="6" width="88" height="88" rx="20" fill="#4d7cff"/>
+    <path d="M 30 32 L 50 50 L 30 68"
+          fill="none" stroke="#ffffff" stroke-width="9"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 50 32 L 70 50 L 50 68"
+          fill="none" stroke="#ffffff" stroke-width="9"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="100" y="62"
+        font-family="Inter, -apple-system, 'Segoe UI', sans-serif"
+        font-size="42" font-weight="600" fill="#e7eaf3"
+        letter-spacing="-0.02em">e</text>
+  <rect x="130" y="48" width="14" height="4" rx="2" fill="#4d7cff"/>
+  <text x="148" y="62"
+        font-family="Inter, -apple-system, 'Segoe UI', sans-serif"
+        font-size="42" font-weight="600" fill="#e7eaf3"
+        letter-spacing="-0.02em">frank</text>
+</svg>
