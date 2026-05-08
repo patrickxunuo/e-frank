@@ -28,6 +28,7 @@ import {
   IconBranch,
   IconClose,
   IconCode,
+  IconCopy,
   IconGitHub,
   IconJira,
   IconPlay,
@@ -172,6 +173,51 @@ function priorityLabel(raw: string): string {
   if (!raw) return 'Unset';
   // Title-case the first letter so "high" -> "High".
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+}
+
+/**
+ * Copy-to-clipboard affordance for the active run's branch name (GH-44).
+ * Lives inside the active execution panel so the developer can paste the
+ * branch into a terminal without retyping it. Silent-fail by design — if
+ * the Clipboard API is unavailable (older WebViews, denied permission)
+ * we just don't flip to the "Copied" state. No error toast.
+ */
+function CopyBranchButton({ branchName }: { branchName: string }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const handle = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(handle);
+  }, [copied]);
+
+  const onClick = (): void => {
+    const clip = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
+    if (clip === undefined || typeof clip.writeText !== 'function') return;
+    try {
+      void clip.writeText(branchName).then(
+        () => setCopied(true),
+        () => {
+          /* promise rejected — silent fail per spec */
+        },
+      );
+    } catch {
+      /* sync throw on older WebViews — silent fail per spec */
+    }
+  };
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      leadingIcon={<IconCopy size={12} />}
+      onClick={onClick}
+      data-testid="active-execution-copy-branch"
+      aria-label={copied ? 'Branch name copied' : `Copy branch name ${branchName}`}
+    >
+      {copied ? 'Copied' : 'Copy'}
+    </Button>
+  );
 }
 
 export function ProjectDetail({
@@ -1258,6 +1304,23 @@ export function ProjectDetail({
                   </div>
                 </div>
                 <span className={styles.activeTitle}>{activeRun.ticketKey}</span>
+                {activeRun.branchName && (
+                  <div
+                    className={styles.activeBranchRow}
+                    data-testid="active-execution-branch-row"
+                  >
+                    <span className={styles.activeBranchLabel}>
+                      <IconBranch size={12} />
+                      <span
+                        className={styles.activeBranchName}
+                        data-testid="active-execution-branch-name"
+                      >
+                        {activeRun.branchName}
+                      </span>
+                    </span>
+                    <CopyBranchButton branchName={activeRun.branchName} />
+                  </div>
+                )}
                 <ProgressBar
                   value={progress}
                   label={stateLabel}

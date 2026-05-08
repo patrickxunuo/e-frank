@@ -672,6 +672,164 @@ describe('<ProjectDetail /> — DET', () => {
   });
 
   // ---------------------------------------------------------------------
+  // DET-015 — GH-44 Copy-branch button on Active Execution panel
+  // ---------------------------------------------------------------------
+  //
+  // jsdom does not ship `navigator.clipboard`. Each test installs a temporary
+  // descriptor and restores it afterwards so the mod doesn't leak into other
+  // suites (the file-level afterEach doesn't touch navigator).
+  describe('DET-015 copy branch button on active execution panel', () => {
+    function installClipboard(value: unknown): () => void {
+      const original = Object.getOwnPropertyDescriptor(window.navigator, 'clipboard');
+      Object.defineProperty(window.navigator, 'clipboard', {
+        value,
+        configurable: true,
+      });
+      return () => {
+        if (original) {
+          Object.defineProperty(window.navigator, 'clipboard', original);
+        } else {
+          // jsdom didn't have one originally — drop the property entirely.
+          delete (window.navigator as { clipboard?: unknown }).clipboard;
+        }
+      };
+    }
+
+    it('DET-015: branch row shows branchName + Copy button writes it to clipboard and flips to "Copied" then reverts', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      const restore = installClipboard({ writeText });
+      try {
+        (useActiveRun as unknown as Mock).mockReturnValue({
+          id: 'run-1',
+          projectId: 'p-1',
+          ticketKey: 'ABC-7',
+          mode: 'interactive',
+          branchName: 'feat/ABC-7-some-summary',
+          state: 'running',
+          status: 'running',
+          steps: [],
+          pendingApproval: null,
+          startedAt: 0,
+        });
+        installApi({ tickets: [makeTicket('ABC-7')] });
+        installRunsStub();
+
+        render(
+          <ProjectDetail
+            projectId="p-1"
+            onBack={noop}
+            onOpenExecution={() => {}}
+          />,
+        );
+
+        const branchName = await screen.findByTestId('active-execution-branch-name');
+        expect(branchName).toHaveTextContent('feat/ABC-7-some-summary');
+
+        const copy = screen.getByTestId('active-execution-copy-branch');
+        expect(copy).toHaveTextContent('Copy');
+
+        fireEvent.click(copy);
+        expect(writeText).toHaveBeenCalledWith('feat/ABC-7-some-summary');
+
+        // Affordance flips to "Copied" once the writeText promise resolves.
+        await waitFor(() =>
+          expect(
+            screen.getByTestId('active-execution-copy-branch'),
+          ).toHaveTextContent('Copied'),
+        );
+
+        // ~1.5s later it reverts. Use real time + a generous waitFor budget
+        // so the test is not flaky on loaded CI workers.
+        await waitFor(
+          () =>
+            expect(
+              screen.getByTestId('active-execution-copy-branch'),
+            ).toHaveTextContent('Copy'),
+          { timeout: 5000 },
+        );
+      } finally {
+        restore();
+      }
+    });
+
+    it('DET-015: clipboard API unavailable → no throw, no "Copied" affordance (silent fail)', async () => {
+      const restore = installClipboard(undefined);
+      try {
+        (useActiveRun as unknown as Mock).mockReturnValue({
+          id: 'run-1',
+          projectId: 'p-1',
+          ticketKey: 'ABC-7',
+          mode: 'interactive',
+          branchName: 'feat/ABC-7',
+          state: 'running',
+          status: 'running',
+          steps: [],
+          pendingApproval: null,
+          startedAt: 0,
+        });
+        installApi({ tickets: [makeTicket('ABC-7')] });
+        installRunsStub();
+
+        render(
+          <ProjectDetail
+            projectId="p-1"
+            onBack={noop}
+            onOpenExecution={() => {}}
+          />,
+        );
+
+        const copy = await screen.findByTestId('active-execution-copy-branch');
+        // Clicking with no clipboard API must not throw and must not flip the label.
+        fireEvent.click(copy);
+        expect(copy).toHaveTextContent('Copy');
+      } finally {
+        restore();
+      }
+    });
+
+    it('DET-015: clipboard.writeText throws synchronously → silent fail, no Copied affordance', async () => {
+      // Some older WebViews expose `clipboard` but throw a SecurityError
+      // synchronously from writeText. The component must swallow it.
+      const writeText = vi.fn(() => {
+        throw new Error('SecurityError: not allowed');
+      });
+      const restore = installClipboard({ writeText });
+      try {
+        (useActiveRun as unknown as Mock).mockReturnValue({
+          id: 'run-1',
+          projectId: 'p-1',
+          ticketKey: 'ABC-7',
+          mode: 'interactive',
+          branchName: 'feat/ABC-7',
+          state: 'running',
+          status: 'running',
+          steps: [],
+          pendingApproval: null,
+          startedAt: 0,
+        });
+        installApi({ tickets: [makeTicket('ABC-7')] });
+        installRunsStub();
+
+        render(
+          <ProjectDetail
+            projectId="p-1"
+            onBack={noop}
+            onOpenExecution={() => {}}
+          />,
+        );
+
+        const copy = await screen.findByTestId('active-execution-copy-branch');
+        // Must not throw; label stays at 'Copy'.
+        fireEvent.click(copy);
+        expect(writeText).toHaveBeenCalledWith('feat/ABC-7');
+        expect(copy).toHaveTextContent('Copy');
+      } finally {
+        restore();
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------
   // NAV-001..002 — Open Details navigation (#8 restoration)
   // ---------------------------------------------------------------------
   //
