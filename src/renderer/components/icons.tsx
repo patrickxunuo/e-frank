@@ -296,6 +296,40 @@ export function IconClipboard({ size = 12, ...rest }: IconProps): JSX.Element {
   );
 }
 
+export function IconWindowMin({ size = 12, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest} viewBox="0 0 12 12">
+      <path d="M2.5 6h7" />
+    </svg>
+  );
+}
+
+export function IconWindowMax({ size = 12, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest} viewBox="0 0 12 12">
+      <rect x="2.5" y="2.5" width="7" height="7" rx="0.5" />
+    </svg>
+  );
+}
+
+export function IconWindowRestore({ size = 12, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest} viewBox="0 0 12 12">
+      <rect x="2.5" y="3.75" width="6" height="6" rx="0.5" />
+      <path d="M4.25 3.75V2.5h6V8.5H9" />
+    </svg>
+  );
+}
+
+export function IconWindowClose({ size = 12, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest} viewBox="0 0 12 12">
+      <path d="M3 3l6 6" />
+      <path d="M9 3l-6 6" />
+    </svg>
+  );
+}
+
 export function IconTrash({ size = 14, ...rest }: IconProps): JSX.Element {
   return (
     <svg {...baseProps(size)} {...rest}>

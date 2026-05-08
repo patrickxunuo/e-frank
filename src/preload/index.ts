@@ -62,6 +62,8 @@ import {
   type ConnectionsListBranchesResponse,
   type DialogSelectFolderRequest,
   type DialogSelectFolderResponse,
+  type ChromeState,
+  type ChromeStateChangedEvent,
 } from '../shared/ipc.js';
 
 const api: IpcApi = {
@@ -339,6 +341,35 @@ const api: IpcApi = {
       ipcRenderer.invoke(IPC_CHANNELS.TICKETS_LIST, req) as Promise<
         IpcResult<TicketsListResponse>
       >,
+  },
+
+  chrome: {
+    minimize: (): Promise<IpcResult<null>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CHROME_MINIMIZE) as Promise<IpcResult<null>>,
+
+    maximize: (): Promise<IpcResult<null>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CHROME_MAXIMIZE) as Promise<IpcResult<null>>,
+
+    close: (): Promise<IpcResult<null>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CHROME_CLOSE) as Promise<IpcResult<null>>,
+
+    getState: (): Promise<IpcResult<ChromeState>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CHROME_GET_STATE) as Promise<IpcResult<ChromeState>>,
+
+    onStateChanged: (
+      listener: (e: ChromeStateChangedEvent) => void,
+    ): (() => void) => {
+      const wrapped = (
+        _event: IpcRendererEvent,
+        payload: ChromeStateChangedEvent,
+      ): void => {
+        listener(payload);
+      };
+      ipcRenderer.on(IPC_CHANNELS.CHROME_STATE_CHANGED, wrapped);
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.CHROME_STATE_CHANGED, wrapped);
+      };
+    },
   },
 };
 

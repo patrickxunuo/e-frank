@@ -48,6 +48,7 @@ import {
   type ConnectionsListBranchesResponse,
   type DialogSelectFolderRequest,
   type DialogSelectFolderResponse,
+  type ChromeState,
 } from '../shared/ipc.js';
 import type { Run, RunStateEvent, RunMode, RunLogEntry } from '../shared/schema/run.js';
 import type {
@@ -114,6 +115,12 @@ let runLogStore: RunLogStore | null = null;
 let workflowRunner: WorkflowRunner | null = null;
 
 function createWindow(): void {
+  // Window chrome (issue #50): we ship a frameless window with a custom
+  // 32px titlebar rendered in the renderer. On macOS we keep the native
+  // traffic lights via `hiddenInset` (the renderer reserves ~80px on the
+  // left so its lockup doesn't sit under them); on Windows/Linux the
+  // renderer paints its own min/max/close glyphs.
+  const isMac = process.platform === 'darwin';
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -123,6 +130,14 @@ function createWindow(): void {
     autoHideMenuBar: true,
     backgroundColor: '#0e0f13',
     title: 'e-frank',
+    ...(isMac
+      ? {
+          titleBarStyle: 'hiddenInset' as const,
+          // Center the traffic lights in the 32px bar (default y is ~6px,
+          // which floats them too high relative to our titlebar's center).
+          trafficLightPosition: { x: 12, y: 9 },
+        }
+      : { frame: false }),
     webPreferences: {
       // The preload is emitted as CommonJS (`out/preload/index.cjs`) — see
       // electron.vite.config.ts. With `sandbox: true`, Electron requires
@@ -137,6 +152,19 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show();
+  });
+
+  // Broadcast maximize-state changes so the renderer can swap the
+  // max/restore icon. Renderer reads the initial state via
+  // `chrome:get-state` on mount.
+  const broadcastMaximizedState = (isMaximized: boolean): void => {
+    broadcastToWindows(IPC_CHANNELS.CHROME_STATE_CHANGED, { isMaximized });
+  };
+  mainWindow.on('maximize', () => {
+    broadcastMaximizedState(true);
+  });
+  mainWindow.on('unmaximize', () => {
+    broadcastMaximizedState(false);
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -1654,6 +1682,60 @@ function registerIpcHandlers(): void {
       return { ok: true, data: out };
     },
   );
+
+  // -- Window chrome (issue #50) ---------------------------------------------
+  //
+  // The renderer's custom titlebar drives min/max/close + reads the initial
+  // maximize state on mount. Each handler resolves the `BrowserWindow` from
+  // the IPC sender so future multi-window callers operate on themselves
+  // (rather than always poking the focused window).
+  const resolveSenderWindow = (
+    event: Electron.IpcMainInvokeEvent,
+  ): BrowserWindow | null => {
+    return BrowserWindow.fromWebContents(event.sender);
+  };
+
+  ipcMain.handle(IPC_CHANNELS.CHROME_MINIMIZE, (event): IpcResult<null> => {
+    const win = resolveSenderWindow(event);
+    if (win === null) {
+      return { ok: false, error: { code: 'NO_WINDOW', message: 'no host window' } };
+    }
+    win.minimize();
+    return { ok: true, data: null };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CHROME_MAXIMIZE, (event): IpcResult<null> => {
+    const win = resolveSenderWindow(event);
+    if (win === null) {
+      return { ok: false, error: { code: 'NO_WINDOW', message: 'no host window' } };
+    }
+    if (win.isMaximized()) {
+      win.unmaximize();
+    } else {
+      win.maximize();
+    }
+    return { ok: true, data: null };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CHROME_CLOSE, (event): IpcResult<null> => {
+    const win = resolveSenderWindow(event);
+    if (win === null) {
+      return { ok: false, error: { code: 'NO_WINDOW', message: 'no host window' } };
+    }
+    win.close();
+    return { ok: true, data: null };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CHROME_GET_STATE, (event): IpcResult<ChromeState> => {
+    const win = resolveSenderWindow(event);
+    if (win === null) {
+      return { ok: false, error: { code: 'NO_WINDOW', message: 'no host window' } };
+    }
+    return {
+      ok: true,
+      data: { isMaximized: win.isMaximized(), platform: process.platform },
+    };
+  });
 }
 
 function toIpcCurrentChangedEvent(e: { run: Run | null }): RunsCurrentChangedEvent {

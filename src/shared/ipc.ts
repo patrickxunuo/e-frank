@@ -129,6 +129,13 @@ export const IPC_CHANNELS = {
   RUNS_CURRENT_CHANGED: 'runs:current-changed',
   /** event channel (main -> renderer) */
   RUNS_STATE_CHANGED: 'runs:state-changed',
+  // -- Window chrome (issue #50) -- frameless titlebar controls --
+  CHROME_MINIMIZE: 'chrome:minimize',
+  CHROME_MAXIMIZE: 'chrome:maximize',
+  CHROME_CLOSE: 'chrome:close',
+  CHROME_GET_STATE: 'chrome:get-state',
+  /** event channel (main -> renderer) */
+  CHROME_STATE_CHANGED: 'chrome:state-changed',
 } as const;
 
 export type PingRequest = { message: string };
@@ -432,6 +439,29 @@ export interface ConnectionsListBranchesResponse {
   branches: Array<{ name: string; protected: boolean }>;
 }
 
+// -- Window chrome (issue #50) -----------------------------------------------
+//
+// The renderer owns a custom 32px titlebar with min/max/close controls; the
+// main process owns the actual `BrowserWindow` operations. The handlers
+// below operate on the BrowserWindow that owns the IPC sender's webContents,
+// so multiple windows (future) work without coordination.
+
+/**
+ * Snapshot of the host BrowserWindow's chrome-relevant flags. `platform` is
+ * exposed so the renderer can branch on traffic-light vs custom-controls
+ * layout without reaching into Electron APIs.
+ */
+export interface ChromeState {
+  isMaximized: boolean;
+  /** `process.platform` value at app start. */
+  platform: 'darwin' | 'win32' | 'linux' | string;
+}
+
+/** Event payload broadcast on `CHROME_STATE_CHANGED`. */
+export interface ChromeStateChangedEvent {
+  isMaximized: boolean;
+}
+
 // -- Folder picker (Electron native dialog) ----------------------------------
 
 export interface DialogSelectFolderRequest {
@@ -532,5 +562,13 @@ export interface IpcApi {
   };
   tickets: {
     list: (req: TicketsListRequest) => Promise<IpcResult<TicketsListResponse>>;
+  };
+  chrome: {
+    minimize: () => Promise<IpcResult<null>>;
+    maximize: () => Promise<IpcResult<null>>;
+    close: () => Promise<IpcResult<null>>;
+    getState: () => Promise<IpcResult<ChromeState>>;
+    /** Subscribe to maximize/unmaximize events. Returns unsubscribe fn. */
+    onStateChanged: (listener: (e: ChromeStateChangedEvent) => void) => () => void;
   };
 }

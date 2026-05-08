@@ -2,12 +2,14 @@ import { useState } from 'react';
 import { AppShell } from './components/AppShell';
 import type { SidebarNavId } from './components/Sidebar';
 import { Dialog } from './components/Dialog';
+import { Titlebar } from './components/Titlebar';
 import { AddProject } from './views/AddProject';
 import { Connections } from './views/Connections';
 import { ExecutionView } from './views/ExecutionView';
 import { ProjectDetail } from './views/ProjectDetail';
 import { ProjectList } from './views/ProjectList';
 import { useProjects } from './state/projects';
+import styles from './App.module.css';
 
 type ViewState =
   | { kind: 'list' }
@@ -67,44 +69,47 @@ export function App(): JSX.Element {
   };
 
   return (
-    <AppShell
-      activeNav={activeNavFor(view)}
-      route={routeFor(view)}
-      onNavigate={handleNavigate}
-    >
-      {view.kind === 'list' && (
-        <ProjectList
-          projects={projects.projects}
-          loading={projects.loading}
-          error={projects.error}
-          onRefresh={projects.refresh}
-          onAdd={() => setAddOpen(true)}
-          onOpen={(id) => {
-            setView({ kind: 'detail', projectId: id });
-          }}
-        />
-      )}
-      {view.kind === 'connections' && <Connections />}
-      {view.kind === 'detail' && renderDetail(view, setView)}
-      {view.kind === 'execution' && renderExecution(view, setView)}
-
-      <Dialog
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        size="full"
-        title="Add Project"
-        subtitle="Configure repository, ticket source, and workflow settings."
-        data-testid="add-project-dialog"
+    <div className={styles.root}>
+      <Titlebar />
+      <AppShell
+        activeNav={activeNavFor(view)}
+        route={routeFor(view)}
+        onNavigate={handleNavigate}
       >
-        <AddProject
+        {view.kind === 'list' && (
+          <ProjectList
+            projects={projects.projects}
+            loading={projects.loading}
+            error={projects.error}
+            onRefresh={projects.refresh}
+            onAdd={() => setAddOpen(true)}
+            onOpen={(id) => {
+              setView({ kind: 'detail', projectId: id });
+            }}
+          />
+        )}
+        {view.kind === 'connections' && <Connections />}
+        {view.kind === 'detail' && renderDetail(view, setView)}
+        {view.kind === 'execution' && renderExecution(view, setView)}
+
+        <Dialog
+          open={addOpen}
           onClose={() => setAddOpen(false)}
-          onCreated={async () => {
-            setAddOpen(false);
-            await projects.refresh();
-          }}
-        />
-      </Dialog>
-    </AppShell>
+          size="full"
+          title="Add Project"
+          subtitle="Configure repository, ticket source, and workflow settings."
+          data-testid="add-project-dialog"
+        >
+          <AddProject
+            onClose={() => setAddOpen(false)}
+            onCreated={async () => {
+              setAddOpen(false);
+              await projects.refresh();
+            }}
+          />
+        </Dialog>
+      </AppShell>
+    </div>
   );
 }
 

@@ -150,6 +150,15 @@ function installApi(opts?: {
     tickets: {
       list: vi.fn().mockResolvedValue(unusedErr()),
     } as unknown as IpcApi['tickets'],
+    chrome: {
+      minimize: vi.fn().mockResolvedValue({ ok: true, data: null }),
+      maximize: vi.fn().mockResolvedValue({ ok: true, data: null }),
+      close: vi.fn().mockResolvedValue({ ok: true, data: null }),
+      getState: vi
+        .fn()
+        .mockResolvedValue({ ok: true, data: { isMaximized: false, platform: 'win32' } }),
+      onStateChanged: vi.fn(() => () => {}),
+    } as unknown as IpcApi['chrome'],
   } as IpcApi;
 
   (window as { api?: IpcApi }).api = api;
