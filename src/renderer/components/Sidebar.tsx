@@ -1,6 +1,9 @@
+import packageJson from '../../../package.json';
 import styles from './Sidebar.module.css';
 import { IconKey, IconLogo, IconProjects, IconSettings } from './icons';
 import { ThemeToggle } from './ThemeToggle';
+
+const APP_VERSION = `v${packageJson.version}`;
 
 export type SidebarNavId = 'projects' | 'connections' | 'settings';
 
@@ -85,6 +88,10 @@ export function Sidebar({ activeNav, user, onNavigate }: SidebarProps): JSX.Elem
           </div>
         </div>
       )}
+
+      <div className={styles.appVersion} data-testid="sidebar-app-version">
+        {APP_VERSION}
+      </div>
     </aside>
   );
 }

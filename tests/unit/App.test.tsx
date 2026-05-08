@@ -336,3 +336,19 @@ describe('<App /> — SIDEBAR-CONN', () => {
     ).not.toBe('page');
   });
 });
+
+// ---------------------------------------------------------------------------
+// SIDEBAR-VERSION-001 — sidebar app version footer (GH-31)
+// ---------------------------------------------------------------------------
+describe('<App /> — SIDEBAR-VERSION', () => {
+  beforeEach(() => {
+    (window as { api?: IpcApi }).api = makeIpcApiStub(PING, { ok: true, data: [] });
+  });
+
+  it('SIDEBAR-VERSION-001: sidebar shows app version testid with v{version} format', async () => {
+    render(<App />);
+    const versionEl = await screen.findByTestId('sidebar-app-version');
+    expect(versionEl).toBeInTheDocument();
+    expect(versionEl.textContent).toMatch(/^v\d+\.\d+\.\d+/);
+  });
+});
