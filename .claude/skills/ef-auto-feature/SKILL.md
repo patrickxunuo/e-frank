@@ -61,8 +61,8 @@ Format:
 
 ```markdown
 # Active Task
-- Skill: /ef-feature
-- Skill file: .claude/skills/ef-feature/SKILL.md
+- Skill: /ef-auto-feature
+- Skill file: .claude/skills/ef-auto-feature/SKILL.md
 - Ticket: $ARGUMENTS
 - Source: jira | github
 - Current phase: [Phase N: name]
@@ -116,7 +116,7 @@ git remote get-url origin
 # git@github.com:owner/repo.git    → owner/repo
 ```
 
-If the argument matches none of the shapes, **fail loud and exit**: print `[ef-feature] could not parse $ARGUMENTS as a Jira/GitHub ticket key or URL` and stop. **Do NOT prompt the developer.**
+If the argument matches none of the shapes, **fail loud and exit**: print `[ef-auto-feature] could not parse $ARGUMENTS as a Jira/GitHub ticket key or URL` and stop. **Do NOT prompt the developer.**
 
 ### 1.2: Fetch ticket details
 
@@ -127,7 +127,7 @@ Use the Atlassian MCP tool `mcp__claude_ai_Atlassian__getJiraIssue`:
 - `issueIdOrKey`: the extracted key.
 - `responseContentFormat`: `markdown`.
 
-If the MCP call fails, **fail loud and exit**: print `[ef-feature] Atlassian MCP unavailable; re-authenticate the connection` and stop.
+If the MCP call fails, **fail loud and exit**: print `[ef-auto-feature] Atlassian MCP unavailable; re-authenticate the connection` and stop.
 
 **GitHub branch:**
 
@@ -139,7 +139,7 @@ If MCP is unavailable, fall back to `gh` CLI:
 gh issue view {N} --repo {owner}/{repo} --json title,body,labels,assignees,state,comments
 ```
 
-If both fail, **fail loud and exit**: print `[ef-feature] GitHub auth failed; run "gh auth login" or configure the GitHub MCP token` and stop.
+If both fail, **fail loud and exit**: print `[ef-auto-feature] GitHub auth failed; run "gh auth login" or configure the GitHub MCP token` and stop.
 
 ### 1.3: Summarize the ticket
 
@@ -192,7 +192,7 @@ echo "<<<EF_PHASE>>>{\"phase\":\"branching\",\"branchName\":\"$(git branch --sho
 
 ### 0.2: If ticket is a Story / Task / Bug / GitHub Issue
 
-1. **Confirm the working tree is clean** — `git status --short`. If it's not, **fail loud and exit**: print `[ef-feature] working tree is dirty; commit or stash first` and stop. Do not auto-stash.
+1. **Confirm the working tree is clean** — `git status --short`. If it's not, **fail loud and exit**: print `[ef-auto-feature] working tree is dirty; commit or stash first` and stop. Do not auto-stash.
 
 2. **Checkout main and pull:**
    ```bash

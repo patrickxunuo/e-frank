@@ -29,6 +29,124 @@ function stripCarriageReturn(line: string): string {
   return line.endsWith('\r') ? line.slice(0, -1) : line;
 }
 
+/**
+ * Parse one stream-json event line and project its human-readable text
+ * into the consumer's emit callback. Each event may contribute zero,
+ * one, or many text fragments.
+ *
+ * Non-JSON lines (defensive — Claude shouldn't emit them under
+ * `--output-format=stream-json`, but `--verbose` warnings or unknown
+ * noise might leak in) pass through as plain text.
+ *
+ * Events we extract text from:
+ *   - `stream_event` → `event.type=content_block_delta` with
+ *     `delta.type=text_delta` (assistant response chunks streaming).
+ *   - `stream_event` → `event.type=content_block_start` with
+ *     `content_block.type=text` (rare: full text block re-emitted).
+ *   - `assistant` messages with `type=text` content blocks.
+ *   - `user` messages with `type=tool_result` content (this is where
+ *     `<<<EF_PHASE>>>` and `<<<EF_APPROVAL_REQUEST>>>` markers from
+ *     the skill's `echo` calls show up).
+ *   - `result` event's `result` field (the final answer at run wrap).
+ *
+ * Other event types (system init, rate_limit_event, signature_delta,
+ * input_json_delta, message_start/stop, etc.) are dropped.
+ */
+function emitJsonEventLines(
+  line: string,
+  emit: (text: string) => void,
+): void {
+  const trimmed = line.trim();
+  if (trimmed === '') return;
+
+  let event: unknown;
+  try {
+    event = JSON.parse(trimmed);
+  } catch {
+    // Not JSON — pass through verbatim (defensive against verbose logs
+    // or unknown noise). This also makes the parser a no-op when
+    // stream-json mode is disabled and Claude emits plain text.
+    emit(line);
+    return;
+  }
+
+  for (const text of extractTextsFromEvent(event)) {
+    if (text !== '') emit(text);
+  }
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function extractTextsFromEvent(event: unknown): string[] {
+  if (!isPlainObject(event)) return [];
+  const out: string[] = [];
+
+  // `stream_event` wraps an Anthropic API stream event — the source of
+  // real-time deltas. Text lives at `event.delta.text` for
+  // `content_block_delta` with `type=text_delta`.
+  if (event['type'] === 'stream_event' && isPlainObject(event['event'])) {
+    const inner = event['event'];
+    if (inner['type'] === 'content_block_delta' && isPlainObject(inner['delta'])) {
+      const delta = inner['delta'];
+      if (delta['type'] === 'text_delta' && typeof delta['text'] === 'string') {
+        out.push(delta['text']);
+      }
+    }
+    if (inner['type'] === 'content_block_start' && isPlainObject(inner['content_block'])) {
+      const block = inner['content_block'];
+      if (block['type'] === 'text' && typeof block['text'] === 'string') {
+        out.push(block['text']);
+      }
+    }
+  }
+
+  // Whole `assistant` messages carry an array of content blocks. Some
+  // are `type=text`, some are `tool_use` (which we skip).
+  if (event['type'] === 'assistant' && isPlainObject(event['message'])) {
+    const msg = event['message'];
+    if (Array.isArray(msg['content'])) {
+      for (const block of msg['content']) {
+        if (isPlainObject(block) && block['type'] === 'text' && typeof block['text'] === 'string') {
+          out.push(block['text']);
+        }
+      }
+    }
+  }
+
+  // `user` messages with `tool_result` content — this is how Bash tool
+  // output (including the skill's `echo "<<<EF_PHASE>>>..."` markers)
+  // gets back to us. The marker scanner in workflow-runner relies on
+  // this path firing before exit.
+  if (event['type'] === 'user' && isPlainObject(event['message'])) {
+    const msg = event['message'];
+    if (Array.isArray(msg['content'])) {
+      for (const block of msg['content']) {
+        if (isPlainObject(block) && block['type'] === 'tool_result') {
+          const c = block['content'];
+          if (typeof c === 'string') {
+            out.push(c);
+          } else if (Array.isArray(c)) {
+            for (const sub of c) {
+              if (isPlainObject(sub) && sub['type'] === 'text' && typeof sub['text'] === 'string') {
+                out.push(sub['text']);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Final `result` event at end-of-run.
+  if (event['type'] === 'result' && typeof event['result'] === 'string') {
+    out.push(event['result']);
+  }
+
+  return out;
+}
+
 export interface ClaudeProcessManagerOptions {
   spawner: Spawner;
   /** ms before SIGTERM is sent automatically. Default 30 * 60 * 1000 (30 min). */
@@ -179,15 +297,32 @@ export class ClaudeProcessManager extends EventEmitter {
       // (system prompt + ticket title/body) and a real tool-allowlist
       // policy instead of a blanket skip.
       //
-      // Prompt: `/<skillName> <ticketKey>` is passed as a single argv
-      // element (no shell, no splitting on space). Claude CLI parses it
-      // as a slash-command invocation that loads the skill prompt and
-      // begins orchestrating the ticket. This is the crux of #37 — the
-      // runner spawns Claude with a real skill, and Claude (not main)
-      // drives git/PR/ticket ops via its own Bash tool.
+      // `-p` (`--print`) puts Claude in non-interactive single-prompt
+      // mode. Required: stream-json mode only emits in -p mode.
+      //
+      // `--output-format=stream-json` + `--include-partial-messages` +
+      // `--verbose` makes Claude emit one JSON event per line as the
+      // run progresses. This is the only reliable way to get real-time
+      // output from `claude` on Windows — plain text mode with piped
+      // stdout block-buffers via MSVCRT (4-8 KB chunks dumping at
+      // exit). stream-json events flush per-emit. Each event is
+      // `{type, ...}` (assistant deltas, tool calls, tool results); we
+      // parse them in `handleStreamChunk` and project the human-
+      // readable text back to OutputEvent lines so the existing line-
+      // based marker scanner in workflow-runner keeps working
+      // unchanged.
+      //
+      // Prompt: `/<skillName> <ticketKey>` is one logical argv slot.
+      // `NodeSpawner` runs with `shell: true` (Windows `.cmd` shim
+      // resolution via PATHEXT) and quotes args containing spaces
+      // internally so cmd.exe / POSIX sh don't re-tokenize the prompt.
       child = this.spawner.spawn({
         command: this.command,
         args: [
+          '-p',
+          '--output-format=stream-json',
+          '--include-partial-messages',
+          '--verbose',
           '--dangerously-skip-permissions',
           `/${this.skillName} ${req.ticketKey}`,
         ],
@@ -354,7 +489,26 @@ export class ClaudeProcessManager extends EventEmitter {
     const trailing = parts.pop() ?? '';
     run[bufferKey] = trailing;
     for (const line of parts) {
-      this.emitOutput(run, stream, stripCarriageReturn(line));
+      const stripped = stripCarriageReturn(line);
+      if (stream === 'stdout') {
+        // stdout under `--output-format=stream-json` is one JSON event
+        // per line. Project each event's human-readable text back into
+        // line-shaped OutputEvents — re-splitting on internal newlines
+        // because a single event (e.g. a tool_result with multi-line
+        // output) can carry a multi-line payload that the rest of the
+        // pipeline (marker scanner, run-log UI) wants as separate
+        // lines. Non-JSON falls through verbatim, so plain-text mode
+        // and unknown noise still work.
+        emitJsonEventLines(stripped, (extracted) => {
+          for (const sub of extracted.split('\n')) {
+            this.emitOutput(run, stream, stripCarriageReturn(sub));
+          }
+        });
+      } else {
+        // stderr stays raw — Claude's stderr is human-readable warnings
+        // and errors, not stream-json.
+        this.emitOutput(run, stream, stripped);
+      }
     }
   }
 

@@ -629,15 +629,25 @@ export class WorkflowRunner extends EventEmitter {
       throw new CancelledError();
     }
 
-    // Exit — mark step done if it isn't already. `transitionToPhase`
-    // (driven by phase markers from Claude) may have closed the
-    // wrapping `running` step early when transitioning into a phase
-    // step; in that case the step has already been finalized and we
-    // skip the re-mutation so finishedAt doesn't drift forward past
-    // the next step's startedAt.
-    if (step.status === 'running') {
-      step.status = 'done';
-      step.finishedAt = this.clock.now();
+    // Exit — mark step done if it isn't already. Two callers compete:
+    //   1. Our own wrapping `step` may already be 'done' because
+    //      `transitionToPhase` (driven by phase markers) closed it
+    //      when opening the first phase step.
+    //   2. The LAST phase step inserted by `transitionToPhase` is
+    //      orphaned — nothing else closes it, because phase
+    //      transitions only close the *previous* phase step (the
+    //      next transition's predecessor), and after the final phase
+    //      no further marker arrives.
+    // So: close every step that's still 'running' at body-exit time.
+    // This catches both our own wrapping step and any phase
+    // straggler. Without this, the user sees "still working" persist
+    // on the final phase (e.g. `creatingPr`) after the run is done.
+    const finishedAt = this.clock.now();
+    for (const s of ctx.run.steps) {
+      if (s.status === 'running') {
+        s.status = 'done';
+        s.finishedAt = finishedAt;
+      }
     }
     this.emitStateChanged(ctx);
     await this.persist(ctx);

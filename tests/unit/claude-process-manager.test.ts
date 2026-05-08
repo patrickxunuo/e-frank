@@ -129,6 +129,91 @@ describe('ClaudeProcessManager', () => {
         line: 'oops',
       });
     });
+
+    // -- stream-json parsing --------------------------------------------
+    it('CPM-004b: stream-json text_delta events project to plain-text output lines', () => {
+      const captured = attach(manager);
+      manager.run({ ticketKey: VALID_TICKET, cwd: VALID_CWD });
+      const proc = spawner.lastSpawned;
+
+      proc?.emitStdout(
+        JSON.stringify({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: 'hello world\n' },
+          },
+        }) + '\n',
+      );
+      proc?.emitExit(0, null);
+
+      const stdoutLines = captured.output
+        .filter((e) => e.stream === 'stdout')
+        .map((e) => e.line);
+      expect(stdoutLines).toContain('hello world');
+    });
+
+    it('CPM-004c: tool_result content lands as output (where echoed markers come through)', () => {
+      const captured = attach(manager);
+      manager.run({ ticketKey: VALID_TICKET, cwd: VALID_CWD });
+      const proc = spawner.lastSpawned;
+
+      proc?.emitStdout(
+        JSON.stringify({
+          type: 'user',
+          message: {
+            content: [
+              {
+                type: 'tool_result',
+                content: '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>\n',
+              },
+            ],
+          },
+        }) + '\n',
+      );
+      proc?.emitExit(0, null);
+
+      const stdoutLines = captured.output
+        .filter((e) => e.stream === 'stdout')
+        .map((e) => e.line);
+      expect(stdoutLines).toContain('<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>');
+    });
+
+    it('CPM-004d: non-JSON lines pass through as plain text (fallback)', () => {
+      const captured = attach(manager);
+      manager.run({ ticketKey: VALID_TICKET, cwd: VALID_CWD });
+      const proc = spawner.lastSpawned;
+
+      proc?.emitStdout('plain text noise\n');
+      proc?.emitExit(0, null);
+
+      const stdoutLines = captured.output
+        .filter((e) => e.stream === 'stdout')
+        .map((e) => e.line);
+      expect(stdoutLines).toContain('plain text noise');
+    });
+
+    it('CPM-004e: signature_delta and other non-text events are dropped', () => {
+      const captured = attach(manager);
+      manager.run({ ticketKey: VALID_TICKET, cwd: VALID_CWD });
+      const proc = spawner.lastSpawned;
+
+      proc?.emitStdout(
+        JSON.stringify({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'signature_delta', signature: 'AAAA' },
+          },
+        }) + '\n',
+      );
+      proc?.emitExit(0, null);
+
+      const stdoutEvents = captured.output.filter((e) => e.stream === 'stdout');
+      expect(stdoutEvents).toHaveLength(0);
+    });
   });
 
   // ---------------------------------------------------------------
@@ -191,15 +276,19 @@ describe('ClaudeProcessManager', () => {
     });
 
     // -- #37 ----------------------------------------------------------
-    it('CPM-008b: spawn argv contains `/ef-auto-feature <ticketKey>` (skill prompt) by default', () => {
+    it('CPM-008b: spawn argv contains the streaming flags + `/ef-auto-feature <ticketKey>`', () => {
       const result = manager.run({ ticketKey: VALID_TICKET, cwd: VALID_CWD });
       expect(result.ok).toBe(true);
-      // First positional after the safety flag is the skill invocation;
-      // packed as a single argv element so claude CLI parses it as a
-      // slash command. (#37) Default skill is `ef-auto-feature` —
-      // e-frank's autonomous companion to the human-paced `ef-feature`.
+      // The manager passes plain logical args; the spawner handles
+      // platform-specific quoting. The streaming flags are required
+      // to get real-time output — see the comment in
+      // ClaudeProcessManager.run for the rationale.
       const args = spawner.lastOptions?.args ?? [];
       expect(args).toEqual([
+        '-p',
+        '--output-format=stream-json',
+        '--include-partial-messages',
+        '--verbose',
         '--dangerously-skip-permissions',
         `/ef-auto-feature ${VALID_TICKET}`,
       ]);
@@ -214,7 +303,9 @@ describe('ClaudeProcessManager', () => {
       const result = customManager.run({ ticketKey: VALID_TICKET, cwd: VALID_CWD });
       expect(result.ok).toBe(true);
       const args = customSpawner.lastOptions?.args ?? [];
-      expect(args[1]).toBe(`/custom-skill ${VALID_TICKET}`);
+      // Slash-command is the LAST positional, regardless of how many
+      // streaming flags precede it.
+      expect(args[args.length - 1]).toBe(`/custom-skill ${VALID_TICKET}`);
     });
   });
 

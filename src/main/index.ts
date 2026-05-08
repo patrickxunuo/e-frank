@@ -88,6 +88,17 @@ const __dirname = dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
 
+/**
+ * NOTE: Claude's stdout block-buffers when not connected to a TTY,
+ * so output arrives in big chunks (often a single dump at process
+ * exit) instead of streaming line-by-line. The clean fix is a
+ * pseudo-terminal via `node-pty`, but every Windows-friendly PTY
+ * package on npm is currently broken without Visual Studio Build
+ * Tools (compile-from-source) or has Node 20+ `spawn EINVAL` issues
+ * in its install script. Filed as a follow-up; for now we accept
+ * the buffering and lean on the renderer-side fixes (heartbeat,
+ * ticker, etc.) so the user has SOME signal that the run is live.
+ */
 const claudeManager = new ClaudeProcessManager({ spawner: new NodeSpawner() });
 
 // These are constructed at app-ready time (before window creation) because

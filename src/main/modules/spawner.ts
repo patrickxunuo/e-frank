@@ -59,7 +59,17 @@ export interface Spawner {
 export class NodeSpawner implements Spawner {
   spawn(options: SpawnOptions): SpawnedProcess {
     const useShell = options.shell ?? true;
-    const child = nodeSpawn(options.command, [...options.args], {
+    // When shell:true, Node hands the joined command line to
+    // `cmd.exe /d /s /c "..."` (Windows) or `sh -c "..."` (POSIX) and
+    // the shell re-tokenizes on whitespace. So any logical argv element
+    // containing a space must be quoted here, or the shell will split
+    // it. Both cmd.exe and POSIX sh strip surrounding `"..."` before
+    // exec. Our caller passes plain logical args; this is the place
+    // that knows about the shell-vs-no-shell axis.
+    const actualArgs = useShell
+      ? options.args.map((a) => (a.includes(' ') ? `"${a}"` : a))
+      : [...options.args];
+    const child = nodeSpawn(options.command, actualArgs, {
       cwd: options.cwd,
       env: options.env as NodeJS.ProcessEnv | undefined,
       shell: useShell,

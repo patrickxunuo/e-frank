@@ -11,14 +11,32 @@
  *     `runs.readLog` to load the persisted NDJSON, distribute lines into
  *     steps using each entry's `state` tag.
  *
- * Pause buffers incoming lines locally without updating `steps`; resume
- * flushes the buffer through the same per-state bucketing.
- *
  * Per-effect `cancelled` flag pattern (matches `useTickets` / `useActiveRun`).
  */
 
 import { useEffect, useRef, useState } from 'react';
 import type { Run, RunLogEntry, RunState, RunStatus, RunStateEvent } from '@shared/ipc';
+
+// ----- Marker filter -----------------------------------------------------
+//
+// EF_PHASE / EF_APPROVAL_REQUEST markers are an internal protocol between
+// the skill and the workflow-runner. The skill emits them via Bash `echo`,
+// they ride through Claude's tool_result events, hit the runner, and the
+// runner consumes them to drive state transitions. Their information is
+// fully encoded in the timeline (each phase becomes its own step). The
+// raw `<<<EF_PHASE>>>{...}<<<END_EF_PHASE>>>` string in the log is just
+// noise to a human reader, so we drop it before bucketing into steps.
+const MARKER_PATTERNS: RegExp[] = [
+  /<<<EF_PHASE>>>.*?<<<END_EF_PHASE>>>/,
+  /<<<EF_APPROVAL_REQUEST>>>.*?<<<END_EF_APPROVAL_REQUEST>>>/,
+];
+
+function isInternalMarkerLine(line: string): boolean {
+  for (const pat of MARKER_PATTERNS) {
+    if (pat.test(line)) return true;
+  }
+  return false;
+}
 
 // ----- Types -------------------------------------------------------------
 
@@ -38,10 +56,6 @@ export interface UseRunLogResult {
   totalUserVisibleSteps: number;
   /** Index (into `steps`) of the current user-visible step. */
   currentUserVisibleIndex: number;
-  paused: boolean;
-  setPaused: (b: boolean) => void;
-  /** Lines buffered while paused, not yet flushed (test hook). */
-  bufferedLineCount: number;
 }
 
 // ----- State labels (mirrors workflow-runner USER_VISIBLE_LABELS) ---------
@@ -169,17 +183,6 @@ export function useRunLog(run: Run | null): UseRunLogResult {
   const [steps, setSteps] = useState<ExecLogStep[]>(() =>
     run !== null ? stepsFromRun(run) : [],
   );
-  const [paused, setPaused] = useState<boolean>(false);
-  // Buffered output lines that arrived while paused. Held in a ref so the
-  // pause/resume effect can flush without listing `paused` as a dep.
-  const bufferRef = useRef<RunLogEntry[]>([]);
-  const [bufferedLineCount, setBufferedLineCount] = useState<number>(0);
-  // Mirror `paused` into a ref so the live subscription's stable closure
-  // can read the latest value without re-subscribing on every toggle.
-  // Updated synchronously during render so a line arriving immediately
-  // after pause toggles flips into the buffer rather than the timeline.
-  const pausedRef = useRef<boolean>(paused);
-  pausedRef.current = paused;
 
   // Mirror the run snapshot into a ref so the live-output listener can
   // read fresh `state` / `id` values without re-subscribing on every
@@ -204,8 +207,6 @@ export function useRunLog(run: Run | null): UseRunLogResult {
     const currentRun = runRef.current;
     const isNewRun = runIdRef.current !== runId;
     runIdRef.current = runId;
-    bufferRef.current = [];
-    setBufferedLineCount(0);
 
     if (currentRun === null) {
       setSteps([]);
@@ -248,6 +249,7 @@ export function useRunLog(run: Run | null): UseRunLogResult {
           setSteps(() => {
             let next = stepsFromRun(terminalRun);
             for (const entry of result.data.entries) {
+              if (isInternalMarkerLine(entry.line)) continue;
               next = appendEntryToSteps(next, entry);
             }
             return next;
@@ -287,6 +289,12 @@ export function useRunLog(run: Run | null): UseRunLogResult {
       if (claudeRunId !== null && event.runId !== claudeRunId) {
         return;
       }
+      // Drop the internal protocol markers — workflow-runner already
+      // consumed them to drive state transitions; the raw text is
+      // noise in the user-facing log.
+      if (isInternalMarkerLine(event.line)) {
+        return;
+      }
       // Use the LATEST run snapshot at line-arrival time, not the one
       // captured when the effect first ran. `runRef` is updated on every
       // parent re-render so `state` / `id` reflect the current truth.
@@ -305,11 +313,6 @@ export function useRunLog(run: Run | null): UseRunLogResult {
           timestamp: event.timestamp,
           state,
         };
-        if (pausedRef.current) {
-          bufferRef.current = [...bufferRef.current, entry];
-          setBufferedLineCount(bufferRef.current.length);
-          return prev;
-        }
         return appendEntryToSteps(prev, entry);
       });
     });
@@ -332,22 +335,6 @@ export function useRunLog(run: Run | null): UseRunLogResult {
     // `runRef` access.
   }, [runId, runStatus]);
 
-  // Flush the buffer when the user un-pauses.
-  useEffect(() => {
-    if (paused) return;
-    if (bufferRef.current.length === 0) return;
-    const buffered = bufferRef.current;
-    bufferRef.current = [];
-    setBufferedLineCount(0);
-    setSteps((prev) => {
-      let next = prev;
-      for (const entry of buffered) {
-        next = appendEntryToSteps(next, entry);
-      }
-      return next;
-    });
-  }, [paused]);
-
   // Derive progress counter values from `steps`. User-visible steps are
   // the ones whose state has a non-null label (running, committing, ...).
   const userVisibleSteps = steps.filter((s) => s.label !== null);
@@ -369,8 +356,5 @@ export function useRunLog(run: Run | null): UseRunLogResult {
     steps,
     totalUserVisibleSteps,
     currentUserVisibleIndex,
-    paused,
-    setPaused,
-    bufferedLineCount,
   };
 }

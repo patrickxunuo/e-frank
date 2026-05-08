@@ -38,8 +38,31 @@
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
   background: var(--bg-card);
-  transition: border-color var(--duration-base) var(--ease-out),
-    background-color var(--duration-base) var(--ease-out);
+  transition:
+    border-color var(--duration-base) var(--ease-out),
+    background-color var(--duration-base) var(--ease-out),
+    box-shadow var(--duration-base) var(--ease-out);
+}
+
+/*
+ * Hover affordance for expandable rows: lift the border and add a soft
+ * shadow so the row reads as clickable. We target rows that contain a
+ * non-disabled toggle (i.e. an expandable step) — finished-empty steps
+ * keep the static look since clicking them does nothing.
+ */
+.row:has(.toggle:not(.toggleDisabled)):hover {
+  border-color: var(--border-default);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  cursor: default;
+}
+
+/*
+ * Subtle visual demotion of completed steps so the running step holds
+ * focus. The accent bar still indicates status (green); the row body
+ * loses a touch of saturation to fall back into the timeline.
+ */
+.row[data-status='done'] .label {
+  color: var(--text-secondary);
 }
 
 /* Left-side accent bar — driven by status. */
@@ -118,22 +141,34 @@
   appearance: none;
   background: transparent;
   border: none;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   cursor: pointer;
   border-radius: var(--radius-sm);
   flex: 0 0 auto;
-  transition: color var(--duration-fast) var(--ease-out),
+  transition:
+    color var(--duration-fast) var(--ease-out),
     background-color var(--duration-fast) var(--ease-out);
 }
 
 .toggle:hover {
   color: var(--text-primary);
   background: var(--surface-overlay-low);
+}
+
+/*
+ * Whole-row hover ALSO highlights the chevron — the row reads as one
+ * interactive surface even though only the chevron carries the click
+ * target. (Keeping the click target small intentionally, so the user
+ * can also select / copy text from the body without accidentally
+ * collapsing the step.)
+ */
+.row:hover .toggle:not(.toggleDisabled) {
+  color: var(--text-primary);
 }
 
 .toggle:focus-visible {
@@ -253,12 +288,80 @@
   flex: 0 0 auto;
 }
 
+/*
+ * Quiet-period heartbeat. Renders in the header when a running step
+ * has had no output for >= QUIET_THRESHOLD_SECONDS. Reassures the
+ * user during long Bash subprocess silences (e.g. `npm install`).
+ * Subtle — muted color, italic, slow pulse.
+ */
+.heartbeat {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-tertiary);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: heartbeatPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes heartbeatPulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.95; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heartbeat {
+    animation: none;
+  }
+}
+
+/*
+ * Latest-line ticker. Indented to align under the label (past the
+ * chevron + status-icon column), monospace, single-line ellipsis. The
+ * full line is in `title=...` for hover. Renders only while the step
+ * is running and the body is collapsed.
+ */
+.ticker {
+  margin-left: 44px;
+  margin-top: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Subtle living animation — fades in fresh, holds, lets the next
+   * line replace it. Soft cue that the tail is updating. */
+  animation: tickerFade 200ms var(--ease-out, ease-out);
+}
+
+@keyframes tickerFade {
+  from {
+    opacity: 0.4;
+    transform: translateY(-1px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ticker {
+    animation: none;
+  }
+}
+
 .body {
   display: flex;
   flex-direction: column;
   gap: 0;
-  margin-top: var(--space-1);
-  padding: var(--space-3);
+  margin-top: var(--space-2);
+  padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
@@ -266,8 +369,35 @@
   font-size: 12px;
   line-height: 1.55;
   color: var(--text-primary);
-  max-height: 360px;
-  overflow-y: auto;
+  /* Soft inner shadow at the top so the body reads as a recessed surface. */
+  box-shadow: inset 0 6px 8px -6px rgba(0, 0, 0, 0.25);
+  /* Smooth in on expand. */
+  animation: bodyReveal var(--duration-base) var(--ease-out);
+  /*
+   * No internal scroll. Lines flow inside the outer .scroll container
+   * so it sees scrollHeight grow as Claude streams, and the parent's
+   * auto-scroll-to-bottom layout effect can actually follow the tail.
+   * Adding `max-height: Xpx; overflow-y: auto` here breaks that — the
+   * body would scroll internally and the outer container would never
+   * notice new content.
+   */
+}
+
+@keyframes bodyReveal {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .body {
+    animation: none;
+  }
 }
 
 .bodyEmpty {
@@ -276,9 +406,16 @@
   padding: var(--space-2) 0;
 }
 
+/*
+ * Per-line layout: timestamp (fixed width) + content (fluid). The
+ * STDOUT/STDERR badge column was dropped — the literal labels added
+ * noise without information. Stderr lines are still distinguishable
+ * via a muted-warning text color (driven by `data-stream='stderr'`
+ * on `.line`), but no badge column.
+ */
 .line {
   display: grid;
-  grid-template-columns: 80px 56px 1fr;
+  grid-template-columns: 80px 1fr;
   gap: var(--space-3);
   align-items: baseline;
   padding: 1px 0;
@@ -292,18 +429,14 @@
   font-variant-numeric: tabular-nums;
 }
 
-.lineStream {
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.lineStream[data-stream='stderr'] {
-  color: var(--danger);
-}
-
 .lineText {
   color: var(--text-primary);
+}
+
+/*
+ * Stderr text gets a muted warning tint so it's visually
+ * distinguishable from stdout without a labeled column.
+ */
+.line[data-stream='stderr'] .lineText {
+  color: var(--warning, #d99a55);
 }
