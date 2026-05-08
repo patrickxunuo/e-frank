@@ -1,0 +1,110 @@
+/*
+ * Custom 32px titlebar (issue #50). Replaces the OS-default Electron
+ * chrome with a thin, draggable bar that owns the brand at the left and
+ * paints custom min/max/close controls at the right (Windows/Linux).
+ *
+ * Drag region: the bar itself is `-webkit-app-region: drag` (which also
+ * makes double-click-to-maximize work for free). Interactive children —
+ * the window controls — opt back out via `no-drag`.
+ */
+
+.bar {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  flex: 0 0 32px;
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border-subtle);
+  -webkit-app-region: drag;
+  user-select: none;
+  -webkit-user-select: none;
+  /* Keep the titlebar above the gradient mesh painted on <body>. */
+  position: relative;
+  z-index: 10;
+}
+
+/*
+ * macOS: native traffic-light buttons sit at the top-left. Reserve ~80px
+ * of left padding so our lockup doesn't get covered by them.
+ */
+.barMac {
+  padding-left: 80px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-3);
+  flex: 0 0 auto;
+  /* Reserve space for click-through if the lockup ever becomes
+   * interactive (it isn't today — the whole brand area is part of the
+   * drag region). */
+}
+
+.lockup {
+  height: 18px;
+  width: auto;
+  display: block;
+  pointer-events: none;
+  /* The lockup's wordmark uses `fill="currentColor"`. Routing the color
+   * through `--text-primary` lets the wordmark follow theme changes
+   * driven anywhere else in the app — see comment in Titlebar.tsx. */
+  color: var(--text-primary);
+}
+
+.dragRegion {
+  flex: 1 1 auto;
+  height: 100%;
+}
+
+.controls {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+
+.controlButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 32px;
+  background: transparent;
+  border: 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.controlButton:hover {
+  background: var(--surface-overlay-low);
+  color: var(--text-primary);
+}
+
+.controlButton:active {
+  background: var(--surface-overlay-mid);
+}
+
+.controlButton:focus-visible {
+  outline: none;
+  background: var(--surface-overlay-mid);
+  color: var(--text-primary);
+}
+
+.controlButtonClose:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.controlButtonClose:active {
+  background: var(--danger-soft-strong);
+}
+
+.controlButtonClose:focus-visible {
+  background: var(--danger-soft);
+  color: var(--danger);
+}

@@ -1,0 +1,13 @@
+/*
+ * Root frame: <Titlebar/> (32px) above <AppShell/> (1fr). The shell's
+ * own grid handles sidebar + content. Lives outside `App.css` (which is
+ * the global stylesheet) so it can scope cleanly through CSS modules.
+ */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}

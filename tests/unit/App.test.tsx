@@ -148,6 +148,28 @@ function makeIpcApiStub(
     tickets: {
       list: vi.fn<IpcApi['tickets']['list']>().mockResolvedValue(unusedErr()),
     },
+    // #50 Custom titlebar — the renderer mounts <Titlebar /> at the root,
+    // which calls chrome.getState() on mount and subscribes to state
+    // changes. Stub it as an empty/quiet implementation so App tests stay
+    // focused on routing/sidebar behavior.
+    chrome: {
+      minimize: vi
+        .fn<IpcApi['chrome']['minimize']>()
+        .mockResolvedValue({ ok: true, data: null }),
+      maximize: vi
+        .fn<IpcApi['chrome']['maximize']>()
+        .mockResolvedValue({ ok: true, data: null }),
+      close: vi
+        .fn<IpcApi['chrome']['close']>()
+        .mockResolvedValue({ ok: true, data: null }),
+      getState: vi
+        .fn<IpcApi['chrome']['getState']>()
+        .mockResolvedValue({
+          ok: true,
+          data: { isMaximized: false, platform: 'win32' },
+        }),
+      onStateChanged: vi.fn<IpcApi['chrome']['onStateChanged']>(() => () => {}),
+    },
   };
 }
 

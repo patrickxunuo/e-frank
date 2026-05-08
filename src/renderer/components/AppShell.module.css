@@ -1,13 +1,14 @@
 .shell {
   display: grid;
   grid-template-columns: 240px 1fr;
-  min-height: 100vh;
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
 }
 
 .main {
   position: relative;
-  height: 100vh;
+  height: 100%;
   overflow-y: auto;
   /* Reserve space for the scrollbar so it doesn't flash in/out during
    * row-enter animations on first paint. The gutter stays empty when

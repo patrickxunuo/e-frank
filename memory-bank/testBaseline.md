@@ -38,8 +38,10 @@ Tracks the project's automated test coverage as a baseline reference. Updated wh
 | `tests/unit/lib-time.test.ts` | 6 | UTIL-TIME-001..006 — formatRelative bands + invalid input fallback |
 | `tests/unit/lib-priority.test.ts` | 4 | UTIL-PRI-001..004 — Jira priority normalization |
 | `tests/unit/views-project-detail.test.tsx` | 14 | DET-001..014 — header metadata, Auto Mode per-project, multi-select Run, master checkbox indeterminate, tabs, ticket subscription event filter, Active Execution panel |
+| `tests/unit/ipc-contract-chrome.test.ts` | 12 | IPC-CHROME-001..003 — chrome:* channel strings, IpcApi.chrome shape, ChromeState/ChromeStateChangedEvent payload shapes |
+| `tests/unit/components-titlebar.test.tsx` | 6 | TITLEBAR-001..006 — testid present, controls hidden on macOS, button wiring, initial maximize state reflected, live state-changed subscription, no-op when window.api missing |
 
-**Total unit:** 335 tests, all PASS.
+**Total unit:** 911 tests pass + 12 pre-existing skipped (#50 added 18 new across two files).
 
 ### E2E (Playwright)
 | File | Tests | Covers |
@@ -57,6 +59,7 @@ Tracks the project's automated test coverage as a baseline reference. Updated wh
 - **Electron-driven E2E**: No automated test launches the actual Electron app and exercises the IPC bridge through a real BrowserWindow + preload. Will be addressed when user flows exist (issue #2+).
 - **Hot reload**: Cannot be programmatically asserted; developer must verify manually.
 - **Packaging (`npm run dist`)**: Not run in CI yet. SCAFFOLD-004 verifies the `electron-builder.yml` config, but the actual installer build is manual.
+- **Custom titlebar (#50)**: Unit tests cover the React component + IPC contract, but the *frameless* behaviour itself (drag region, Aero Snap, double-click-to-maximize, Alt+Space, macOS traffic-light alignment) can only be verified manually via `npm run dev` — no automated coverage of the actual `BrowserWindow` chrome.
 
 ## Bugs Discovered
 None during #1 or #2 implementation. (#1 had a critical preload-path bug caught by the reviewer pre-merge, plus the sandbox + ESM incompatibility caught by manual `npm run dev` — both fixed and guarded.)

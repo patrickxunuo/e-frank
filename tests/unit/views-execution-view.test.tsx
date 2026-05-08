@@ -214,6 +214,13 @@ function installApi(opts?: {
     tickets: {
       list: vi.fn() as unknown as IpcApi['tickets']['list'],
     },
+    chrome: {
+      minimize: vi.fn() as unknown as IpcApi['chrome']['minimize'],
+      maximize: vi.fn() as unknown as IpcApi['chrome']['maximize'],
+      close: vi.fn() as unknown as IpcApi['chrome']['close'],
+      getState: vi.fn() as unknown as IpcApi['chrome']['getState'],
+      onStateChanged: vi.fn(() => () => {}) as unknown as IpcApi['chrome']['onStateChanged'],
+    },
   };
 
   (window as { api?: IpcApi }).api = api;
