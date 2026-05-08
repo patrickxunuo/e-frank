@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -246,6 +247,19 @@ afterEach(() => {
   vi.restoreAllMocks();
   // Re-mock useActiveRun (restoreAllMocks would clear it).
   (useActiveRun as unknown as Mock).mockReset();
+  // Defensive: restore real timers in case a test set fake ones and
+  // didn't reach its own teardown (e.g. timed out). Fake timers leaking
+  // from one test into the next breaks debounced renders elsewhere.
+  vi.useRealTimers();
+  // Strip any clipboard stub the COPY-* tests installed so unrelated
+  // tests downstream see a clean navigator.
+  if ('clipboard' in navigator) {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    });
+    delete (navigator as { clipboard?: unknown }).clipboard;
+  }
 });
 
 describe('<ProjectDetail /> — DET', () => {
@@ -599,6 +613,161 @@ describe('<ProjectDetail /> — DET', () => {
       expect(
         screen.getByTestId('active-execution-open-details'),
       ).toBeInTheDocument();
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // DET-COPY-001..004 — Copy Branch button on the active execution panel (#44)
+  // ---------------------------------------------------------------------
+  describe('DET-COPY-001 branch name rendered on active execution panel', () => {
+    it('DET-COPY-001: panel shows the active run\'s branch name', async () => {
+      (useActiveRun as unknown as Mock).mockReturnValue({
+        id: 'run-1',
+        projectId: 'p-1',
+        ticketKey: 'ABC-7',
+        mode: 'interactive',
+        branchName: 'feat/GH-44-copy-branch-button',
+        state: 'running',
+        status: 'running',
+        steps: [],
+        pendingApproval: null,
+        startedAt: 0,
+      });
+      installApi({ tickets: [makeTicket('ABC-7')] });
+      installRunsStub();
+
+      render(<ProjectDetail projectId="p-1" onBack={noop} onOpenExecution={() => {}} />);
+
+      const branch = await screen.findByTestId('active-execution-branch');
+      expect(branch).toHaveTextContent('feat/GH-44-copy-branch-button');
+    });
+  });
+
+  describe('DET-COPY-002 click writes branch name to clipboard + flips label', () => {
+    it('DET-COPY-002: click → navigator.clipboard.writeText called; "Copy" → "Copied" → reverts after 1500ms', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(globalThis.navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText },
+      });
+
+      (useActiveRun as unknown as Mock).mockReturnValue({
+        id: 'run-1',
+        projectId: 'p-1',
+        ticketKey: 'ABC-7',
+        mode: 'interactive',
+        branchName: 'feat/GH-44-copy-branch-button',
+        state: 'running',
+        status: 'running',
+        steps: [],
+        pendingApproval: null,
+        startedAt: 0,
+      });
+      installApi({ tickets: [makeTicket('ABC-7')] });
+      installRunsStub();
+
+      render(<ProjectDetail projectId="p-1" onBack={noop} onOpenExecution={() => {}} />);
+
+      // Wait for render with real timers (debounced search effect needs them).
+      const btn = await screen.findByTestId('active-execution-copy-branch');
+      expect(btn).toHaveTextContent(/^copy$/i);
+
+      // Switch to fake timers AFTER mount so we can deterministically advance
+      // the 1.5s reversion timer without slowing the suite. Microtask queue
+      // (the clipboard.writeText Promise) is flushed by advanceTimersByTimeAsync.
+      vi.useFakeTimers();
+      try {
+        fireEvent.click(btn);
+        expect(writeText).toHaveBeenCalledWith('feat/GH-44-copy-branch-button');
+
+        // Flush microtasks so the .then(...) handler runs setCopied(true).
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(
+          screen.getByTestId('active-execution-copy-branch'),
+        ).toHaveTextContent(/copied/i);
+
+        // Advance past 1.5s — label reverts.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1600);
+        });
+        expect(
+          screen.getByTestId('active-execution-copy-branch'),
+        ).toHaveTextContent(/^copy$/i);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe('DET-COPY-003 silent failure on clipboard rejection', () => {
+    it('DET-COPY-003: clipboard.writeText rejection → no throw, label stays "Copy", no error banner', async () => {
+      const writeText = vi.fn().mockRejectedValue(new Error('clipboard blocked'));
+      Object.defineProperty(globalThis.navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText },
+      });
+
+      (useActiveRun as unknown as Mock).mockReturnValue({
+        id: 'run-1',
+        projectId: 'p-1',
+        ticketKey: 'ABC-7',
+        mode: 'interactive',
+        branchName: 'feat/GH-44-copy-branch-button',
+        state: 'running',
+        status: 'running',
+        steps: [],
+        pendingApproval: null,
+        startedAt: 0,
+      });
+      installApi({ tickets: [makeTicket('ABC-7')] });
+      installRunsStub();
+
+      render(<ProjectDetail projectId="p-1" onBack={noop} onOpenExecution={() => {}} />);
+
+      const btn = await screen.findByTestId('active-execution-copy-branch');
+      fireEvent.click(btn);
+
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledTimes(1);
+      });
+      // Label never flips to "Copied" — label remains "Copy".
+      expect(btn).toHaveTextContent(/^copy$/i);
+      expect(btn).not.toHaveTextContent(/copied/i);
+      // No run-error-banner from this failure (silent per spec).
+      expect(screen.queryByTestId('run-error-banner')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('DET-COPY-004 clipboard API unavailable → silent no-op', () => {
+    it('DET-COPY-004: navigator.clipboard undefined → click does nothing, no error', async () => {
+      Object.defineProperty(globalThis.navigator, 'clipboard', {
+        configurable: true,
+        value: undefined,
+      });
+
+      (useActiveRun as unknown as Mock).mockReturnValue({
+        id: 'run-1',
+        projectId: 'p-1',
+        ticketKey: 'ABC-7',
+        mode: 'interactive',
+        branchName: 'feat/GH-44-copy-branch-button',
+        state: 'running',
+        status: 'running',
+        steps: [],
+        pendingApproval: null,
+        startedAt: 0,
+      });
+      installApi({ tickets: [makeTicket('ABC-7')] });
+      installRunsStub();
+
+      render(<ProjectDetail projectId="p-1" onBack={noop} onOpenExecution={() => {}} />);
+
+      const btn = await screen.findByTestId('active-execution-copy-branch');
+      // Should not throw despite missing clipboard API.
+      fireEvent.click(btn);
+      expect(btn).toHaveTextContent(/^copy$/i);
     });
   });
 
