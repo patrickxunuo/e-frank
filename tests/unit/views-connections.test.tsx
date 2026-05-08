@@ -208,14 +208,33 @@ describe('<Connections /> — VIEW-CONN', () => {
   });
 
   // -------------------------------------------------------------------------
-  // VIEW-CONN-002 — Empty state
+  // VIEW-CONN-002 — Empty state (per GH-45 spec: title, description, CTA)
   // -------------------------------------------------------------------------
   it('VIEW-CONN-002: renders the empty-state card when connections.length === 0', async () => {
     installApi({ listResult: { ok: true, data: [] } });
     render(<Connections />);
 
+    const empty = await screen.findByTestId('connections-empty');
+    expect(empty).toBeInTheDocument();
+    expect(within(empty).getByText('No connections yet')).toBeInTheDocument();
+    expect(
+      within(empty).getByText(/credentials e-frank uses to fetch tickets and open PRs/i),
+    ).toBeInTheDocument();
+    expect(within(empty).getByRole('button', { name: /^add connection$/i })).toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // VIEW-CONN-002b — Empty-state CTA opens AddConnectionDialog (GH-45)
+  // -------------------------------------------------------------------------
+  it('VIEW-CONN-002b: clicking the empty-state "Add connection" button opens the Add dialog', async () => {
+    installApi({ listResult: { ok: true, data: [] } });
+    render(<Connections />);
+
+    const cta = await screen.findByTestId('connections-empty-cta');
+    fireEvent.click(cta);
+
     await waitFor(() => {
-      expect(screen.getByTestId('connections-empty')).toBeInTheDocument();
+      expect(screen.getByTestId('add-connection-dialog')).toBeInTheDocument();
     });
   });
 
