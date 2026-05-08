@@ -1,33 +1,49 @@
 /**
- * WorkflowRunner — orchestrator for the ticket-to-PR pipeline (issue #7).
+ * WorkflowRunner — orchestrator for the ticket-to-PR pipeline.
  *
- * Drives a single global active run through the state pipeline:
+ * After #37 (architectural pivot), the runner is a thin host: it spawns
+ * Claude with `/ef-auto-feature <ticketKey>` and lets Claude drive git, PR,
+ * and ticket-update via its own Bash tool. The runner only:
+ *
+ *   1. acquires the per-ticket lock (RunHistory.markRunning),
+ *   2. spawns Claude and wires its stdout to the marker parsers,
+ *   3. updates `Run.state` when Claude emits a phase marker,
+ *   4. pauses on approval markers (interactive mode) and resumes on
+ *      approve / reject / modify,
+ *   5. on Claude exit, releases the lock (RunHistory.clearRunning) and
+ *      lands in a terminal state. Whether the ticket re-appears in the
+ *      eligible list is decided by source-side state (issue closed in
+ *      Jira/GitHub, PR merged, etc.), not a local processed set.
  *
  *   start()
  *     -> locking          (RunHistory.markRunning)
- *     -> preparing        (gitManager.prepareRepo)
- *     -> branching        (gitManager.createBranch)
- *     -> running          (claudeManager.run + approval-marker handling)
- *         (interactive only -> awaitingApproval, paused until approve/reject/modify)
- *     -> committing       (gitManager.commit)
- *     -> pushing          (gitManager.push)
- *     -> creatingPr       (prCreator.create)
- *     -> updatingTicket   (jiraUpdater.update — failure logged, NOT fatal)
- *     -> unlocking        (RunHistory.markProcessed + clearRunning)
- *     -> done
+ *     -> running          (claudeManager.run + marker handling)
+ *         <- branching | committing | pushing | creatingPr | updatingTicket
+ *            (driven by `<<<EF_PHASE>>>{...}<<<END_EF_PHASE>>>` markers)
+ *         <- awaitingApproval (driven by approval markers; resumes to
+ *            whatever phase was active before the pause)
+
+ *     -> unlocking        (RunHistory.clearRunning)
+ *     -> done | failed | cancelled
  *
- * Failure / cancel paths route through `unlocking` for cleanup and end at
- * `failed` / `cancelled`. RunStore.save() runs on every state transition so
- * the persisted snapshot stays incremental.
+ * The collapsed state machine deletes `preparing` from the driven flow.
+ * The other legacy states (`branching`, `committing`, `pushing`,
+ * `creatingPr`, `updatingTicket`) are now **observed phases** — they
+ * appear in `Run.state` only when Claude reports them via a marker.
+ *
+ * `gitManager`, `prCreator`, and `jiraUpdater` are still in the options
+ * for now (back-compat with main.ts wiring + tests) but the runner
+ * never invokes them. NodeGitManager stays as a dormant utility for
+ * future pre-flight checks (e.g. "is the working tree clean?").
  *
  * Emits two events:
  *   - `state-changed` : every state entry / exit (fine-grained timeline)
  *   - `current-changed`: every transition + once with `null` on completion
  *
- * Approval markers in Claude's stdout follow the format documented in
- * `memory-bank/systemPatterns.md`:
+ * Marker contracts are documented in `memory-bank/systemPatterns.md`:
  *
  *   <<<EF_APPROVAL_REQUEST>>>{json}<<<END_EF_APPROVAL_REQUEST>>>
+ *   <<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>
  */
 
 import { EventEmitter } from 'node:events';
@@ -54,6 +70,45 @@ const TICKET_KEY_REGEX = /^[A-Z][A-Z0-9_]*-\d+$/;
 
 const APPROVAL_START = '<<<EF_APPROVAL_REQUEST>>>';
 const APPROVAL_END = '<<<END_EF_APPROVAL_REQUEST>>>';
+const PHASE_START = '<<<EF_PHASE>>>';
+const PHASE_END = '<<<END_EF_PHASE>>>';
+
+/**
+ * Whitelisted phase values from `<<<EF_PHASE>>>` markers. These map 1:1
+ * to existing `RunState` values; any other phase string is logged at
+ * warn level and ignored (forwards-compatible — newer skills emitting a
+ * future phase value won't crash older runners).
+ *
+ * NB: `running` and `awaitingApproval` are deliberately excluded.
+ *   - `running` is the umbrella the runner enters when it spawns Claude;
+ *     phase markers narrow it to a sub-phase, not back to itself.
+ *   - `awaitingApproval` is driven by approval markers, not phase markers
+ *     (per the spec — phase markers MUST NOT transition into a paused
+ *     state, otherwise the resume path becomes ambiguous).
+ */
+const PHASE_VALUES: ReadonlySet<RunState> = new Set<RunState>([
+  'branching',
+  'committing',
+  'pushing',
+  'creatingPr',
+  'updatingTicket',
+]);
+
+/**
+ * Parsed payload from a `<<<EF_PHASE>>>{...}<<<END_EF_PHASE>>>` marker.
+ * `phase` is required; the optional fields carry per-phase data:
+ *
+ *   - `branching` → `branchName`: the actual branch Claude created.
+ *   - `creatingPr` → `prUrl`: the URL `gh pr create` returned.
+ *
+ * Other phases ignore the optional fields. Forward-compatible: future
+ * phases can extend this without changing the marker sentinel format.
+ */
+interface PhaseMarker {
+  phase: RunState;
+  branchName?: string;
+  prUrl?: string;
+}
 
 /**
  * User-visible labels for each state. `null` means the state is internal
@@ -175,6 +230,13 @@ interface ActiveRunCtx {
     promise: Promise<ExitEvent>;
     resolve: (e: ExitEvent) => void;
   } | null;
+  /**
+   * The phase Claude was in when an approval marker fired. Used to
+   * restore `Run.state` on resume — without this, post-approval would
+   * always flip back to `running`, even if a phase marker had
+   * advanced the state to e.g. `committing`. Null when not paused.
+   */
+  priorPhase: RunState | null;
 }
 
 function deepCloneRun(run: Run): Run {
@@ -310,6 +372,7 @@ export class WorkflowRunner extends EventEmitter {
       detachOutputListener: null,
       detachExitListener: null,
       claudeExitDeferred: null,
+      priorPhase: null,
     };
     this.active = ctx;
 
@@ -388,15 +451,15 @@ export class WorkflowRunner extends EventEmitter {
   private async runPipeline(
     ctx: ActiveRunCtx,
     project: ProjectInstance,
-    ticketSummary: string,
+    _ticketSummary: string,
   ): Promise<void> {
     const repoCwd = project.repo.localPath;
-    const baseBranch = project.repo.baseBranch;
     let pipelineError: string | null = null;
     let cancelled = false;
 
     try {
-      // -- locking --
+      // -- locking -- (acquire the per-ticket lock so concurrent runs
+      //               can't race on the same ticket)
       await this.runState(ctx, 'locking', async () => {
         const res = await this.options.runHistory.markRunning(
           ctx.run.projectId,
@@ -407,99 +470,12 @@ export class WorkflowRunner extends EventEmitter {
         }
       });
 
-      // -- preparing --
-      await this.runState(ctx, 'preparing', async () => {
-        const res = await this.options.gitManager.prepareRepo({
-          projectId: ctx.run.projectId,
-          cwd: repoCwd,
-          baseBranch,
-        });
-        if (!res.ok) {
-          throw new Error(`git.prepareRepo failed: ${res.error.code} - ${res.error.message}`);
-        }
-      });
-
-      // -- branching --
-      await this.runState(ctx, 'branching', async () => {
-        const res = await this.options.gitManager.createBranch({
-          cwd: repoCwd,
-          branchName: ctx.run.branchName,
-        });
-        if (!res.ok) {
-          throw new Error(`git.createBranch failed: ${res.error.code} - ${res.error.message}`);
-        }
-      });
-
-      // -- running -- (Claude execution + approval-marker handling)
+      // -- running -- (Claude takes over: spawns the skill, drives git/
+      //               PR/ticket via its own Bash tool, emits phase markers
+      //               so the runner can keep `Run.state` honest, emits
+      //               approval markers to pause for human review.)
       await this.runState(ctx, 'running', async () => {
         await this.runClaudeWithApprovals(ctx, repoCwd);
-      });
-
-      // -- committing --
-      const commitMessage = `feat(${ctx.run.ticketKey}): ${ticketSummary}`;
-      await this.runState(ctx, 'committing', async () => {
-        const res = await this.options.gitManager.commit({
-          cwd: repoCwd,
-          message: commitMessage,
-        });
-        if (!res.ok) {
-          throw new Error(`git.commit failed: ${res.error.code} - ${res.error.message}`);
-        }
-      });
-
-      // -- pushing --
-      await this.runState(ctx, 'pushing', async () => {
-        const res = await this.options.gitManager.push({
-          cwd: repoCwd,
-          branchName: ctx.run.branchName,
-        });
-        if (!res.ok) {
-          throw new Error(`git.push failed: ${res.error.code} - ${res.error.message}`);
-        }
-      });
-
-      // -- creatingPr --
-      const prTitle = commitMessage;
-      const prBody = `Run ${ctx.run.id}\n\nTicket: ${ctx.run.ticketKey}\nBranch: ${ctx.run.branchName}\n`;
-      let prUrl: string | undefined;
-      await this.runState(ctx, 'creatingPr', async () => {
-        const res = await this.options.prCreator.create({
-          cwd: repoCwd,
-          branchName: ctx.run.branchName,
-          baseBranch,
-          title: prTitle,
-          body: prBody,
-        });
-        if (!res.ok) {
-          throw new Error(`pr.create failed: ${res.error.code} - ${res.error.message}`);
-        }
-        prUrl = res.data.url;
-        ctx.run.prUrl = prUrl;
-      });
-
-      // -- updatingTicket -- (failures here do NOT fail the run; spec rule)
-      await this.runState(ctx, 'updatingTicket', async () => {
-        if (prUrl === undefined) {
-          // Should be impossible — creatingPr would have thrown. Belt + suspenders.
-          return;
-        }
-        const res = await this.options.jiraUpdater.update({
-          ticketKey: ctx.run.ticketKey,
-          prUrl,
-          transitionTo: 'In Review',
-        });
-        if (!res.ok) {
-
-          console.warn(
-            `[workflow-runner] jira.update failed (non-fatal): ${res.error.code} - ${res.error.message}`,
-          );
-          // Mark the step as failed but don't throw — pipeline continues.
-          const idx = ctx.run.steps.length - 1;
-          const step = ctx.run.steps[idx];
-          if (step !== undefined) {
-            step.error = `${res.error.code}: ${res.error.message}`;
-          }
-        }
       });
     } catch (err) {
       if (err instanceof CancelledError) {
@@ -522,21 +498,13 @@ export class WorkflowRunner extends EventEmitter {
     // -- unlocking -- (always runs, even on failure / cancel)
     try {
       await this.runState(ctx, 'unlocking', async () => {
-        // Spec rule: success → markProcessed + clearRunning. Cancel / failure
-        // → clearRunning only (ticket stays eligible for a retry).
-        // markProcessed implicitly clears running, but we call clearRunning
-        // explicitly so the call sequence is observable and idempotent.
-        if (pipelineError === null && !cancelled) {
-          const mp = await this.options.runHistory.markProcessed(
-            ctx.run.projectId,
-            ctx.run.ticketKey,
-          );
-          if (!mp.ok) {
-            console.warn(
-              `[workflow-runner] run-history.markProcessed failed: ${mp.error.code} - ${mp.error.message}`,
-            );
-          }
-        }
+        // The runner used to also call `runHistory.markProcessed` on the
+        // success path so a freshly-finished ticket would drop out of the
+        // eligible list. That filter was leaky semantics: source-side
+        // status (Jira closed, GitHub merged-PR auto-close) is the real
+        // source of truth for "this ticket is done." We now release only
+        // the per-ticket lock; whether the ticket re-appears in the list
+        // is decided by the source query.
         const cr = await this.options.runHistory.clearRunning(
           ctx.run.projectId,
           ctx.run.ticketKey,
@@ -661,10 +629,16 @@ export class WorkflowRunner extends EventEmitter {
       throw new CancelledError();
     }
 
-    // Exit — mark step done. state-changed fires for the finer-grained
-    // timeline; current-changed already fired on entry.
-    step.status = 'done';
-    step.finishedAt = this.clock.now();
+    // Exit — mark step done if it isn't already. `transitionToPhase`
+    // (driven by phase markers from Claude) may have closed the
+    // wrapping `running` step early when transitioning into a phase
+    // step; in that case the step has already been finalized and we
+    // skip the re-mutation so finishedAt doesn't drift forward past
+    // the next step's startedAt.
+    if (step.status === 'running') {
+      step.status = 'done';
+      step.finishedAt = this.clock.now();
+    }
     this.emitStateChanged(ctx);
     await this.persist(ctx);
   }
@@ -750,10 +724,16 @@ export class WorkflowRunner extends EventEmitter {
   }
 
   /**
-   * Inspect a single line of Claude stdout for approval markers. The line
-   * splitter in ClaudeProcessManager already gives us individual lines, so
-   * the marker contract is "the entire body lives on one line". If we ever
-   * need to support multi-line markers we'd add a buffer here.
+   * Inspect a single line of Claude stdout for markers. Two contracts are
+   * recognized in interleaved order — whichever appears first in the
+   * buffer is consumed first:
+   *
+   *   <<<EF_APPROVAL_REQUEST>>>{...}<<<END_EF_APPROVAL_REQUEST>>>
+   *   <<<EF_PHASE>>>{"phase":"..."}<<<END_EF_PHASE>>>
+   *
+   * The line splitter in ClaudeProcessManager already gives us individual
+   * lines, so each marker fits on one line. We still buffer in case a
+   * marker is ever split across lines (defensive).
    */
   private handleClaudeLine(ctx: ActiveRunCtx, line: string): void {
     // Append to scan buffer in case markers ever straddle lines (defensive).
@@ -768,40 +748,144 @@ export class WorkflowRunner extends EventEmitter {
     }
 
     // Scan for as many complete markers as the buffer contains. Each
-    // `<<<EF_APPROVAL_REQUEST>>>...<<<END_EF_APPROVAL_REQUEST>>>` pair is
-    // consumed, parsed, and dispatched.
+    // iteration finds the earliest marker (approval or phase), consumes
+    // it, and dispatches. Order-preserving so a phase marker emitted
+    // before an approval marker fires first.
     while (true) {
-      const startIdx = ctx.outputBuffer.indexOf(APPROVAL_START);
-      if (startIdx === -1) return;
-      const afterStart = startIdx + APPROVAL_START.length;
-      const endIdx = ctx.outputBuffer.indexOf(APPROVAL_END, afterStart);
-      if (endIdx === -1) return; // wait for more output
-      const json = ctx.outputBuffer.slice(afterStart, endIdx);
-      ctx.outputBuffer = ctx.outputBuffer.slice(endIdx + APPROVAL_END.length);
+      const apprStart = ctx.outputBuffer.indexOf(APPROVAL_START);
+      const phaseStart = ctx.outputBuffer.indexOf(PHASE_START);
+      if (apprStart === -1 && phaseStart === -1) return;
 
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(json);
-      } catch (err) {
+      const approvalFirst =
+        apprStart !== -1 && (phaseStart === -1 || apprStart < phaseStart);
 
-        console.warn(
-          `[workflow-runner] malformed approval marker JSON: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        continue; // treat as regular output
-      }
+      if (approvalFirst) {
+        const afterStart = apprStart + APPROVAL_START.length;
+        const endIdx = ctx.outputBuffer.indexOf(APPROVAL_END, afterStart);
+        if (endIdx === -1) return; // wait for more output
+        const json = ctx.outputBuffer.slice(afterStart, endIdx);
+        ctx.outputBuffer = ctx.outputBuffer.slice(endIdx + APPROVAL_END.length);
 
-      const approval = this.parseApprovalRequest(parsed);
-      // Detached from the line-handling callback; CancelledError comes
-      // through normally (pipeline handles via `cancellationToken` +
-      // claudeManager.cancel). Anything else is a bug we want to see.
-      void this.dispatchApproval(ctx, approval).catch((err) => {
-        if (err instanceof CancelledError) {
-          return;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(json);
+        } catch (err) {
+          console.warn(
+            `[workflow-runner] malformed approval marker JSON: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          continue; // treat as regular output
         }
 
-        console.error('[workflow-runner] dispatchApproval threw:', err);
-      });
+        const approval = this.parseApprovalRequest(parsed);
+        // Detached from the line-handling callback; CancelledError comes
+        // through normally (pipeline handles via `cancellationToken` +
+        // claudeManager.cancel). Anything else is a bug we want to see.
+        void this.dispatchApproval(ctx, approval).catch((err) => {
+          if (err instanceof CancelledError) {
+            return;
+          }
+          console.error('[workflow-runner] dispatchApproval threw:', err);
+        });
+      } else {
+        const afterStart = phaseStart + PHASE_START.length;
+        const endIdx = ctx.outputBuffer.indexOf(PHASE_END, afterStart);
+        if (endIdx === -1) return; // wait for more output
+        const json = ctx.outputBuffer.slice(afterStart, endIdx);
+        ctx.outputBuffer = ctx.outputBuffer.slice(endIdx + PHASE_END.length);
+
+        const marker = this.parsePhaseMarker(json);
+        if (marker === null) continue; // bad JSON / unknown phase — ignored
+        // Phase markers can't fire while paused on approval (per spec).
+        // If a marker arrives during awaitingApproval (shouldn't happen
+        // with a well-behaved skill but is possible if Claude emits a
+        // phase right before the approval round-trip finishes), drop it.
+        if (ctx.run.state === 'awaitingApproval') {
+          console.warn(
+            `[workflow-runner] phase marker "${marker.phase}" arrived during awaitingApproval; ignored`,
+          );
+          continue;
+        }
+        // Apply per-phase payload BEFORE the state transition so a UI
+        // observer that subscribes to `current-changed` sees a coherent
+        // snapshot (new state + new branchName / prUrl together).
+        if (marker.phase === 'branching' && marker.branchName !== undefined) {
+          ctx.run.branchName = marker.branchName;
+        }
+        if (marker.phase === 'creatingPr' && marker.prUrl !== undefined) {
+          ctx.run.prUrl = marker.prUrl;
+        }
+        this.transitionToPhase(ctx, marker.phase);
+      }
     }
+  }
+
+  /**
+   * Parse a `<<<EF_PHASE>>>{...}<<<END_EF_PHASE>>>` JSON body into a
+   * `PhaseMarker`. Returns `null` (ignored) for malformed JSON or an
+   * unknown `phase` value, with a warn log. Optional fields
+   * (`branchName`, `prUrl`) are extracted when present and well-typed;
+   * other fields are silently dropped (forward-compatible).
+   */
+  private parsePhaseMarker(json: string): PhaseMarker | null {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(json);
+    } catch (err) {
+      console.warn(
+        `[workflow-runner] malformed phase marker JSON: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+    if (typeof parsed !== 'object' || parsed === null) {
+      console.warn('[workflow-runner] phase marker body is not an object');
+      return null;
+    }
+    const obj = parsed as Record<string, unknown>;
+    const phaseRaw = obj['phase'];
+    if (typeof phaseRaw !== 'string') {
+      console.warn('[workflow-runner] phase marker missing string `phase` field');
+      return null;
+    }
+    if (!PHASE_VALUES.has(phaseRaw as RunState)) {
+      console.warn(`[workflow-runner] phase marker has unknown phase "${phaseRaw}"; ignored`);
+      return null;
+    }
+    const marker: PhaseMarker = { phase: phaseRaw as RunState };
+    const branchNameRaw = obj['branchName'];
+    if (typeof branchNameRaw === 'string' && branchNameRaw !== '') {
+      marker.branchName = branchNameRaw;
+    }
+    const prUrlRaw = obj['prUrl'];
+    if (typeof prUrlRaw === 'string' && prUrlRaw !== '') {
+      marker.prUrl = prUrlRaw;
+    }
+    return marker;
+  }
+
+  /**
+   * Close the in-flight step and open a new one for `phase`. Used by the
+   * phase-marker handler (and could be called by approval-resume for
+   * symmetry, but that path uses inline mutation today).
+   */
+  private transitionToPhase(ctx: ActiveRunCtx, phase: RunState): void {
+    const lastIdx = ctx.run.steps.length - 1;
+    const lastStep = ctx.run.steps[lastIdx];
+    if (lastStep !== undefined && lastStep.status === 'running') {
+      lastStep.status = 'done';
+      lastStep.finishedAt = this.clock.now();
+    }
+    ctx.run.state = phase;
+    ctx.run.steps.push({
+      state: phase,
+      userVisibleLabel: USER_VISIBLE_LABELS[phase],
+      status: 'running',
+      startedAt: this.clock.now(),
+    });
+    this.emitStateChanged(ctx);
+    this.emit('current-changed', { run: deepCloneRun(ctx.run) });
+    // Persist async — same rationale as dispatchApproval. The state
+    // transition is already complete in memory; on-disk catches up.
+    void this.persist(ctx);
   }
 
   private parseApprovalRequest(raw: unknown): ApprovalRequest {
@@ -854,6 +938,12 @@ export class WorkflowRunner extends EventEmitter {
       reject: rejectApproval,
     };
 
+    // Remember which phase we were in so resume can flip back to it.
+    // Without this, post-approval would always restore `running`, even
+    // if a phase marker had advanced the run to e.g. `committing` before
+    // Claude emitted the approval marker.
+    ctx.priorPhase = ctx.run.state;
+
     ctx.run.pendingApproval = approval;
     ctx.run.state = 'awaitingApproval';
     ctx.run.steps.push({
@@ -890,7 +980,10 @@ export class WorkflowRunner extends EventEmitter {
         lastStep.finishedAt = this.clock.now();
       }
       ctx.run.pendingApproval = null;
-      ctx.run.state = 'running';
+      // Restore the phase we were in before the pause; default to
+      // 'running' for the legacy single-phase case.
+      ctx.run.state = ctx.priorPhase ?? 'running';
+      ctx.priorPhase = null;
       ctx.approvalDeferred = null;
       this.emitStateChanged(ctx);
       this.emit('current-changed', { run: deepCloneRun(ctx.run) });
@@ -938,8 +1031,23 @@ export class WorkflowRunner extends EventEmitter {
         lastStep.finishedAt = this.clock.now();
       }
       ctx.run.pendingApproval = null;
-      ctx.run.state = 'running';
+      // Restore the phase we were in before the pause. Falls back to
+      // 'running' (the umbrella state for Claude-driven work) when no
+      // phase marker had advanced state yet.
+      const restored: RunState = ctx.priorPhase ?? 'running';
+      ctx.run.state = restored;
+      ctx.priorPhase = null;
       ctx.approvalDeferred = null;
+      // Push a fresh running step for the restored phase so the
+      // timeline reflects "resumed `committing`" instead of having the
+      // approval step bleed into the next phase marker without a clear
+      // boundary.
+      ctx.run.steps.push({
+        state: restored,
+        userVisibleLabel: USER_VISIBLE_LABELS[restored],
+        status: 'running',
+        startedAt: this.clock.now(),
+      });
       this.emitStateChanged(ctx);
       this.emit('current-changed', { run: deepCloneRun(ctx.run) });
       await this.persist(ctx);
@@ -948,6 +1056,7 @@ export class WorkflowRunner extends EventEmitter {
       // so subsequent calls see a coherent state, but don't touch
       // run.state / steps.
       ctx.run.pendingApproval = null;
+      ctx.priorPhase = null;
       ctx.approvalDeferred = null;
     }
   }

@@ -177,6 +177,7 @@ class FakeSpawnedProcessImpl implements FakeSpawnedProcess {
  */
 export class FakeSpawner implements Spawner {
   private _lastSpawned: FakeSpawnedProcessImpl | null = null;
+  private _lastOptions: SpawnOptions | null = null;
   private nextPid = 10000;
 
   /** The most recent spawned fake. Tests use this to drive events. */
@@ -184,7 +185,17 @@ export class FakeSpawner implements Spawner {
     return this._lastSpawned;
   }
 
-  spawn(_options: SpawnOptions): FakeSpawnedProcess {
+  /**
+   * The options passed to the most recent `spawn()` call. Tests assert
+   * against this when they need to verify the command + argv (e.g. that
+   * the manager built a `/<skillName> <ticketKey>` prompt correctly).
+   */
+  get lastOptions(): SpawnOptions | null {
+    return this._lastOptions;
+  }
+
+  spawn(options: SpawnOptions): FakeSpawnedProcess {
+    this._lastOptions = options;
     const fake = new FakeSpawnedProcessImpl(this.nextPid++);
     this._lastSpawned = fake;
     return fake;

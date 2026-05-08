@@ -82,6 +82,51 @@ sentinels are deliberately verbose so they can't collide with normal
 program output. Claude skill authors and #9 (UI) agree on this format —
 do not change it without bumping a marker version.
 
+### Phase marker format (locked, since #37)
+
+Claude skills also emit a single-line **phase marker** at the start of
+each pipeline phase so the runner can drive the UI timeline without
+running git/PR/Jira ops itself. Same marker style as approvals — pair
+of verbose sentinels, JSON body in between:
+
+```
+<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>
+```
+
+The `phase` field maps to one of the existing `RunState` values:
+`branching`, `committing`, `pushing`, `creatingPr`, `updatingTicket`.
+Two phases carry an optional payload field:
+
+- `branching` may include `branchName` (string) — the actual branch
+  Claude created. The runner stores it on `Run.branchName` so the UI
+  shows the real name instead of the runner's pre-Claude derivation.
+- `creatingPr` may include `prUrl` (string) — the PR URL Claude got
+  from `gh pr create`. The runner stores it on `Run.prUrl`.
+
+Other fields are ignored. When the runner parses a valid marker:
+
+- closes the current step (state-changed exit + persist),
+- transitions `Run.state` to the new phase,
+- opens a new step with the matching `userVisibleLabel`,
+- emits `state-changed` (entry) + `current-changed`, persists.
+
+Approval markers can interleave with phase markers — when an approval
+arrives, `Run.state` flips to `awaitingApproval` (paused), and on
+resume flips back to whatever phase was active. Phase markers
+themselves do **not** transition into `awaitingApproval`.
+
+Behaviour for malformed input:
+
+- **unknown `phase` value**: logged at warn level, treated as regular
+  output. Forwards-compatible — newer skills emitting future phase
+  values won't crash older runners.
+- **malformed JSON**: logged at warn level, treated as regular output.
+  Matches approval-marker semantics.
+
+The `<<<EF_PHASE>>>` / `<<<END_EF_PHASE>>>` sentinels are stable. The
+ef-feature skill emits these between its existing Phase 0..6 sections;
+do not rename without coordinating skill + runner together.
+
 ## API Conventions (none — desktop app)
 - No HTTP server in this app. The "API" is the IPC contract between main and renderer.
 - External APIs (Jira, GitHub) are wrapped in dedicated client modules under `src/main/modules/`.

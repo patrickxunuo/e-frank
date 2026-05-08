@@ -1,25 +1,13 @@
 ---
 name: ef-feature
-description: End-to-end feature workflow — fetch GitHub issue, understand context, plan, implement with design quality, and evaluate E2E test needs
+description: End-to-end feature workflow — fetch Jira ticket, understand context, plan, implement with design quality, and evaluate E2E test needs
 disable-model-invocation: true
-argument-hint: [github-issue-url]
+argument-hint: [jira-ticket-url-or-key]
 ---
 
 # Feature Workflow: $ARGUMENTS
 
-Execute the full feature lifecycle from a GitHub issue through to implementation and E2E test evaluation. This skill orchestrates `/ef-context`, `/ef-plan`, `/ef-implement`, `frontend-design`, and `/ef-baseline` into a single end-to-end workflow.
-
-## Autonomous Flow
-
-This workflow runs **end-to-end without pausing for approval between phases**. Do NOT ask the developer for permission before proceeding from one phase or step to the next — surface progress, then continue automatically.
-
-The only allowed stops are hard errors:
-- Invalid GitHub issue URL (Phase 1.1)
-- GitHub authentication failure (Phase 1.2)
-- Memory bank initialization required (Phase 2.1)
-- Review agent verdict requires fixes (Phase 6.2 — fix and re-run, do not ask)
-
-Everything else flows: fetch → context → plan → implement → test → review → completion.
+Execute the full feature lifecycle from a Jira ticket through to implementation and E2E test evaluation. This skill orchestrates `/ef-context`, `/ef-plan`, `/ef-implement`, `frontend-design`, and `/ef-baseline` into a single end-to-end workflow.
 
 ## Active Task Tracking
 
@@ -30,107 +18,121 @@ Format:
 # Active Task
 - Skill: /ef-feature
 - Skill file: .claude/skills/ef-feature/SKILL.md
-- Issue: $ARGUMENTS
+- Ticket: $ARGUMENTS
 - Current phase: [Phase N: name]
 - Waiting for: [developer / nothing]
 
 ## Completed
-- [x] Phase 0: Branch setup (checkout main, create feat branch)
-- [x] Phase 1: Fetch GitHub issue
+- [x] Phase 0: Branch setup (Story/Task only — skipped for Subtasks)
+- [x] Phase 1: Fetch Jira ticket
 - [x] Phase 2: Understand context (ef-context)
 - [x] Phase 3: Plan (ef-plan)
 - [x] Phase 4: Implement (ef-implement + frontend-design)
 - [x] Phase 5: E2E test evaluation (ef-baseline)
 - [x] Phase 6: Code review (ef-review via new agent)
+- [x] Phase 7: Commit
 ...
 
 ## Key Artifacts
-- Issue title: [title]
-- Issue number: [#N]
-- Repo: [owner/repo]
+- Ticket key: [UBM-1234]
+- Ticket title: [title]
+- Ticket type: [Story / Task / Subtask]
+- Parent (if subtask): [UBM-1200]
 - Plan file: [path]
 - Acceptance spec: [path]
-- Branch: [branch name]
+- Branch: [branch name — or "current branch (subtask)"]
 ```
 
-**When the workflow completes** (Phase 6 done), delete `memory-bank/activeTask.md`.
+**When the workflow completes** (Phase 7 done), delete `memory-bank/activeTask.md`.
 
 ---
 
-## Phase 0: Branch Setup
-
-> **Update `activeTask.md`**: Current phase = Phase 0
-
-Before anything else, create a clean feature branch from `main`.
-
-### 0.1: Checkout Main
-
-```bash
-git checkout main
-git pull origin main
-```
-
-### 0.2: Create Feature Branch
-
-Create a new branch with the naming convention `feat/{short-description}` (kebab-case, no issue number prefix):
-
-```bash
-git checkout -b feat/{short-description}
-```
-
-Examples: `feat/html-preview`, `feat/response-body-validation`, `feat/workspace-roles`
-
-**Exception:** If the developer specifies a different base branch or an existing branch, use that instead.
-
----
-
-## Phase 1: Fetch GitHub Issue
+## Phase 1: Fetch Jira Ticket
 
 > **Update `activeTask.md`**: Current phase = Phase 1
 
-### 1.1: Parse the Issue URL
+### 1.1: Parse the Ticket Argument
 
-Extract `owner`, `repo`, and `issue number` from the provided URL (`$ARGUMENTS`).
+Accept either:
+- A Jira ticket key like `UBM-1234`, or
+- A Jira URL like `https://emonster.atlassian.net/browse/UBM-1234`.
 
-Expected format: `https://github.com/{owner}/{repo}/issues/{number}`
+Extract the ticket key. If the argument is neither, STOP and ask the developer for the correct ticket key or URL.
 
-If the argument is not a valid GitHub issue URL, STOP and ask the developer for the correct URL.
+### 1.2: Fetch Ticket Details
 
-### 1.2: Fetch Issue Details
+Use the **Atlassian MCP** tool `mcp__claude_ai_Atlassian__getJiraIssue`:
+- `cloudId`: `emonster.atlassian.net`
+- `issueIdOrKey`: the extracted key
+- `responseContentFormat`: `markdown`
 
-Try fetching the issue using **GitHub MCP** first:
-- Use `mcp__github-server__get_issue` with the extracted owner, repo, and issue number
+If the MCP call fails, STOP and tell the developer to re-authenticate the Atlassian MCP connection.
 
-If MCP fails (e.g., authentication error), fall back to **gh CLI**:
-- `gh issue view {number} --repo {owner}/{repo} --json title,body,labels,assignees,state,comments`
+### 1.3: Summarize the Ticket
 
-If both fail, STOP and tell the developer to fix GitHub authentication (install `gh` CLI and run `gh auth login`, or configure the GitHub MCP server token).
-
-### 1.3: Summarize the Issue
-
-Present the issue details to the developer:
+Present the ticket details to the developer:
 
 ```
-## GitHub Issue Fetched
+## Jira Ticket Fetched
 
-**#{number}: {title}**
-**Labels:** {labels}
-**State:** {state}
+**{KEY}: {title}**
+**Type:** {Story / Task / Subtask / Bug}
+**Status:** {status}
+**Parent:** {parent key + title, if a subtask}
+**Priority:** {priority}
+**Assignee:** {assignee or "unassigned"}
 
 ### Description
-{body — summarized if very long}
+{description — summarized if very long}
 
 ### Key Requirements Extracted
 - [requirement 1]
 - [requirement 2]
-- [requirement 3]
 
-### Acceptance Criteria (from issue)
+### Acceptance Criteria (from ticket)
 - [criterion 1]
 - [criterion 2]
 ```
 
-Proceed automatically to Phase 2. Do not pause for approval.
+Record the **ticket type** — Phase 0 depends on it.
+
+Ask: "I've fetched the ticket. Shall I proceed with branch setup and context analysis?"
+
+Wait for developer confirmation.
+
+---
+
+## Phase 0: Branch Setup (conditional)
+
+> **Update `activeTask.md`**: Current phase = Phase 0
+
+**Run Phase 0 only for Story / Task / Bug tickets. SKIP Phase 0 entirely for Subtasks** — assume the developer is already on the correct branch (typically the branch created by the parent Story/Task ticket run of this skill).
+
+### 0.1: If Ticket is a Subtask
+
+Just record the current branch name in `activeTask.md` (`git branch --show-current`) and proceed to Phase 2. Do NOT run `git checkout main`, do NOT create a new branch, do NOT touch the working tree.
+
+### 0.2: If Ticket is a Story / Task / Bug
+
+1. Confirm the working tree is clean (`git status --short`). If it is not, STOP and ask the developer how to proceed.
+2. Checkout `main` and pull:
+   ```bash
+   git checkout main
+   git pull origin main
+   ```
+3. Create a new branch. Do **NOT** create a git worktree — work inside the existing checkout.
+4. Branch name convention:
+   ```
+   e-moneter-dev/feature/{TICKET-KEY}-{short-kebab-summary}
+   ```
+   Example: `e-moneter-dev/feature/UBM-1483-storage-management-ui-refactor`.
+   - Derive `{short-kebab-summary}` from the ticket title: lowercase, kebab-case, drop articles/tag-prefixes like `[Unimap]`, keep it under ~50 chars.
+5. Create + switch:
+   ```bash
+   git checkout -b e-moneter-dev/feature/{TICKET-KEY}-{short-summary}
+   ```
+
+**Exception:** If the developer specifies a different base branch or existing branch, use that instead.
 
 ---
 
@@ -138,7 +140,7 @@ Proceed automatically to Phase 2. Do not pause for approval.
 
 > **Update `activeTask.md`**: Current phase = Phase 2
 
-Run the `/ef-context` skill workflow to ensure the memory bank is up to date and understand what the issue is really about in the context of the project.
+Run the `/ef-context` skill workflow to ensure the memory bank is up to date and understand what the ticket is really about in the context of the project.
 
 ### 2.1: Check Memory Bank State
 
@@ -146,13 +148,13 @@ Run the `/ef-context` skill workflow to ensure the memory bank is up to date and
    - If YES → read it plus all core files (`projectBrief.md`, `techContext.md`, `systemPatterns.md`, `progress.md`) and any topic files relevant to this feature
    - If NO → run `/ef-context` to initialize the memory bank. STOP and wait for initialization to complete before continuing.
 
-### 2.2: Map Issue to Project Context
+### 2.2: Map Ticket to Project Context
 
-After reading the memory bank, analyze how this issue relates to the existing codebase:
+After reading the memory bank, analyze how this ticket relates to the existing codebase:
 
 1. **Identify affected areas** — which files, components, modules, and API routes are involved
 2. **Check for related past work** — look at `progress.md` for previous features that overlap
-3. **Identify dependencies** — what existing code does this feature depend on
+3. **Identify dependencies** — what existing code does this feature depend on; if the ticket is a subtask, re-read the parent Story/Task and any sibling subtasks
 4. **Identify risks** — what could break, what needs careful handling
 
 Present a brief context summary:
@@ -176,44 +178,38 @@ Present a brief context summary:
 
 > **Update `activeTask.md`**: Current phase = Phase 3
 
-Run the `/ef-plan` skill workflow using the issue requirements as the module definition.
+Run the `/ef-plan` skill workflow using the ticket requirements as the module definition.
 
 ### 3.1: Execute Planning
 
 Follow the `/ef-plan` skill steps:
 
-1. **Break down the issue into features** — the issue may describe a single feature or a small module with multiple features
+1. **Break down the ticket into features** — the ticket may describe a single feature or a small module with multiple features
 2. **For each feature**, provide:
    - Feature name
    - Description
    - Priority (P0/P1/P2)
    - Dependencies
-   - Acceptance direction (derived from the GitHub issue's acceptance criteria + your context analysis)
+   - Acceptance direction (derived from the Jira ticket's acceptance criteria + your context analysis)
 3. **Suggest development order**
 4. **Estimate scope**
 
-### 3.2: Enrich with Issue Context
+### 3.2: Enrich with Ticket Context
 
 When generating the plan, incorporate:
-- Acceptance criteria from the GitHub issue (Phase 1)
+- Acceptance criteria from the Jira ticket (Phase 1)
 - Context analysis from Phase 2
-- Any comments or discussion on the issue (if fetched)
+- Any comments or discussion on the ticket (if fetched)
 
-### Plan Summary
+### CHECKPOINT — Plan Review
 
-Show the plan to the developer for visibility:
+**STOP HERE.** Show the plan to the developer.
 
-```
-## Development Plan for #{number}: {title}
-- Features: [list]
-- Priorities: [P0/P1/P2 breakdown]
-- Acceptance direction: [summary]
-- Recommended order: [order]
-```
+Say: "Here is the development plan for {KEY}: {title}. Review the features, priorities, and acceptance direction. You can add, modify, or remove anything. Confirm when ready and I'll start implementation."
 
-Proceed automatically to implementation. Do not pause for approval.
+Wait for developer confirmation. **NEVER proceed to implementation without plan confirmation.**
 
-Update `memory-bank/progress.md` with the planned features (prepend to log).
+After confirmation, update `memory-bank/progress.md` with the planned features (prepend to log).
 
 ---
 
@@ -228,7 +224,7 @@ Execute implementation using the `/ef-implement` skill workflow, enhanced with `
 For each feature in the confirmed plan (in recommended order):
 
 1. **Generate acceptance spec + interface contract** — follow `/ef-implement` Step 2
-2. **Save spec and proceed** — write the spec to `acceptance/{feature}.md` and continue automatically. Do not pause for approval.
+2. **CHECKPOINT** — get developer confirmation on spec
 3. **Launch Agent Team** — follow `/ef-implement` Step 3:
    - **Agent A (Test Writer)** — writes tests from the spec
    - **Agent B (Implementer)** — writes implementation from the spec
@@ -298,7 +294,7 @@ Present the evaluation result:
 ```
 ## E2E Test Evaluation
 
-**Feature:** #{number}: {title}
+**Ticket:** {KEY}: {title}
 **Agent A E2E tests:** X tests covering [flows]
 **Additional E2E tests needed:** Yes/No
 **Reason:** [why or why not]
@@ -325,8 +321,8 @@ After all tests pass, launch a **new agent** to perform a code review using the 
 
 Use the **Agent tool** to launch a review agent. The agent's prompt must include:
 
-- The feature name and issue number
-- The branch name
+- The feature name and ticket key
+- The branch name (or "current branch" if this is a subtask run)
 - The acceptance spec path (`acceptance/{feature}.md`)
 - Instructions to follow the `/ef-review` skill workflow (Steps 1-7)
 - The full contents of the `/ef-review` skill file (`.claude/skills/ef-review/SKILL.md`) so the agent knows the review process
@@ -336,13 +332,41 @@ Use the **Agent tool** to launch a review agent. The agent's prompt must include
 
 When the review agent returns:
 
-**Verdict: Ready for PR** → proceed to Completion.
+**Verdict: Ready for commit** → proceed to Phase 7.
 
 **Verdict: Fix critical issues first** →
 1. Fix the issues identified by the reviewer
 2. Re-run the affected tests to confirm fixes
 3. Re-launch the review agent to verify fixes
-4. Repeat until the verdict is "Ready for PR"
+4. Repeat until the verdict is "Ready for commit"
+
+---
+
+## Phase 7: Commit
+
+> **Update `activeTask.md`**: Current phase = Phase 7
+
+Stage the changes and create a commit on the current branch. **Do NOT push.** **Do NOT open a pull request.** The developer handles push + PR manually.
+
+### 7.1: Stage + Commit
+
+1. `git status --short` to review changes.
+2. `git add` the specific files that are part of this ticket (avoid blanket `git add -A` so stray files aren't included).
+3. Commit with a concise, English message that references the ticket key and describes the change (not the process). Example:
+   ```
+   UBM-1483: refactor Storage Management page to 2026 Unimap1.0 design
+   ```
+   - Do not add `Co-Authored-By` / `Generated by` / any AI attribution (per project CLAUDE.md).
+   - Do not modify git user config.
+
+### 7.2: Confirm
+
+After the commit succeeds, run `git log -1 --stat` and show the developer:
+- The commit hash and message
+- The files included
+- The current branch name
+
+Tell the developer: "Commit created on `{branch}`. Push and open the PR manually when ready."
 
 ---
 
@@ -359,12 +383,13 @@ Run `/ef-context after-implement` to update the memory bank with everything that
 Present the complete feature summary:
 
 ```
-## Feature Complete: #{number} — {title}
+## Feature Complete: {KEY} — {title}
 
 ### Implementation
 - Features implemented: X
 - Files created/modified: [list]
 - Branch: [branch name]
+- Commit: [hash + subject]
 
 ### Test Coverage
 - API tests: X/X PASS
@@ -372,11 +397,10 @@ Present the complete feature summary:
 - Regressions: None
 
 ### Review
-- Verdict: [Ready for PR / Fixed after review]
+- Verdict: [Ready for commit / Fixed after review]
 - Issues found: [count or none]
 
-### Next Steps
-1. **Commit** — review staged changes and commit
-2. **PR** — create a pull request linking to issue #{number}
-3. **Worktree cleanup** — after merge: `git worktree remove ../[worktree-name]`
+### Next Steps (manual)
+1. **Push** — `git push -u origin {branch}` when ready
+2. **PR** — open a pull request linking to {KEY}
 ```

@@ -73,6 +73,13 @@ function StepRow({ step, index, expanded, onToggle }: StepRowProps): JSX.Element
   const labelText = step.label ?? step.state;
   const range = formatRange(step);
 
+  // A finished step with zero captured output has nothing to show. Render
+  // the row as a non-expandable header so the user doesn't get a useless
+  // chevron that opens onto "No output yet." Still-running steps stay
+  // expandable (output may arrive any moment).
+  const isExpandable = step.status === 'running' || step.lines.length > 0;
+  const showBody = isExpandable && expanded;
+
   return (
     <section
       className={styles.row}
@@ -81,37 +88,46 @@ function StepRow({ step, index, expanded, onToggle }: StepRowProps): JSX.Element
       data-testid={`log-step-${index}`}
     >
       <header className={styles.head}>
-        <button
-          type="button"
-          className={styles.toggle}
-          onClick={onToggle}
-          aria-expanded={expanded}
-          aria-label={expanded ? `Collapse ${labelText}` : `Expand ${labelText}`}
-          data-testid={`log-step-${index}-toggle`}
-        >
-          <span
-            className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`}
-            aria-hidden="true"
+        {isExpandable ? (
+          <button
+            type="button"
+            className={styles.toggle}
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={expanded ? `Collapse ${labelText}` : `Expand ${labelText}`}
+            data-testid={`log-step-${index}-toggle`}
           >
-            {/* Right-pointing chevron; CSS rotates when open. */}
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-              <path
-                d="M3 1.5 6.5 5 3 8.5"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </span>
-        </button>
+            <span
+              className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`}
+              aria-hidden="true"
+            >
+              {/* Right-pointing chevron; CSS rotates when open. */}
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <path
+                  d="M3 1.5 6.5 5 3 8.5"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+          </button>
+        ) : (
+          // Spacer keeps the row aligned with expandable peers. No toggle,
+          // no aria-expanded — the row is purely informational.
+          <span
+            className={`${styles.toggle} ${styles.toggleDisabled}`}
+            aria-hidden="true"
+          />
+        )}
         <span className={styles.statusIcon} aria-hidden="true">
           {statusIcon(step.status)}
         </span>
         <span className={styles.label}>{labelText}</span>
         {range && <span className={styles.range}>{range}</span>}
       </header>
-      {expanded && (
+      {showBody && (
         <div
           className={styles.body}
           data-testid={`log-step-${index}-body`}

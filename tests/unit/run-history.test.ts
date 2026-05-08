@@ -107,14 +107,9 @@ describe('RunHistory', () => {
   });
 
   // -------------------------------------------------------------------------
-  // RH-003 — markProcessed then getProcessed
+  // RH-003 — markProcessed / getProcessed (superseded)
   // -------------------------------------------------------------------------
-  it('RH-003: markProcessed then getProcessed includes the key', async () => {
-    await history.init();
-    const res = await history.markProcessed(PROJECT_A, 'ABC-2');
-    expect(res.ok).toBe(true);
-    expect(history.getProcessed(PROJECT_A)).toContain('ABC-2');
-  });
+  it.skip('RH-003 (superseded): the local processed set was removed; source-side state is authoritative', () => {});
 
   // -------------------------------------------------------------------------
   // RH-004 — clearRunning
@@ -136,20 +131,17 @@ describe('RunHistory', () => {
     await history.init();
     await history.markRunning(PROJECT_A, 'ABC-1');
     await history.markRunning(PROJECT_A, 'ABC-2');
-    await history.markProcessed(PROJECT_B, 'XYZ-9');
+    await history.markRunning(PROJECT_B, 'XYZ-9');
 
     expect(history.getRunning(PROJECT_A)).toEqual(
       expect.arrayContaining(['ABC-1', 'ABC-2']),
     );
-    expect(history.getRunning(PROJECT_B)).toEqual([]);
-    expect(history.getProcessed(PROJECT_A)).toEqual([]);
-    expect(history.getProcessed(PROJECT_B)).toEqual(['XYZ-9']);
+    expect(history.getRunning(PROJECT_B)).toEqual(['XYZ-9']);
   });
 
-  it('RH-005: getRunning / getProcessed return empty array for unknown project', () => {
+  it('RH-005: getRunning returns empty array for unknown project', () => {
     // Not even initialized — the sync read should still be safe.
     expect(history.getRunning('unknown')).toEqual([]);
-    expect(history.getProcessed('unknown')).toEqual([]);
   });
 
   // -------------------------------------------------------------------------
@@ -158,8 +150,7 @@ describe('RunHistory', () => {
   it('RH-006: write then re-init restores state', async () => {
     await history.init();
     await history.markRunning(PROJECT_A, 'ABC-1');
-    await history.markProcessed(PROJECT_A, 'ABC-2');
-    await history.markProcessed(PROJECT_B, 'XYZ-1');
+    await history.markRunning(PROJECT_B, 'XYZ-1');
 
     // Spin up a fresh RunHistory against the same backing fs.
     const history2 = new RunHistory({ filePath: FILE_PATH, fs });
@@ -169,8 +160,32 @@ describe('RunHistory', () => {
     expect(init2.data.projectCount).toBe(2);
 
     expect(history2.getRunning(PROJECT_A)).toContain('ABC-1');
-    expect(history2.getProcessed(PROJECT_A)).toContain('ABC-2');
-    expect(history2.getProcessed(PROJECT_B)).toContain('XYZ-1');
+    expect(history2.getRunning(PROJECT_B)).toContain('XYZ-1');
+  });
+
+  // Back-compat: legacy files (pre-removal of the processed set) carry a
+  // `processed` array on each project entry. The validator silently drops
+  // the field; on the next write it's gone.
+  it('RH-006b: legacy file with `processed` field is read successfully and dropped on next write', async () => {
+    fs.files.set(
+      FILE_PATH,
+      JSON.stringify({
+        schemaVersion: 1,
+        runs: {
+          [PROJECT_A]: { processed: ['ABC-9'], running: ['ABC-1'] },
+        },
+      }),
+    );
+    const res = await history.init();
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(history.getRunning(PROJECT_A)).toEqual(['ABC-1']);
+
+    // After a mutation, the file is rewritten without the `processed` field.
+    await history.markRunning(PROJECT_A, 'ABC-2');
+    const written = fs.files.get(FILE_PATH) ?? '';
+    expect(written).not.toContain('processed');
+    expect(written).toContain('"running"');
   });
 
   // -------------------------------------------------------------------------
@@ -219,17 +234,7 @@ describe('RunHistory', () => {
     expect(occurrences).toBe(1);
   });
 
-  it('RH-008: marking an already-processed key is a no-op', async () => {
-    await history.init();
-    const r1 = await history.markProcessed(PROJECT_A, 'ABC-1');
-    expect(r1.ok).toBe(true);
-    const r2 = await history.markProcessed(PROJECT_A, 'ABC-1');
-    expect(r2.ok).toBe(true);
-
-    const processed = history.getProcessed(PROJECT_A);
-    const occurrences = processed.filter((k) => k === 'ABC-1').length;
-    expect(occurrences).toBe(1);
-  });
+  it.skip('RH-008 (superseded): markProcessed idempotency — method removed with the local processed set', () => {});
 
   it('RH-008: clearRunning on a key that was never marked is ok', async () => {
     await history.init();
@@ -243,17 +248,14 @@ describe('RunHistory', () => {
   it('RH-009: removeProject clears all keys for that project; others untouched', async () => {
     await history.init();
     await history.markRunning(PROJECT_A, 'ABC-1');
-    await history.markProcessed(PROJECT_A, 'ABC-2');
+    await history.markRunning(PROJECT_A, 'ABC-2');
     await history.markRunning(PROJECT_B, 'XYZ-1');
-    await history.markProcessed(PROJECT_B, 'XYZ-2');
 
     const res = await history.removeProject(PROJECT_A);
     expect(res.ok).toBe(true);
 
     expect(history.getRunning(PROJECT_A)).toEqual([]);
-    expect(history.getProcessed(PROJECT_A)).toEqual([]);
     expect(history.getRunning(PROJECT_B)).toContain('XYZ-1');
-    expect(history.getProcessed(PROJECT_B)).toContain('XYZ-2');
   });
 
   // -------------------------------------------------------------------------
@@ -293,15 +295,15 @@ describe('RunHistory', () => {
     const ops: Promise<unknown>[] = [];
     for (let i = 0; i < 10; i++) {
       ops.push(history.markRunning(PROJECT_A, `ABC-${i}`));
-      ops.push(history.markProcessed(PROJECT_B, `XYZ-${i}`));
+      ops.push(history.markRunning(PROJECT_B, `XYZ-${i}`));
     }
     await Promise.all(ops);
 
-    const running = history.getRunning(PROJECT_A);
-    const processed = history.getProcessed(PROJECT_B);
+    const runningA = history.getRunning(PROJECT_A);
+    const runningB = history.getRunning(PROJECT_B);
     for (let i = 0; i < 10; i++) {
-      expect(running).toContain(`ABC-${i}`);
-      expect(processed).toContain(`XYZ-${i}`);
+      expect(runningA).toContain(`ABC-${i}`);
+      expect(runningB).toContain(`XYZ-${i}`);
     }
   });
 });

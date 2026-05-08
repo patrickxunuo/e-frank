@@ -509,11 +509,13 @@ describe('TicketPoller', () => {
   });
 
   // -------------------------------------------------------------------------
-  // POLLER-004 — processed ticket filtered out
+  // POLLER-004 — already-completed tickets are NOT filtered locally
   // -------------------------------------------------------------------------
-  it('POLLER-004: tickets in runHistory.getProcessed are filtered from cache', async () => {
-    await h.history.markProcessed(project.id, 'ABC-1');
-
+  it('POLLER-004: tickets are not filtered by any local processed set; source state is authoritative', async () => {
+    // The local "processed" filter was removed. Whether a ticket re-appears
+    // is decided by source-side state (issue closed in Jira / GitHub, PR
+    // merged, etc.), not by a flag on disk. POLLER-003 covers the running-
+    // ticket filter (which IS still applied for concurrency).
     h.http.expectPrefix(
       'GET',
       SEARCH_PREFIX,
@@ -524,7 +526,8 @@ describe('TicketPoller', () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const keys = res.data.tickets.map((t) => t.key);
-    expect(keys).not.toContain('ABC-1');
+    // Both tickets present — no local "processed" exclusion any more.
+    expect(keys).toContain('ABC-1');
     expect(keys).toContain('ABC-2');
   });
 
