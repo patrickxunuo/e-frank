@@ -9,7 +9,6 @@ import type {
 } from '@shared/ipc';
 import { Badge, type BadgeVariant } from '../components/Badge';
 import { Button } from '../components/Button';
-import { Checkbox } from '../components/Checkbox';
 import {
   DataTable,
   type DataTableColumn,
@@ -181,7 +180,6 @@ export function ProjectDetail({
 }: ProjectDetailProps): JSX.Element {
   const [state, setState] = useState<ProjectState>({ kind: 'loading' });
   const [tab, setTab] = useState<TabId>('tickets');
-  const [selected, setSelected] = useState<Set<string>>(() => new Set());
   /**
    * Local search input value. Server-side search lives on `ticketQuery.search`;
    * we debounce keystrokes into that field so each character doesn't trigger
@@ -196,9 +194,7 @@ export function ProjectDetail({
     error: string | null;
   }>({ runs: [], loading: false, error: null });
   const [runBanner, setRunBanner] = useState<
-    | { kind: 'error'; message: string }
-    | { kind: 'queued'; firstKey: string; remaining: number }
-    | null
+    { kind: 'error'; message: string } | null
   >(null);
   /**
    * Run-row delete UX state. `confirmRunId` drives the modal's open/close;
@@ -335,19 +331,6 @@ export function ProjectDetail({
     })();
   };
 
-  const handleRunSelected = (keys: string[]): void => {
-    if (keys.length === 0) return;
-    const [first, ...rest] = keys;
-    if (first === undefined) return;
-    startRun(first);
-    if (rest.length > 0) {
-      // Sequential queue is a future enhancement — for #7 we start the first
-      // ticket and let the user click Run on the rest after the active run
-      // completes. The banner makes the queueing semantics explicit.
-      setRunBanner({ kind: 'queued', firstKey: first, remaining: rest.length });
-    }
-  };
-
   const handleCancelActive = (): void => {
     if (activeRun === null) return;
     if (typeof window === 'undefined' || !window.api) return;
@@ -434,26 +417,6 @@ export function ProjectDetail({
     };
   }, [projectId]);
 
-  // -- Reset selection whenever the ticket list changes (rule from spec).
-  // With pagination, the visible set grows as the user scrolls — we only
-  // drop selections that are no longer in `pages.rows`, so a select-then-
-  // scroll-then-load flow still preserves the user's checkboxes.
-  useEffect(() => {
-    setSelected((prev) => {
-      if (prev.size === 0) return prev;
-      const visible = new Set(pages.rows.map((t) => t.key));
-      const next = new Set<string>();
-      for (const key of prev) {
-        if (visible.has(key)) next.add(key);
-      }
-      return next.size === prev.size ? prev : next;
-    });
-  }, [pages.rows]);
-
-  const orderedSelectedKeys = useMemo<string[]>(() => {
-    return pages.rows.filter((t) => selected.has(t.key)).map((t) => t.key);
-  }, [pages.rows, selected]);
-
   // Fetch run history for the Runs tab. Refetches whenever the user
   // switches to the Runs tab so a freshly-completed run shows up without
   // a manual refresh. The poller / WorkflowRunner doesn't push completed
@@ -493,30 +456,6 @@ export function ProjectDetail({
       cancelled = true;
     };
   }, [tab, state]);
-
-  const allSelected =
-    pages.rows.length > 0 && selected.size === pages.rows.length;
-  const someSelected = selected.size > 0 && !allSelected;
-
-  const toggleAll = (next: boolean): void => {
-    if (next) {
-      setSelected(new Set(pages.rows.map((t) => t.key)));
-    } else {
-      setSelected(new Set());
-    }
-  };
-
-  const toggleOne = (key: string, next: boolean): void => {
-    setSelected((prev) => {
-      const out = new Set(prev);
-      if (next) {
-        out.add(key);
-      } else {
-        out.delete(key);
-      }
-      return out;
-    });
-  };
 
   // -- Loading + error + not-found shells (no header / tabs in these states) --
   if (state.kind === 'loading') {
@@ -596,24 +535,27 @@ export function ProjectDetail({
 
   const ticketColumns: DataTableColumn<TicketDto>[] = [
     {
-      key: 'select',
-      width: '36px',
-      header: (
-        <Checkbox
-          checked={allSelected}
-          indeterminate={someSelected}
-          onChange={(next) => toggleAll(next)}
-          aria-label="Select all visible tickets"
-          data-testid="ticket-master-checkbox"
-        />
-      ),
+      // Run is the leftmost column. Multi-select used to live here as
+      // a checkbox column with a "Run Selected" button up top, but the
+      // runner enforces a single active run (`ALREADY_RUNNING`) — git
+      // can't check out two branches in one working directory anyway —
+      // so multi-select was theater. Per-row Run is the honest UI.
+      key: 'run',
+      header: '',
+      width: '88px',
       render: (row) => (
-        <Checkbox
-          checked={selected.has(row.key)}
-          onChange={(next) => toggleOne(row.key, next)}
-          aria-label={`Select ${row.key}`}
-          data-testid={`ticket-checkbox-${row.key}`}
-        />
+        <Button
+          variant="primary"
+          size="sm"
+          leadingIcon={<IconPlay size={12} />}
+          onClick={(e) => {
+            e.stopPropagation();
+            startRun(row.key);
+          }}
+          data-testid={`ticket-run-button-${row.key}`}
+        >
+          Run
+        </Button>
       ),
     },
     {
@@ -675,26 +617,6 @@ export function ProjectDetail({
       width: '140px',
       render: (row) => (
         <span className={styles.timeCell}>{formatRelative(row.updatedAt)}</span>
-      ),
-    },
-    {
-      key: 'actions',
-      header: '',
-      align: 'right',
-      width: '110px',
-      render: (row) => (
-        <Button
-          variant="ghost"
-          size="sm"
-          leadingIcon={<IconPlay size={12} />}
-          onClick={(e) => {
-            e.stopPropagation();
-            startRun(row.key);
-          }}
-          data-testid={`ticket-run-button-${row.key}`}
-        >
-          Run
-        </Button>
       ),
     },
   ];
@@ -974,8 +896,6 @@ export function ProjectDetail({
     );
   })();
 
-  const runSelectedDisabled = orderedSelectedKeys.length === 0;
-
   return (
     <div
       className={styles.page}
@@ -1036,16 +956,6 @@ export function ProjectDetail({
             />
             <span className={styles.headDivider} aria-hidden="true" />
             <Button
-              variant="primary"
-              leadingIcon={<IconPlay size={12} />}
-              onClick={() => handleRunSelected(orderedSelectedKeys)}
-              disabled={runSelectedDisabled}
-              data-testid="run-selected-button"
-            >
-              Run Selected
-              {orderedSelectedKeys.length > 0 ? ` (${orderedSelectedKeys.length})` : ''}
-            </Button>
-            <Button
               variant="ghost"
               size="sm"
               leadingIcon={
@@ -1091,22 +1001,11 @@ export function ProjectDetail({
       {runBanner && (
         <div
           className={styles.banner}
-          role={runBanner.kind === 'error' ? 'alert' : 'status'}
-          data-testid={
-            runBanner.kind === 'error' ? 'run-error-banner' : 'run-queued-banner'
-          }
+          role="alert"
+          data-testid="run-error-banner"
         >
           <span>
-            {runBanner.kind === 'error' ? (
-              <>
-                <strong>Couldn’t start run.</strong> {runBanner.message}
-              </>
-            ) : (
-              <>
-                <strong>Run started for {runBanner.firstKey}</strong> — select again
-                after this run completes for the remaining {runBanner.remaining}.
-              </>
-            )}
+            <strong>Couldn’t start run.</strong> {runBanner.message}
           </span>
           <Button
             variant="ghost"

@@ -378,14 +378,10 @@ describe('<ProjectDetail /> — DET', () => {
       // Wait for the page to settle (header rendered).
       await screen.findByTestId('refresh-button');
 
-      // Run Selected starts disabled (0 selected).
-      const runSelected = screen.getByTestId(
-        'run-selected-button',
-      ) as HTMLButtonElement;
-      expect(runSelected.disabled).toBe(true);
-
-      // No ticket rows render.
+      // Multi-select was removed — there's no `Run Selected` button. Per-row
+      // Run lives in the leftmost column instead. Just confirm zero rows.
       expect(screen.queryByTestId(/^ticket-row-/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId('run-selected-button')).not.toBeInTheDocument();
     });
   });
 
@@ -482,77 +478,12 @@ describe('<ProjectDetail /> — DET', () => {
     });
   });
 
-  describe('DET-009 master checkbox + indeterminate', () => {
-    it('DET-009: master checkbox toggles all visible; indeterminate when partial', async () => {
-      const tickets = [makeTicket('ABC-1'), makeTicket('ABC-2'), makeTicket('ABC-3')];
-      installApi({ tickets });
-      const runs = installRunsStub();
-
-      render(
-        <ProjectDetail
-          projectId="p-1"
-          onBack={noop}
-        />,
-      );
-
-      await screen.findByTestId('ticket-row-ABC-1');
-
-      // Click master → all selected.
-      const master = screen.getByTestId('ticket-master-checkbox');
-      fireEvent.click(master);
-
-      // Run Selected should now be enabled.
-      await waitFor(() => {
-        expect(
-          (screen.getByTestId('run-selected-button') as HTMLButtonElement).disabled,
-        ).toBe(false);
-      });
-
-      // Submit and inspect — Run Selected starts the FIRST visible-table-order
-      // ticket via runs.start (per DET-RUN-003 contract).
-      fireEvent.click(screen.getByTestId('run-selected-button'));
-      await waitFor(() => {
-        expect(runs.runsStart).toHaveBeenCalled();
-      });
-      expect(runs.runsStart).toHaveBeenCalledWith({
-        projectId: 'p-1',
-        ticketKey: 'ABC-1',
-      });
-
-      // Click master again → none selected.
-      fireEvent.click(master);
-      await waitFor(() => {
-        expect(
-          (screen.getByTestId('run-selected-button') as HTMLButtonElement).disabled,
-        ).toBe(true);
-      });
-
-      // Now select just ABC-2 → master should be in indeterminate state
-      // (some-but-not-all). The indeterminate marker is presentational — we
-      // accept any of: data-indeterminate="true" / data-state="indeterminate"
-      // / class substring "indeterminate" on the master or one of its
-      // descendants.
-      const cb2 = within(screen.getByTestId('ticket-row-ABC-2')).getByTestId(
-        'ticket-checkbox-ABC-2',
-      );
-      fireEvent.click(cb2);
-
-      await waitFor(() => {
-        const masterEl = screen.getByTestId('ticket-master-checkbox');
-        const indeterminateMarker =
-          masterEl.getAttribute('data-indeterminate') === 'true' ||
-          masterEl.getAttribute('data-state') === 'indeterminate' ||
-          masterEl.closest('[data-indeterminate="true"]') !== null ||
-          masterEl.closest('[data-state="indeterminate"]') !== null ||
-          masterEl.querySelector('[data-indeterminate="true"]') !== null ||
-          masterEl.querySelector('[data-state="indeterminate"]') !== null ||
-          /indeterminate/i.test(masterEl.className) ||
-          Array.from(masterEl.querySelectorAll('*')).some((el) =>
-            /indeterminate/i.test((el as HTMLElement).className ?? ''),
-          );
-        expect(indeterminateMarker).toBe(true);
-      });
-    });
+  describe('DET-009 master checkbox + indeterminate (superseded)', () => {
+    // Superseded — multi-select was theater (the runner enforces a single
+    // active run; git can't check out two branches in one working dir).
+    // Checkboxes + master + Run Selected button + queued banner all
+    // removed; per-row Run is the leftmost column now.
+    it.skip('DET-009 (superseded): multi-select removed', () => {});
   });
 
   describe('DET-010 tab switching', () => {
@@ -950,57 +881,11 @@ describe('<ProjectDetail /> — DET', () => {
     });
   });
 
-  describe('DET-RUN-003 Run Selected starts FIRST + queues remainder', () => {
-    it('DET-RUN-003: Run Selected starts the first selected ticket and reports the queue', async () => {
-      const tickets = [
-        makeTicket('ABC-1'),
-        makeTicket('ABC-2'),
-        makeTicket('ABC-3'),
-        makeTicket('ABC-4'),
-        makeTicket('ABC-5'),
-      ];
-      installApi({ tickets });
-      const runs = installRunsStub();
-
-      render(
-        <ProjectDetail
-          projectId="p-1"
-          onBack={noop}
-        />,
-      );
-
-      // Wait for rows.
-      await screen.findByTestId('ticket-row-ABC-1');
-
-      // Select all 5 via the master checkbox.
-      const master = screen.getByTestId('ticket-master-checkbox');
-      fireEvent.click(master);
-
-      // Now click Run Selected.
-      await waitFor(() => {
-        expect(
-          (screen.getByTestId('run-selected-button') as HTMLButtonElement).disabled,
-        ).toBe(false);
-      });
-      fireEvent.click(screen.getByTestId('run-selected-button'));
-
-      // Only the FIRST selected ticket (table order) is started.
-      await waitFor(() => {
-        expect(runs.runsStart).toHaveBeenCalledTimes(1);
-      });
-      expect(runs.runsStart).toHaveBeenCalledWith({
-        projectId: 'p-1',
-        ticketKey: 'ABC-1',
-      });
-
-      // Remaining count (4) appears somewhere on screen — accept either
-      // "4 more queued" or any other phrasing that includes the count and
-      // a "remaining" / "queued" / "rest" cue.
-      await waitFor(() => {
-        const banner = screen.getByTestId('run-queued-banner');
-        // Banner text mentions the count (4) somewhere.
-        expect(banner.textContent ?? '').toMatch(/4/);
-      });
-    });
+  describe('DET-RUN-003 Run Selected (superseded)', () => {
+    // Superseded with the multi-select removal. The runner is single-
+    // active-run by design; multi-select implied parallelism that
+    // never existed. UI now exposes per-row Run only — covered by
+    // DET-RUN-001.
+    it.skip('DET-RUN-003 (superseded): Run Selected button removed', () => {});
   });
 });
