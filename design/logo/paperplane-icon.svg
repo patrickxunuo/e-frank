@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"
+     role="img" aria-labelledby="title desc">
+  <title id="title">paperplane</title>
+  <desc id="desc">A paper airplane in side view, nose pointing right. The trailing edge has a V-notch where the center fold dips inward; the fold splits the silhouette into a lit upper wing and a shadowed lower wing.</desc>
+
+  <!--
+    Two-tone origami silhouette (refactored to read as a paperplane,
+    not a generic chevron). The four-vertex outline is:
+
+       back-top (3,5)
+            \
+             \____
+              \   \____
+               \       \____
+                \           \  nose (29,13)
+                 \      ____/
+                  \____/
+                   /
+                  / fold-mid (13,16)
+                 /
+       back-bottom (3,23)
+
+    The plane's body is split along the fold line (nose ↔ fold-mid)
+    into two filled triangles:
+      - lit face   = nose, back-top, fold-mid    (upper wing, sunlit)
+      - shadow face = nose, fold-mid, back-bottom (lower wing, in-shadow)
+
+    The two-tone fill is what makes this read as folded paper rather
+    than a flat triangle.
+  -->
+  <defs>
+    <style>
+      .body   { fill: #5b8dff; }
+      .shadow { fill: #2c4a99; }
+    </style>
+  </defs>
+
+  <polygon class="shadow" points="29,13 13,16 3,23"/>
+  <polygon class="body"   points="29,13 3,5 13,16"/>
+</svg>

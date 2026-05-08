@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 152 32"
+     role="img" aria-labelledby="title desc">
+  <title id="title">paperplane</title>
+  <desc id="desc">paperplane horizontal lockup — paper airplane glyph with lowercase wordmark in deep navy. For light UI.</desc>
+
+  <!--
+    Sibling of paperplane-logo-on-dark.svg with the wordmark
+    re-tinted for light surfaces. The glyph is intentionally
+    identical (same accent + shadow colors) so the brand reads
+    consistently across themes.
+  -->
+  <defs>
+    <style>
+      .body { fill: #5b8dff; }
+      .shadow { fill: #2c4a99; }
+      .wordmark {
+        fill: #0a1224;
+        font-family: 'Inter', 'SF Pro Display', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+    </style>
+  </defs>
+
+  <polygon class="shadow" points="29,13 13,16 3,23"/>
+  <polygon class="body"   points="29,13 3,5 13,16"/>
+
+  <text class="wordmark" x="42" y="16" dominant-baseline="middle">paperplane</text>
+</svg>

@@ -1,46 +1,69 @@
-# e-frank logo concepts
+# paperplane — brand assets
 
-Three directions to compare. All three use the app's existing accent (`#4d7cff`) so they drop into the dark theme without a token change.
+Canonical brand mark for the desktop app. Four files, one identity.
 
-## Concept 1 — Stacked Transformation
+| File | Purpose |
+| --- | --- |
+| `paperplane-icon.svg` | Glyph alone (32×32 native). App icon, tray, dock, favicon source. Reads at 16px. |
+| `paperplane-logo-on-dark.svg` | Glyph + lowercase wordmark in white. For dark UI surfaces (canonical theme). |
+| `paperplane-logo-on-light.svg` | Glyph + lowercase wordmark in deep navy. For light UI surfaces. |
+| `paperplane-floating.lottie.json` | Lottie animation — paper airplane gliding/bobbing in a 5-second loop. Hero / empty-state animation. |
 
-`concept1-stacked-arrow.svg` · `concept1-stacked-arrow-horizontal.svg`
+## The mark
 
-Two rounded squares: the back one is dashed (the **ticket**, still pending), the front one is filled with a forward arrow (the **PR**, shipped). Tells the ticket-to-PR story in one glance and is a direct evolution of the existing `IconLogo` mark in `src/renderer/components/icons.tsx`.
+A paper airplane in side-3-quarter view, nose up-right. The silhouette is a 4-vertex polygon split along its center fold into two filled triangles:
 
-- **Pros:** narrative match to the product; least visual disruption.
-- **Cons:** the dashed outline gets noisy below ~24px; story is less obvious in monochrome.
+- **lit face** (`#5b8dff`) — the upper, sunlit surface; takes the larger area
+- **shadow face** (`#2c4a99`) — the underside that peeks below the fold; smaller, darker, gives the form depth
 
-## Concept 2 — Aperture / Focus
+Without the two-tone fold this is just a triangle. The fold is the brand.
 
-`concept2-aperture.svg`
+The glyph is intentionally angular and slightly imperfect-feeling (no soft curves, no gradients) to read as folded paper rather than vector-precision illustration. Inspired by the Linear / Cursor school of confident-minimal — but warmer because of the origami metaphor.
 
-Six chevron blades arranged around a center, evoking a camera iris or the agent's narrowing focus on a single task. Strong silhouette.
+## Wordmark
 
-- **Pros:** distinctive shape; works as monochrome stamp.
-- **Cons:** semantically further from "ticket → PR"; reads as "tech / focus" generically.
+"paperplane", all lowercase, Inter / SF Pro Display / system-ui at 14px / weight 600 / `letter-spacing: -0.01em`. Lowercase reads as friendly-confident — fits the lightweight-async-dispatch product story (you scribble a ticket, fold the plane, send it off, it lands as a PR).
 
-## Concept 3 — Forward Chevron Block
+## Tweaking colors
 
-`concept3-chevron-block.svg` · `concept3-chevron-block-horizontal.svg`
+Each SVG declares its palette in a `<style>` block at the top using stable class names (`.body`, `.shadow`, `.wordmark`). Editing colors is a one-line change per file — no path-by-path hunt.
 
-A rounded square with a clean double-chevron forward arrow. The strongest favicon — recognizable at 16×16.
+For the Lottie file, color values live in two places: `c.k` arrays under each `fl` (fill) shape, in normalized `[r, g, b, a]` (0-1). A find-replace on the rgb tuples works:
 
-- **Pros:** simplest, most legible at small sizes; easiest to monochrome.
-- **Cons:** generic — there are a lot of ">>" logos out there.
+- `#5b8dff` → `[0.357, 0.553, 1.0, 1]`
+- `#2c4a99` → `[0.173, 0.290, 0.6, 1]`
 
-## Wiring it up
+## Sizes
 
-Once you pick one, swap the body of `IconLogo` in `src/renderer/components/icons.tsx`:
+- **Sidebar / app chrome:** 24-32px tall (lockup) or 16-20px (icon only).
+- **Brand contexts (about screen, splash, README):** 48-64px tall.
+- **Favicon / tray icon:** rasterize `paperplane-icon.svg` at 256×256 / 512×512 (e.g. `inkscape paperplane-icon.svg --export-png=icon.png --export-width=512`, or any web converter).
+
+## The Lottie loop
+
+`paperplane-floating.lottie.json` — pure Lottie JSON, no external dependencies, ~3 KB. Renders via [`lottie-web`](https://github.com/airbnb/lottie-web) (or `lottie-react`).
+
+- 240×160 viewport, transparent background, plane centered around (120, 80).
+- 5-second loop at 30fps. The plane bobs ±5px horizontal / ±5px vertical and tilts ±3° on a sine, with the rotation slightly offset from the position so it feels like a glider catching air rather than a single rigid wave.
+- No "intro" — the first frame is a mid-glide pose. The loop is the steady state.
+
+### Reduced-motion fallback
+
+Honor `prefers-reduced-motion: reduce` in the host component. The simplest swap: render `paperplane-icon.svg` (or a scaled-up version of it) in place of the Lottie when the media query matches. The icon's pose is the resting pose of the loop, so the swap is visually coherent.
 
 ```tsx
-export function IconLogo({ size = 22, ...rest }: IconProps): JSX.Element {
-  return (
-    <svg {...baseProps(size)} {...rest} viewBox="0 0 100 100" fill="none">
-      {/* paste the chosen concept's body here */}
-    </svg>
-  );
+import Lottie from 'lottie-react';
+import animation from './paperplane-floating.lottie.json';
+import iconSvg from './paperplane-icon.svg?react';
+
+export function PaperplaneHero(): JSX.Element {
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  return prefersReducedMotion
+    ? <iconSvg width={120} height={80} />
+    : <Lottie animationData={animation} loop autoplay />;
 }
 ```
 
-If you also want a favicon (the Electron app icon), I'd suggest exporting the icon-only SVG to PNG at 256×256 / 512×512 — `inkscape concept-N.svg --export-png=icon.png --export-width=512` or use any web converter.
+## Renderer wiring
+
+The current logo component is `IconLogo` in `src/renderer/components/icons.tsx`. To swap, paste the contents of `paperplane-icon.svg`'s body (the two `<polygon>` elements + the `<defs>` style block) into the component's return. For the sidebar lockup, render `paperplane-logo-on-dark.svg` directly via Vite's `?react` SVGR loader or as a static `<img>`.
