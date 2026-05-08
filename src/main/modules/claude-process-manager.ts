@@ -179,18 +179,30 @@ export class ClaudeProcessManager extends EventEmitter {
       // (system prompt + ticket title/body) and a real tool-allowlist
       // policy instead of a blanket skip.
       //
-      // Prompt: `/<skillName> <ticketKey>` is passed as a single argv
-      // element (no shell, no splitting on space). Claude CLI parses it
-      // as a slash-command invocation that loads the skill prompt and
-      // begins orchestrating the ticket. This is the crux of #37 — the
-      // runner spawns Claude with a real skill, and Claude (not main)
-      // drives git/PR/ticket ops via its own Bash tool.
+      // Prompt: `/<skillName> <ticketKey>` is passed as one argv slot to
+      // Claude. Claude CLI treats the first positional after the safety
+      // flag as a slash-command invocation that loads the skill and
+      // orchestrates the ticket — the crux of #37.
+      //
+      // Quoting note: `NodeSpawner` runs with `shell: true` so Windows
+      // `.cmd` shims resolve. With `shell: true`, Node hands the joined
+      // command line to `cmd.exe /d /s /c "..."` (or `sh -c "..."` on
+      // POSIX), and the shell re-tokenizes on whitespace. Without
+      // explicit quotes, the embedded space in `/<skill> <key>` causes
+      // the shell to split the prompt into two argv elements — Claude
+      // would receive `/<skill>` and `<key>` separately, leaving
+      // `$ARGUMENTS` empty inside the skill (the symptom: skill prints
+      // `could not parse '' as a ticket key`).
+      //
+      // Wrapping in `"..."` keeps cmd.exe and POSIX sh happy: both
+      // strip the surrounding quotes and pass the contents as one arg.
+      // Our prompts contain only alphanumerics, slash, hyphen, and a
+      // single space — no `$`, backtick, or other shell-active chars —
+      // so double quotes are safe (no expansion concerns).
+      const promptArg = `"/${this.skillName} ${req.ticketKey}"`;
       child = this.spawner.spawn({
         command: this.command,
-        args: [
-          '--dangerously-skip-permissions',
-          `/${this.skillName} ${req.ticketKey}`,
-        ],
+        args: ['--dangerously-skip-permissions', promptArg],
         cwd: req.cwd,
       });
     } catch (err) {
