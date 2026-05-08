@@ -62,8 +62,7 @@ import {
   type OutputEvent,
   type ExitEvent,
 } from './modules/claude-process-manager.js';
-import { NodeSpawner, type Spawner } from './modules/spawner.js';
-import { tryCreatePtySpawner } from './modules/pty-spawner.js';
+import { NodeSpawner } from './modules/spawner.js';
 import { ProjectStore } from './modules/project-store.js';
 import { ConnectionStore } from './modules/connection-store.js';
 import { SafeStorageBackend, SecretsManager } from './modules/secrets-manager.js';
@@ -90,12 +89,17 @@ const __dirname = dirname(__filename);
 let mainWindow: BrowserWindow | null = null;
 
 /**
- * Lazy-init at app-ready time so we can try `node-pty` first (line-
- * buffered stdout, real-time output streaming) and fall back to
- * `NodeSpawner` (pipe + shell:true, slow output but always works) if
- * the native module fails to load. See `pty-spawner.ts` for rationale.
+ * NOTE: Claude's stdout block-buffers when not connected to a TTY,
+ * so output arrives in big chunks (often a single dump at process
+ * exit) instead of streaming line-by-line. The clean fix is a
+ * pseudo-terminal via `node-pty`, but every Windows-friendly PTY
+ * package on npm is currently broken without Visual Studio Build
+ * Tools (compile-from-source) or has Node 20+ `spawn EINVAL` issues
+ * in its install script. Filed as a follow-up; for now we accept
+ * the buffering and lean on the renderer-side fixes (heartbeat,
+ * ticker, etc.) so the user has SOME signal that the run is live.
  */
-let claudeManager: ClaudeProcessManager | null = null;
+const claudeManager = new ClaudeProcessManager({ spawner: new NodeSpawner() });
 
 // These are constructed at app-ready time (before window creation) because
 // `SafeStorageBackend` requires `app.whenReady()` and `app.getPath('userData')`
@@ -873,7 +877,6 @@ function registerIpcHandlers(): void {
       if (!validated.ok) {
         return validated;
       }
-      if (claudeManager === null) return notInitialized('ClaudeProcessManager');
       const result = claudeManager.run(validated.data);
       return result;
     },
@@ -886,7 +889,6 @@ function registerIpcHandlers(): void {
       if (!validated.ok) {
         return validated;
       }
-      if (claudeManager === null) return notInitialized('ClaudeProcessManager');
       return claudeManager.cancel(validated.data.runId);
     },
   );
@@ -898,7 +900,6 @@ function registerIpcHandlers(): void {
       if (!validated.ok) {
         return validated;
       }
-      if (claudeManager === null) return notInitialized('ClaudeProcessManager');
       return claudeManager.write(validated.data);
     },
   );
@@ -906,22 +907,17 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.CLAUDE_STATUS,
     async (): Promise<IpcResult<ClaudeStatusResponse>> => {
-      if (claudeManager === null) return notInitialized('ClaudeProcessManager');
       return { ok: true, data: { active: claudeManager.status() } };
     },
   );
 
-  // Forward manager events to all renderer windows. claudeManager is
-  // assigned in whenReady before registerIpcHandlers runs (see
-  // `app.whenReady` below); the null-check here is defensive.
-  if (claudeManager !== null) {
-    claudeManager.on('output', (e: OutputEvent) => {
-      broadcastToWindows(IPC_CHANNELS.CLAUDE_OUTPUT, toIpcOutputEvent(e));
-    });
-    claudeManager.on('exit', (e: ExitEvent) => {
-      broadcastToWindows(IPC_CHANNELS.CLAUDE_EXIT, toIpcExitEvent(e));
-    });
-  }
+  // Forward manager events to all renderer windows.
+  claudeManager.on('output', (e: OutputEvent) => {
+    broadcastToWindows(IPC_CHANNELS.CLAUDE_OUTPUT, toIpcOutputEvent(e));
+  });
+  claudeManager.on('exit', (e: ExitEvent) => {
+    broadcastToWindows(IPC_CHANNELS.CLAUDE_EXIT, toIpcExitEvent(e));
+  });
 
   // -- Project store ---------------------------------------------------------
 
@@ -1831,13 +1827,6 @@ async function initStores(): Promise<void> {
       runLogStore = runLogs;
     }
 
-    if (claudeManager === null) {
-      // Should be impossible — `initClaudeManager()` runs before
-      // `initStores()` in `app.whenReady`. Guard for type narrowing
-      // and to make the assumption explicit.
-      console.error('[main] WorkflowRunner setup skipped: claudeManager not initialized');
-      return;
-    }
     const runner = new WorkflowRunner({
       projectStore: {
         get: async (id: string) => {
@@ -1953,26 +1942,7 @@ async function syncBundledSkill(): Promise<void> {
   }
 }
 
-/**
- * Construct the ClaudeProcessManager with the best available spawner.
- * Tries `node-pty` first — a PTY makes Claude's stdout look like a
- * real terminal, so its C runtime stays line-buffered and output
- * streams to the renderer in real time. Falls back to `NodeSpawner`
- * (piped stdout, block-buffered) if the native module fails to load.
- */
-async function initClaudeManager(): Promise<void> {
-  const pty = await tryCreatePtySpawner();
-  const spawner: Spawner = pty ?? new NodeSpawner();
-  if (pty !== null) {
-    console.log('[main] ClaudeProcessManager using PtySpawner (line-buffered output)');
-  } else {
-    console.log('[main] ClaudeProcessManager using NodeSpawner (piped, block-buffered)');
-  }
-  claudeManager = new ClaudeProcessManager({ spawner });
-}
-
 app.whenReady().then(async () => {
-  await initClaudeManager();
   await initStores();
   await syncBundledSkill();
   registerIpcHandlers();
