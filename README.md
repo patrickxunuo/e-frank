@@ -1,6 +1,9 @@
-# e-frank
+# Paperplane
 
-Desktop AI Ticket → PR Automation. e-frank is a desktop application that
+> Repo and npm package name remain `e-frank` for now — the product surface
+> is Paperplane (window title, installer, About dialog, OS app list).
+
+Desktop AI Ticket → PR Automation. Paperplane is a desktop application that
 converts tickets (Jira / GitHub Issues) into working code and pull requests
 using Claude Code, with optional human approval. It is built for solo
 developers and power users who already work with Git, Jira/GitHub Issues, and

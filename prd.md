@@ -1,5 +1,7 @@
 # 🧾 PRD — Desktop AI Ticket → PR Automation (MVP v2)
 
+> **Naming.** The product surface is **Paperplane** (window title, installer, OS app entry). The repo + npm package name remain `e-frank` for now (a later, separately-decided rename can flip those).
+
 ## 1. 🎯 Goal
 
 Build a desktop application that converts tickets (Jira / GitHub Issues) into working code and pull requests using Claude Code, with optional human approval.

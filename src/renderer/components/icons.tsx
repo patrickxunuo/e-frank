@@ -5,6 +5,7 @@
  * Keep new icons here — do NOT import an icon package. Bundle stays lean.
  */
 import type { SVGProps } from 'react';
+import { PaperplaneGlyph } from './PaperplaneGlyph';
 
 type IconProps = SVGProps<SVGSVGElement> & { size?: number };
 
@@ -23,29 +24,20 @@ function baseProps(size: number): SVGProps<SVGSVGElement> {
 }
 
 export function IconLogo({ size = 22, ...rest }: IconProps): JSX.Element {
-  // Geometric e-frank mark: a stacked rotated square + accent dot.
+  // Paperplane glyph (#GH-51). Silhouette comes from the shared
+  // <PaperplaneGlyph />. The brand colors are intentionally invariant
+  // across themes — the wordmark (when paired with this glyph in a
+  // lockup) is the part that flips.
   return (
-    <svg {...baseProps(size)} {...rest} viewBox="0 0 24 24" fill="none">
-      <rect
-        x="4"
-        y="4"
-        width="13"
-        height="13"
-        rx="2.5"
-        stroke="currentColor"
-        strokeWidth="1.5"
-      />
-      <rect
-        x="9"
-        y="9"
-        width="11"
-        height="11"
-        rx="2.5"
-        fill="currentColor"
-        fillOpacity="0.18"
-        stroke="currentColor"
-        strokeWidth="1.5"
-      />
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 32 32"
+      fill="none"
+      aria-hidden="true"
+      {...rest}
+    >
+      <PaperplaneGlyph />
     </svg>
   );
 }

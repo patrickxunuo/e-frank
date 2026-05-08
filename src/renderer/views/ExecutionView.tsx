@@ -24,6 +24,7 @@ import { ApprovalPanel } from '../components/ApprovalPanel';
 import { Badge, type BadgeVariant } from '../components/Badge';
 import { Button } from '../components/Button';
 import { ExecutionLog } from '../components/ExecutionLog';
+import { RunStatusFigure } from '../components/RunStatusFigure';
 import { Toggle } from '../components/Toggle';
 import {
   IconArrowLeft,
@@ -310,17 +311,24 @@ export function ExecutionView({
           <span>{project?.name ?? projectId}</span>
         </div>
         <div className={styles.headRow}>
-          <div className={styles.titleBlock}>
-            <div className={styles.titleRow}>
-              <h1 className={styles.title} data-testid="execution-title">
-                {project?.name ?? 'Run'}
-              </h1>
-              <span className={styles.ticketKey} data-testid="execution-ticket-key">
-                {ready.ticketKey}
-              </span>
-              {statusBadge(ready)}
+          <div className={styles.titleSection}>
+            <RunStatusFigure
+              status={ready.status}
+              state={ready.state}
+              size={60}
+            />
+            <div className={styles.titleBlock}>
+              <div className={styles.titleRow}>
+                <h1 className={styles.title} data-testid="execution-title">
+                  {project?.name ?? 'Run'}
+                </h1>
+                <span className={styles.ticketKey} data-testid="execution-ticket-key">
+                  {ready.ticketKey}
+                </span>
+                {statusBadge(ready)}
+              </div>
+              <span className={styles.subtitle}>Run · {ready.id.slice(0, 8)}</span>
             </div>
-            <span className={styles.subtitle}>Run · {ready.id.slice(0, 8)}</span>
           </div>
           <div className={styles.headActions}>
             <span className={styles.progress} data-testid="execution-progress">

@@ -83,6 +83,7 @@ import { StubPrCreator } from './modules/pr-creator.js';
 import { StubJiraUpdater } from './modules/jira-updater.js';
 import { WorkflowRunner } from './modules/workflow-runner.js';
 import { installEfAutoFeatureSkill } from './modules/skill-installer.js';
+import { migrateUserData } from './modules/migrate-userdata.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -129,7 +130,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#0e0f13',
-    title: 'e-frank',
+    title: 'Paperplane',
     ...(isMac
       ? {
           titleBarStyle: 'hiddenInset' as const,
@@ -2025,6 +2026,15 @@ async function syncBundledSkill(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  // Rebrand from `e-frank` → `Paperplane` (#GH-51) shifted the userData path.
+  // Run a one-shot copy of any legacy `e-frank` userData into the new dir
+  // BEFORE any store reads — otherwise existing users would see an empty app.
+  // The migration is idempotent + non-fatal; failures are logged and boot
+  // continues with whatever copied successfully.
+  const newUserDataDir = app.getPath('userData');
+  const legacyUserDataDir = join(app.getPath('appData'), 'e-frank');
+  const migration = await migrateUserData({ newUserDataDir, legacyUserDataDir });
+  console.log('[migrate-userdata]', migration);
   await initStores();
   await syncBundledSkill();
   registerIpcHandlers();

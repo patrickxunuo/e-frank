@@ -227,7 +227,7 @@ describe('<Connections /> — VIEW-CONN', () => {
     expect(empty).toBeInTheDocument();
     expect(within(empty).getByText('No connections yet')).toBeInTheDocument();
     expect(
-      within(empty).getByText(/credentials e-frank uses to fetch tickets and open PRs/i),
+      within(empty).getByText(/credentials Paperplane uses to fetch tickets and open PRs/i),
     ).toBeInTheDocument();
     expect(within(empty).getByRole('button', { name: /^add connection$/i })).toBeInTheDocument();
   });
