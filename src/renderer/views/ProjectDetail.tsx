@@ -26,6 +26,8 @@ import {
   IconArrowLeft,
   IconBitbucket,
   IconBranch,
+  IconCheck,
+  IconClipboard,
   IconClose,
   IconCode,
   IconGitHub,
@@ -172,6 +174,52 @@ function priorityLabel(raw: string): string {
   if (!raw) return 'Unset';
   // Title-case the first letter so "high" -> "High".
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+}
+
+interface CopyBranchButtonProps {
+  branchName: string;
+}
+
+function CopyBranchButton({ branchName }: CopyBranchButtonProps): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const handleClick = (): void => {
+    const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
+    if (!clipboard || typeof clipboard.writeText !== 'function') return;
+    void clipboard.writeText(branchName).then(
+      () => {
+        setCopied(true);
+        if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+        timerRef.current = window.setTimeout(() => {
+          setCopied(false);
+          timerRef.current = null;
+        }, 1500);
+      },
+      () => {
+        // Silent failure per spec — clipboard rejected, just leave label as "Copy".
+      },
+    );
+  };
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      leadingIcon={copied ? <IconCheck size={12} /> : <IconClipboard size={12} />}
+      onClick={handleClick}
+      data-testid="active-execution-copy-branch"
+      aria-label={copied ? 'Branch name copied' : `Copy branch name ${branchName}`}
+    >
+      {copied ? 'Copied' : 'Copy'}
+    </Button>
+  );
 }
 
 export function ProjectDetail({
@@ -1258,6 +1306,19 @@ export function ProjectDetail({
                   </div>
                 </div>
                 <span className={styles.activeTitle}>{activeRun.ticketKey}</span>
+                <div className={styles.activeBranchRow}>
+                  <span className={styles.activeBranchIcon} aria-hidden="true">
+                    <IconBranch size={12} />
+                  </span>
+                  <span
+                    className={styles.activeBranchName}
+                    title={activeRun.branchName}
+                    data-testid="active-execution-branch"
+                  >
+                    {activeRun.branchName}
+                  </span>
+                  <CopyBranchButton branchName={activeRun.branchName} />
+                </div>
                 <ProgressBar
                   value={progress}
                   label={stateLabel}
