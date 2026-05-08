@@ -360,7 +360,7 @@ export function Connections({ initialAdd = false }: ConnectionsProps): JSX.Eleme
         <EmptyState
           icon={<IconKey size={26} />}
           title="No connections yet"
-          description="Connect a GitHub, Jira, or Bitbucket account to use across your projects."
+          description="Connections store the credentials e-frank uses to fetch tickets and open PRs (Jira API tokens, GitHub PATs, etc.)."
           action={
             <Button
               variant="primary"
@@ -371,7 +371,7 @@ export function Connections({ initialAdd = false }: ConnectionsProps): JSX.Eleme
               }}
               data-testid="connections-empty-cta"
             >
-              Add your first connection
+              Add connection
             </Button>
           }
           data-testid="connections-empty"
