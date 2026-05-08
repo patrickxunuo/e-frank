@@ -37,9 +37,9 @@ Tracks the project's automated test coverage as a baseline reference. Updated wh
 | `tests/unit/components-progress.test.tsx` | 2 | CMP-PROG-001..002 — fill width, value clamping |
 | `tests/unit/lib-time.test.ts` | 6 | UTIL-TIME-001..006 — formatRelative bands + invalid input fallback |
 | `tests/unit/lib-priority.test.ts` | 4 | UTIL-PRI-001..004 — Jira priority normalization |
-| `tests/unit/views-project-detail.test.tsx` | 14 | DET-001..014 — header metadata, Auto Mode per-project, multi-select Run, master checkbox indeterminate, tabs, ticket subscription event filter, Active Execution panel |
+| `tests/unit/views-project-detail.test.tsx` | 17 | DET-001..015 — header metadata, Auto Mode per-project, multi-select Run, master checkbox indeterminate, tabs, ticket subscription event filter, Active Execution panel, GH-44 copy-branch button (success + clipboard-undefined silent-fail + sync-throw silent-fail) |
 
-**Total unit:** 335 tests, all PASS.
+**Total unit:** 891 tests pass / 10 skipped (table above lags behind the actual count by several intermediate PRs; refresh during the next baseline pass).
 
 ### E2E (Playwright)
 | File | Tests | Covers |
