@@ -14,7 +14,7 @@
  *   - `log-step-{i}-body` on the collapsible body
  */
 
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RunStatus } from '@shared/ipc';
 import type { ExecLogStep } from '../state/run-log';
 import { stripAnsi } from './ansi';
@@ -69,6 +69,14 @@ interface StepRowProps {
   onToggle: () => void;
 }
 
+/**
+ * After this many seconds without new output on a running step, the
+ * StepRow surfaces a "still working — last output Xs ago" hint so the
+ * user knows Claude isn't dead during long quiet stretches (e.g. while
+ * a Bash subprocess like `npm install` runs without printing).
+ */
+const QUIET_THRESHOLD_SECONDS = 15;
+
 function StepRow({ step, index, expanded, onToggle }: StepRowProps): JSX.Element {
   const labelText = step.label ?? step.state;
   const range = formatRange(step);
@@ -79,6 +87,28 @@ function StepRow({ step, index, expanded, onToggle }: StepRowProps): JSX.Element
   // expandable (output may arrive any moment).
   const isExpandable = step.status === 'running' || step.lines.length > 0;
   const showBody = isExpandable && expanded;
+
+  // Quiet-period heartbeat. Tracks "seconds since last output" while
+  // running. We snapshot the latest line's timestamp + the start of
+  // the step (which doubles as "no output yet" reference), tick every
+  // second, and surface the elapsed seconds when above threshold.
+  const lastLineTs =
+    step.lines.length > 0
+      ? step.lines[step.lines.length - 1]!.timestamp
+      : step.startedAt ?? Date.now();
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (step.status !== 'running') return;
+    const handle = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(handle);
+    };
+  }, [step.status]);
+  const quietSeconds = Math.floor((now - lastLineTs) / 1000);
+  const showHeartbeat =
+    step.status === 'running' && quietSeconds >= QUIET_THRESHOLD_SECONDS;
 
   return (
     <section
@@ -125,8 +155,34 @@ function StepRow({ step, index, expanded, onToggle }: StepRowProps): JSX.Element
           {statusIcon(step.status)}
         </span>
         <span className={styles.label}>{labelText}</span>
+        {showHeartbeat && (
+          <span
+            className={styles.heartbeat}
+            data-testid={`log-step-${index}-heartbeat`}
+          >
+            {step.lines.length > 0
+              ? `still working — last output ${quietSeconds}s ago`
+              : `still working — no output yet (${quietSeconds}s)`}
+          </span>
+        )}
         {range && <span className={styles.range}>{range}</span>}
       </header>
+      {/*
+       * Latest-line ticker. When the step is running and the body is
+       * collapsed, surface the most recent line as a subtitle row so
+       * the user sees live progress without expanding. Truncates with
+       * ellipsis on a single line; full text in the title attribute
+       * for hover.
+       */}
+      {step.status === 'running' && step.lines.length > 0 && !expanded && (
+        <div
+          className={styles.ticker}
+          title={stripAnsi(step.lines[step.lines.length - 1]!.line)}
+          data-testid={`log-step-${index}-ticker`}
+        >
+          {stripAnsi(step.lines[step.lines.length - 1]!.line)}
+        </div>
+      )}
       {showBody && (
         <div
           className={styles.body}
@@ -138,11 +194,16 @@ function StepRow({ step, index, expanded, onToggle }: StepRowProps): JSX.Element
             <span className={styles.bodyEmpty}>No output yet.</span>
           ) : (
             step.lines.map((entry, i) => (
-              <div className={styles.line} key={`${entry.timestamp}-${i}`}>
+              // STDOUT / STDERR labels were noisy — dropped. Stream
+              // distinction is preserved as a `data-stream` hook on the
+              // row so CSS can tint stderr lines (muted yellow) without
+              // a literal badge column.
+              <div
+                className={styles.line}
+                data-stream={entry.stream}
+                key={`${entry.timestamp}-${i}`}
+              >
                 <span className={styles.lineTime}>{formatHHMMSS(entry.timestamp)}</span>
-                <span className={styles.lineStream} data-stream={entry.stream}>
-                  {entry.stream}
-                </span>
                 <span className={styles.lineText}>{stripAnsi(entry.line)}</span>
               </div>
             ))

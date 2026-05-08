@@ -191,19 +191,17 @@ describe('ClaudeProcessManager', () => {
     });
 
     // -- #37 ----------------------------------------------------------
-    it('CPM-008b: spawn argv contains `"/ef-auto-feature <ticketKey>"` (quoted skill prompt) by default', () => {
+    it('CPM-008b: spawn argv contains `/ef-auto-feature <ticketKey>` (logical, unquoted) by default', () => {
       const result = manager.run({ ticketKey: VALID_TICKET, cwd: VALID_CWD });
       expect(result.ok).toBe(true);
-      // First positional after the safety flag is the slash-command
-      // invocation, wrapped in `"..."` so `shell: true` (default, needed
-      // for Windows .cmd shims) doesn't split it on the embedded space.
-      // Both cmd.exe and POSIX sh strip the surrounding quotes before
-      // passing to claude as one argv. Default skill is `ef-auto-feature`
-      // — e-frank's autonomous companion to `ef-feature`.
+      // The manager passes plain logical args; each spawner handles its
+      // own serialization (PtySpawner: verbatim, NodeSpawner: shell-
+      // quotes spaces internally). FakeSpawner records the logical
+      // form, so the assertion is on the unquoted slash-command.
       const args = spawner.lastOptions?.args ?? [];
       expect(args).toEqual([
         '--dangerously-skip-permissions',
-        `"/ef-auto-feature ${VALID_TICKET}"`,
+        `/ef-auto-feature ${VALID_TICKET}`,
       ]);
     });
 
@@ -216,7 +214,7 @@ describe('ClaudeProcessManager', () => {
       const result = customManager.run({ ticketKey: VALID_TICKET, cwd: VALID_CWD });
       expect(result.ok).toBe(true);
       const args = customSpawner.lastOptions?.args ?? [];
-      expect(args[1]).toBe(`"/custom-skill ${VALID_TICKET}"`);
+      expect(args[1]).toBe(`/custom-skill ${VALID_TICKET}`);
     });
   });
 

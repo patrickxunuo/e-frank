@@ -253,6 +253,73 @@
   flex: 0 0 auto;
 }
 
+/*
+ * Quiet-period heartbeat. Renders in the header when a running step
+ * has had no output for >= QUIET_THRESHOLD_SECONDS. Reassures the
+ * user during long Bash subprocess silences (e.g. `npm install`).
+ * Subtle — muted color, italic, slow pulse.
+ */
+.heartbeat {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-tertiary);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: heartbeatPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes heartbeatPulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.95; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heartbeat {
+    animation: none;
+  }
+}
+
+/*
+ * Latest-line ticker. Indented to align under the label (past the
+ * chevron + status-icon column), monospace, single-line ellipsis. The
+ * full line is in `title=...` for hover. Renders only while the step
+ * is running and the body is collapsed.
+ */
+.ticker {
+  margin-left: 38px;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Subtle living animation — fades in fresh, holds, lets the next
+   * line replace it. Soft cue that the tail is updating. */
+  animation: tickerFade 200ms var(--ease-out, ease-out);
+}
+
+@keyframes tickerFade {
+  from {
+    opacity: 0.4;
+    transform: translateY(-1px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ticker {
+    animation: none;
+  }
+}
+
 .body {
   display: flex;
   flex-direction: column;
@@ -276,9 +343,16 @@
   padding: var(--space-2) 0;
 }
 
+/*
+ * Per-line layout: timestamp (fixed width) + content (fluid). The
+ * STDOUT/STDERR badge column was dropped — the literal labels added
+ * noise without information. Stderr lines are still distinguishable
+ * via a muted-warning text color (driven by `data-stream='stderr'`
+ * on `.line`), but no badge column.
+ */
 .line {
   display: grid;
-  grid-template-columns: 80px 56px 1fr;
+  grid-template-columns: 80px 1fr;
   gap: var(--space-3);
   align-items: baseline;
   padding: 1px 0;
@@ -292,18 +366,14 @@
   font-variant-numeric: tabular-nums;
 }
 
-.lineStream {
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.lineStream[data-stream='stderr'] {
-  color: var(--danger);
-}
-
 .lineText {
   color: var(--text-primary);
+}
+
+/*
+ * Stderr text gets a muted warning tint so it's visually
+ * distinguishable from stdout without a labeled column.
+ */
+.line[data-stream='stderr'] .lineText {
+  color: var(--warning, #d99a55);
 }
