@@ -1,188 +1,220 @@
 ---
 name: ef-feature
-description: End-to-end feature workflow — fetch GitHub issue, understand context, plan, implement with design quality, and evaluate E2E test needs
+description: End-to-end feature workflow — fetch a ticket (Jira or GitHub Issues), understand context, plan, implement with design quality, evaluate E2E test needs, and ship the PR.
 disable-model-invocation: true
-argument-hint: [github-issue-url]
+argument-hint: [ticket-key-or-url]
 ---
 
 # Feature Workflow: $ARGUMENTS
 
-Execute the full feature lifecycle from a GitHub issue through to implementation and E2E test evaluation. This skill orchestrates `/ef-context`, `/ef-plan`, `/ef-implement`, `frontend-design`, and `/ef-baseline` into a single end-to-end workflow.
+Execute the full feature lifecycle from a ticket through to a pull request. Orchestrates `/ef-context`, `/ef-plan`, `/ef-implement`, `frontend-design`, and `/ef-baseline`.
 
-## Autonomous Flow
+Supports two ticket sources, detected from the shape of `$ARGUMENTS`:
 
-This workflow runs **end-to-end without pausing for approval between phases**. Do NOT ask the developer for permission before proceeding from one phase or step to the next — surface progress, then continue automatically.
+- **Jira** — keys like `UBM-1234`, `ABC-123`, or URLs like `https://*.atlassian.net/browse/{KEY}`
+- **GitHub Issues** — keys like `GH-31`, or URLs like `https://github.com/{owner}/{repo}/issues/{N}`
 
-The only allowed stops are hard errors:
-- Invalid GitHub issue URL (Phase 1.1)
-- GitHub authentication failure (Phase 1.2)
-- Memory bank initialization required (Phase 2.1)
-- Review agent verdict requires fixes (Phase 6.2 — fix and re-run, do not ask)
+Source is detected at Phase 1.1; everything after that (branch naming, commit format, phase markers, push, PR, ticket update) is the same across both, with small per-source forks where the API differs.
 
-Everything else flows: fetch → context → plan → implement → test → review → ship.
+## Running inside e-frank
 
-### Interactive input — what works and what doesn't
+This skill is designed to run as a child process of e-frank's `WorkflowRunner` — but it also works standalone in a terminal. Two contracts to honor:
 
-e-frank's execution view has a free-text textarea wired to Claude's stdin (`api.claude.write`). So **mid-run, you can ask the user a question and they can answer** — the channel exists. What you must NOT do is ask a question during the **first ~3 seconds of the run**: at that moment the user is still on the project page, hasn't navigated to the execution view yet, and Claude's CLI gives up on stdin after a 3-second silence (printing `Warning: no stdin received in 3s, proceeding without it`).
+### Phase markers
 
-So the rule is:
+The runner watches Claude's stdout for one-line markers and uses them to drive its UI timeline:
 
-- **Startup errors** (Phases 0–1): the input was determined at spawn time. If it's malformed or missing, *fail loud* with a printed error and exit. Don't ask — the user is not there to answer yet, and the error needs to be fixed in the developer's config, not typed into a prompt.
-- **Mid-run questions** (Phases 4+): asking is fine — the user has likely opened the execution view and can reply via the textarea. Prefer structured checkpoints (the approval marker) over free-text questions when the decision is bounded.
-
-The plan-review approval marker (`<<<EF_APPROVAL_REQUEST>>>`) is the structured form — e-frank's UI handles it via a dedicated stdin write on `approve\n`. Use it whenever the question is "approve / reject / modify."
-
-## Phase Markers (e-frank integration)
-
-When this skill runs inside e-frank's `WorkflowRunner`, the runner watches Claude's stdout for **phase markers** — single-line tags that drive the UI timeline. Emit one with a plain `echo` at the start of each runner-relevant phase:
-
-```bash
-echo '<<<EF_PHASE>>>{"phase":"branching"}<<<END_EF_PHASE>>>'
+```
+<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>
 ```
 
-The marker fits on one line (no embedded newlines). Valid `phase` values:
+Emit one with a plain `echo` at the start of each runner-relevant phase. Two phases carry an optional payload:
 
-- `branching` — feature branch is being created (Phase 0). May include a `branchName` field carrying the actual branch — the runner uses it to update `Run.branchName` so the UI shows the real name.
-- `committing` — staging + git commit in progress (Phase 7.1)
-- `pushing` — pushing branch to remote (Phase 7.2)
-- `creatingPr` — opening the pull request (Phase 7.3). May include a `prUrl` field — the runner stores it on `Run.prUrl`.
-- `updatingTicket` — updating the ticket source (Phase 7.4)
+- `branching` may include `branchName` (the actual branch you created).
+- `creatingPr` may include `prUrl` (the URL `gh pr create` returned).
 
-Markers are best-effort. If Claude isn't running inside e-frank, the `echo` lines are harmless. The marker contract is documented in `memory-bank/systemPatterns.md`.
+When standalone, the markers are harmless `echo` lines printed to the terminal.
 
-The existing approval marker (`<<<EF_APPROVAL_REQUEST>>>...<<<END_EF_APPROVAL_REQUEST>>>`) is unchanged — phase markers are additive.
+### Approval marker (plan review)
+
+The Phase 3 plan-review checkpoint emits a structured marker:
+
+```
+<<<EF_APPROVAL_REQUEST>>>{"plan":"...","filesToModify":[...],"diff":"...","options":["approve","reject","modify"]}<<<END_EF_APPROVAL_REQUEST>>>
+```
+
+When running inside e-frank, the runner pauses, surfaces an ApprovalPanel, and writes `approve\n` (or modify text + `\n`, or kills the run on reject) to Claude's stdin on user confirmation. In yolo mode the runner auto-approves immediately. When running standalone, the marker shows up as text in the terminal — the developer types `approve` and presses enter.
+
+This is the **only sanctioned interactive checkpoint**. Don't invent free-text "Shall I proceed?" prompts elsewhere — within e-frank they cause subtle UX problems (Claude's stdin-silence timeout fires after 3 seconds of no input, before the user can navigate to the textarea).
+
+### Failure handling
+
+On any hard error (malformed `$ARGUMENTS`, ticket fetch failed, working tree dirty, etc.), **print a one-line error and exit non-zero**. Don't ask the developer to fix it interactively — the runner surfaces the error in the UI; the developer fixes it and re-runs.
 
 ## Active Task Tracking
 
-**At the start of each phase**, update `memory-bank/activeTask.md` with current progress. This file survives context compaction and allows you to resume if you lose context. This file is **local per-developer** — ensure `memory-bank/activeTask.md` is in `.gitignore` (add it if missing).
+**At the start of each phase**, update `memory-bank/activeTask.md` with current progress. This file survives context compaction and allows you to resume if you lose context. **Local per-developer** — ensure `memory-bank/activeTask.md` is in `.gitignore` (add it if missing).
 
 Format:
+
 ```markdown
 # Active Task
 - Skill: /ef-feature
 - Skill file: .claude/skills/ef-feature/SKILL.md
-- Issue: $ARGUMENTS
+- Ticket: $ARGUMENTS
+- Source: jira | github
 - Current phase: [Phase N: name]
-- Waiting for: [developer / nothing]
 
 ## Completed
-- [x] Phase 0: Branch setup (checkout main, create feat branch)
-- [x] Phase 1: Fetch GitHub issue
-- [x] Phase 2: Understand context (ef-context)
-- [x] Phase 3: Plan (ef-plan)
-- [x] Phase 4: Implement (ef-implement + frontend-design)
-- [x] Phase 5: E2E test evaluation (ef-baseline)
-- [x] Phase 6: Code review (ef-review via new agent)
-...
+- [x] Phase 1: Fetch ticket
+- [x] Phase 0: Branch setup (skipped for Jira Subtasks)
+- [x] Phase 2: Understand context
+- [x] Phase 3: Plan
+- [x] Phase 4: Implement
+- [x] Phase 5: E2E test evaluation
+- [x] Phase 6: Code review
+- [x] Phase 7: Ship (commit + push + PR + ticket update)
 
 ## Key Artifacts
-- Issue title: [title]
-- Issue number: [#N]
-- Repo: [owner/repo]
-- Plan file: [path]
-- Acceptance spec: [path]
-- Branch: [branch name]
+- Ticket key: [GH-31 / UBM-1234]
+- Source: [github / jira]
+- Title: [title]
+- Type: [Story / Task / Subtask / Bug / Issue]
+- Branch: [branch name — or "current branch (subtask)"]
+- Commit: [hash + subject]
+- PR: [URL]
 ```
 
-**When the workflow completes** (Phase 6 done), delete `memory-bank/activeTask.md`.
+**When the workflow completes** (Phase 7 done), delete `memory-bank/activeTask.md`.
 
 ---
 
-## Phase 0: Branch Setup
-
-> **Update `activeTask.md`**: Current phase = Phase 0
-
-Create a clean feature branch from `main`, then emit the phase marker
-**including the actual branch name** so e-frank's UI updates from any
-pre-Claude placeholder to the real name.
-
-### 0.1: Checkout Main
-
-```bash
-git checkout main
-git pull origin main
-```
-
-### 0.2: Create Feature Branch
-
-Branch naming convention: `feat/{ticketKey}-{slug}` where `slug` is the
-first 6 words of the issue title (lowercased, alphanumeric+hyphen,
-joined with `-`). This matches the format e-frank pre-derives so the
-runner-side and Claude-side names converge.
-
-```bash
-git checkout -b feat/{ticketKey}-{slug}
-```
-
-After creating the branch, emit the phase marker with the actual branch
-name (replace `<actual-branch>` with the real value):
-
-```bash
-echo '<<<EF_PHASE>>>{"phase":"branching","branchName":"<actual-branch>"}<<<END_EF_PHASE>>>'
-```
-
-Examples: `feat/html-preview`, `feat/response-body-validation`, `feat/workspace-roles`
-
-**Exception:** If the developer specifies a different base branch or an existing branch, use that instead.
-
----
-
-## Phase 1: Fetch GitHub Issue
+## Phase 1: Fetch Ticket
 
 > **Update `activeTask.md`**: Current phase = Phase 1
 
-### 1.1: Parse the Issue Reference
+### 1.1: Detect source + parse the argument
 
 `$ARGUMENTS` is one of:
 
-- **A full GitHub issue URL** — `https://github.com/{owner}/{repo}/issues/{number}`. Parse owner / repo / number from the URL.
-- **A bare ticket key** — `GH-31`, `ABC-123`, etc. This is what e-frank passes when the skill is launched as part of a workflow run. Resolve owner / repo from the current git remote:
+| Shape | Source | How to parse |
+| --- | --- | --- |
+| `https://*.atlassian.net/browse/{KEY}` | Jira | Extract `{KEY}` |
+| `https://github.com/{owner}/{repo}/issues/{N}` | GitHub | Extract `{owner}`, `{repo}`, `{N}` |
+| `GH-{N}` | GitHub | `{N}` is the issue number; resolve `{owner}/{repo}` from `git remote get-url origin` |
+| `[A-Z][A-Z0-9_]*-\d+` (e.g. `UBM-1234`) | Jira | The string itself is the key |
 
-  ```bash
-  git remote get-url origin
-  # https://github.com/owner/repo.git → owner/repo
-  # git@github.com:owner/repo.git → owner/repo
-  ```
+**Resolution order:** if the argument starts with `https://`, route by URL host. Otherwise, if it starts with `GH-` followed by digits, treat as GitHub. Otherwise, if it matches the Jira key regex, treat as Jira.
 
-  The number is the digit portion of the ticket key (`GH-31` → `31`, `ABC-123` → `123`).
+For GitHub bare keys, parse the remote like:
 
-If the argument matches neither shape, **fail loud and exit**: print a one-line error like `[ef-feature] could not parse $ARGUMENTS as a GitHub URL or ticket key (e.g. GH-31)` and stop. **Do NOT prompt the developer interactively.** When this skill runs inside e-frank's WorkflowRunner there is no stdin channel — Claude will hang for ~3 seconds, see no input, then give up. The runner surfaces the printed error in the UI; the developer fixes the input and re-runs.
+```bash
+git remote get-url origin
+# https://github.com/owner/repo.git → owner/repo
+# git@github.com:owner/repo.git    → owner/repo
+```
 
-### 1.2: Fetch Issue Details
+If the argument matches none of the shapes, **fail loud and exit**: print `[ef-feature] could not parse $ARGUMENTS as a Jira/GitHub ticket key or URL` and stop. **Do NOT prompt the developer.**
 
-Try fetching the issue using **GitHub MCP** first:
-- Use `mcp__github-server__get_issue` with the extracted owner, repo, and issue number
+### 1.2: Fetch ticket details
 
-If MCP fails (e.g., authentication error), fall back to **gh CLI**:
-- `gh issue view {number} --repo {owner}/{repo} --json title,body,labels,assignees,state,comments`
+**Jira branch:**
 
-If both fail, **fail loud and exit**: print `[ef-feature] GitHub auth failed; run `gh auth login` or configure the GitHub MCP token` and stop. Same rule as Phase 1.1 — no interactive prompts when running under e-frank.
+Use the Atlassian MCP tool `mcp__claude_ai_Atlassian__getJiraIssue`:
+- `cloudId`: from the URL host if a URL was given (e.g. `emonster.atlassian.net`), else use the project's configured cloud ID. If unknown, default to `emonster.atlassian.net` and fail-loud on auth error.
+- `issueIdOrKey`: the extracted key.
+- `responseContentFormat`: `markdown`.
 
-### 1.3: Summarize the Issue
+If the MCP call fails, **fail loud and exit**: print `[ef-feature] Atlassian MCP unavailable; re-authenticate the connection` and stop.
 
-Present the issue details to the developer:
+**GitHub branch:**
+
+Try the GitHub MCP first: `mcp__github-server__get_issue` with `{owner}`, `{repo}`, `{N}`.
+
+If MCP is unavailable, fall back to `gh` CLI:
+
+```bash
+gh issue view {N} --repo {owner}/{repo} --json title,body,labels,assignees,state,comments
+```
+
+If both fail, **fail loud and exit**: print `[ef-feature] GitHub auth failed; run "gh auth login" or configure the GitHub MCP token` and stop.
+
+### 1.3: Summarize the ticket
+
+Present the ticket details:
 
 ```
-## GitHub Issue Fetched
+## Ticket Fetched ({source})
 
-**#{number}: {title}**
-**Labels:** {labels}
-**State:** {state}
+**{KEY}: {title}**
+**Type:** {Story / Task / Subtask / Bug / Issue}
+**Status:** {status}
+**Parent:** {parent key + title, if a Jira subtask}
+**Priority:** {priority, if Jira}
+**Labels:** {labels, if GitHub or Jira}
+**Assignee:** {assignee or "unassigned"}
 
 ### Description
-{body — summarized if very long}
+{description — summarized if very long}
 
 ### Key Requirements Extracted
 - [requirement 1]
 - [requirement 2]
-- [requirement 3]
 
-### Acceptance Criteria (from issue)
+### Acceptance Criteria (from ticket)
 - [criterion 1]
 - [criterion 2]
 ```
 
-Proceed automatically to Phase 2. Do not pause for approval.
+Record the **ticket type** — Phase 0 forks on it. GitHub Issues don't have subtask hierarchy; treat them as Story-equivalent.
+
+Proceed automatically to Phase 0. **Do NOT pause to ask** — the runner is autonomous.
+
+---
+
+## Phase 0: Branch Setup (conditional)
+
+> **Update `activeTask.md`**: Current phase = Phase 0
+
+**Run Phase 0 for everything EXCEPT Jira Subtasks.** Subtasks inherit their parent Story/Task's branch — running Phase 0 would clobber the developer's working state.
+
+### 0.1: If ticket is a Jira Subtask
+
+Just record the current branch name in `activeTask.md` (`git branch --show-current`) and proceed to Phase 2. Do NOT `git checkout main`, do NOT create a new branch, do NOT touch the working tree.
+
+Emit the branching marker carrying the existing branch name so e-frank's UI shows the right one:
+
+```bash
+echo "<<<EF_PHASE>>>{\"phase\":\"branching\",\"branchName\":\"$(git branch --show-current)\"}<<<END_EF_PHASE>>>"
+```
+
+### 0.2: If ticket is a Story / Task / Bug / GitHub Issue
+
+1. **Confirm the working tree is clean** — `git status --short`. If it's not, **fail loud and exit**: print `[ef-feature] working tree is dirty; commit or stash first` and stop. Do not auto-stash.
+
+2. **Checkout main and pull:**
+   ```bash
+   git checkout main
+   git pull origin main
+   ```
+
+3. **Compute the branch name.** Convention: `feat/{TICKET-KEY}-{short-kebab-summary}`.
+   - `{TICKET-KEY}` is the ticket's canonical key (e.g. `GH-31`, `UBM-1234`).
+   - `{short-kebab-summary}` is derived from the ticket title: lowercase, kebab-case, drop bracketed tag prefixes (`[Unimap]`, `[backend]`), drop articles, keep it under ~50 characters.
+   - Example: `feat/UBM-1483-storage-management-ui-refactor`, `feat/GH-31-show-app-version`.
+
+4. **Create + switch:**
+   ```bash
+   git checkout -b feat/{TICKET-KEY}-{short-kebab-summary}
+   ```
+
+5. **Emit the branching marker AFTER the branch exists,** carrying the actual name so e-frank updates `Run.branchName` from any pre-Claude derivation it might have shown:
+
+   ```bash
+   echo "<<<EF_PHASE>>>{\"phase\":\"branching\",\"branchName\":\"$(git branch --show-current)\"}<<<END_EF_PHASE>>>"
+   ```
+
+**Exception:** If the developer specifies a different base branch or existing branch via free-text in the ExecutionView textarea, use that instead.
 
 ---
 
@@ -190,22 +222,22 @@ Proceed automatically to Phase 2. Do not pause for approval.
 
 > **Update `activeTask.md`**: Current phase = Phase 2
 
-Run the `/ef-context` skill workflow to ensure the memory bank is up to date and understand what the issue is really about in the context of the project.
+Run the `/ef-context` skill workflow to ensure the memory bank is up to date and understand what the ticket is really about in the context of the project.
 
 ### 2.1: Check Memory Bank State
 
-1. Check if `memory-bank/index.md` exists
-   - If YES → read it plus all core files (`projectBrief.md`, `techContext.md`, `systemPatterns.md`, `progress.md`) and any topic files relevant to this feature
+1. Check if `memory-bank/index.md` exists.
+   - If YES → read it plus all core files (`projectBrief.md`, `techContext.md`, `systemPatterns.md`, `progress.md`) and any topic files relevant to this feature.
    - If NO → run `/ef-context` to initialize the memory bank. STOP and wait for initialization to complete before continuing.
 
-### 2.2: Map Issue to Project Context
+### 2.2: Map ticket to project context
 
-After reading the memory bank, analyze how this issue relates to the existing codebase:
+After reading the memory bank, analyze how this ticket relates to the existing codebase:
 
-1. **Identify affected areas** — which files, components, modules, and API routes are involved
-2. **Check for related past work** — look at `progress.md` for previous features that overlap
-3. **Identify dependencies** — what existing code does this feature depend on
-4. **Identify risks** — what could break, what needs careful handling
+1. **Identify affected areas** — which files, components, modules, and API routes are involved.
+2. **Check for related past work** — look at `progress.md` for previous features that overlap.
+3. **Identify dependencies** — what existing code does this feature depend on; if the ticket is a Jira subtask, re-read the parent and any sibling subtasks.
+4. **Identify risks** — what could break, what needs careful handling.
 
 Present a brief context summary:
 
@@ -222,50 +254,57 @@ Present a brief context summary:
 - [risk]: [mitigation]
 ```
 
+Proceed automatically to Phase 3.
+
 ---
 
 ## Phase 3: Plan
 
 > **Update `activeTask.md`**: Current phase = Phase 3
 
-Run the `/ef-plan` skill workflow using the issue requirements as the module definition.
+Run the `/ef-plan` skill workflow using the ticket requirements as the module definition.
 
 ### 3.1: Execute Planning
 
 Follow the `/ef-plan` skill steps:
 
-1. **Break down the issue into features** — the issue may describe a single feature or a small module with multiple features
+1. **Break down the ticket into features** — the ticket may describe a single feature or a small module with multiple features.
 2. **For each feature**, provide:
    - Feature name
    - Description
    - Priority (P0/P1/P2)
    - Dependencies
-   - Acceptance direction (derived from the GitHub issue's acceptance criteria + your context analysis)
-3. **Suggest development order**
-4. **Estimate scope**
+   - Acceptance direction (derived from the ticket's acceptance criteria + your context analysis).
+3. **Suggest development order**.
+4. **Estimate scope**.
 
-### 3.2: Enrich with Issue Context
+### 3.2: Enrich with ticket context
 
 When generating the plan, incorporate:
-- Acceptance criteria from the GitHub issue (Phase 1)
-- Context analysis from Phase 2
-- Any comments or discussion on the issue (if fetched)
 
-### Plan Summary
+- Acceptance criteria from the ticket (Phase 1).
+- Context analysis from Phase 2.
+- Any comments / discussion on the ticket (if fetched).
 
-Show the plan to the developer for visibility:
+### 3.3: Plan-review checkpoint
 
+Emit the structured approval marker so e-frank's ApprovalPanel renders, OR (when standalone) the developer can read the plan and type `approve`:
+
+```bash
+cat <<'EOF'
+<<<EF_APPROVAL_REQUEST>>>{"plan":"<one-paragraph plan summary>","filesToModify":["src/foo.ts","tests/foo.test.ts"],"diff":"<optional preview diff>","options":["approve","reject","modify"]}<<<END_EF_APPROVAL_REQUEST>>>
+EOF
 ```
-## Development Plan for #{number}: {title}
-- Features: [list]
-- Priorities: [P0/P1/P2 breakdown]
-- Acceptance direction: [summary]
-- Recommended order: [order]
-```
 
-Proceed automatically to implementation. Do not pause for approval.
+Then **read stdin** for the response:
 
-Update `memory-bank/progress.md` with the planned features (prepend to log).
+- `approve\n` → continue to Phase 4.
+- Any other text starting with `modify ` followed by replacement plan text → adopt the new plan and continue to Phase 4.
+- `reject\n` → exit non-zero (the run is cancelled).
+
+In yolo mode, e-frank writes `approve\n` immediately so this is a no-op pause.
+
+After approval, update `memory-bank/progress.md` with the planned features (prepend to log).
 
 ---
 
@@ -275,29 +314,26 @@ Update `memory-bank/progress.md` with the planned features (prepend to log).
 
 Execute implementation using the `/ef-implement` skill workflow, enhanced with `frontend-design` for any UI work.
 
-### 4.1: Implement Each Feature
+### 4.1: Implement each feature
 
 For each feature in the confirmed plan (in recommended order):
 
-1. **Generate acceptance spec + interface contract** — follow `/ef-implement` Step 2
-2. **Save spec and proceed** — write the spec to `acceptance/{feature}.md` and continue automatically. Do not pause for approval.
+1. **Generate acceptance spec + interface contract** — follow `/ef-implement` Step 2.
+2. **Save spec and proceed** — write the spec to `acceptance/{feature}.md` and continue automatically. Do not pause.
 3. **Launch Agent Team** — follow `/ef-implement` Step 3:
-   - **Agent A (Test Writer)** — writes tests from the spec
-   - **Agent B (Implementer)** — writes implementation from the spec
-   - **For features with UI components**: Agent B's prompt MUST include the `frontend-design` skill guidelines:
-     - Follow the Design Thinking and Frontend Aesthetics Guidelines from the `frontend-design` skill
-     - Match the existing project's design system (CSS variables, theme, typography from `App.css`)
-     - Ensure UI components have `data-testid` attributes for E2E testing
-     - Create visually polished, production-grade UI that integrates seamlessly with the existing app
-4. **Run tests & reconcile** — follow `/ef-implement` Step 4
-5. **Final verification** — follow `/ef-implement` Step 5
+   - **Agent A (Test Writer)** — writes tests from the spec.
+   - **Agent B (Implementer)** — writes implementation from the spec.
+   - **For features with UI components**: Agent B's prompt MUST include the `frontend-design` skill guidelines — match the existing project's design system (CSS variables, theme, typography), include `data-testid` attributes for E2E testing, produce visually polished production-grade UI.
+4. **Run tests & reconcile** — follow `/ef-implement` Step 4.
+5. **Final verification** — follow `/ef-implement` Step 5.
 
-### 4.2: Cross-Feature Integration
+### 4.2: Cross-feature integration
 
 After all features are implemented:
-1. Run the full test suite to catch integration issues
-2. Verify all features work together as expected
-3. Show final implementation summary
+
+1. Run the full test suite to catch integration issues.
+2. Verify all features work together as expected.
+3. Show final implementation summary.
 
 ---
 
@@ -307,63 +343,39 @@ After all features are implemented:
 
 Evaluate whether the new feature needs additional E2E test coverage using the `/ef-baseline` skill.
 
-### 5.1: Check Existing Coverage
+### 5.1: Check existing coverage
 
-1. Read `memory-bank/testBaseline.md` if it exists — check current E2E coverage
-2. Review what Agent A already wrote during Phase 4 — E2E tests may already be sufficient
+1. Read `memory-bank/testBaseline.md` if it exists.
+2. Review what Agent A already wrote during Phase 4.
 
-### 5.2: Evaluate E2E Needs
-
-Determine if additional E2E tests are needed beyond what Agent A wrote:
+### 5.2: Evaluate E2E needs
 
 **Additional E2E tests are needed if:**
-- The feature introduces new user-facing flows not covered by Agent A's tests
-- The feature modifies existing flows that have baseline E2E tests (regression risk)
-- The feature has complex multi-step interactions that warrant dedicated E2E scenarios
-- The feature integrates with other features in ways not tested individually
+
+- The feature introduces new user-facing flows not covered by Agent A's tests.
+- The feature modifies existing flows that have baseline E2E tests (regression risk).
+- The feature has complex multi-step interactions.
+- The feature integrates with other features in ways not tested individually.
 
 **Additional E2E tests are NOT needed if:**
-- Agent A already wrote comprehensive E2E tests covering all user flows
-- The feature is purely backend with no UI changes
-- The feature is a minor UI tweak with no new flows
 
-### 5.3: Write Additional E2E Tests (if needed)
+- Agent A already wrote comprehensive E2E tests covering all user flows.
+- The feature is purely backend with no UI changes.
+- The feature is a minor UI tweak with no new flows.
 
-If additional tests are needed:
+### 5.3: Write additional E2E tests (if needed)
 
-1. Follow `/ef-baseline` "Write Tests for Flow" workflow
-2. Add the new flows to `memory-bank/testBaseline.md`
-3. Run all E2E tests (new + existing) to verify no regressions
-4. **Open the HTML test report** for the developer to review
+1. Follow `/ef-baseline` "Write Tests for Flow" workflow.
+2. Add the new flows to `memory-bank/testBaseline.md`.
+3. Run all E2E tests to verify no regressions.
 
-### 5.4: Update Test Baseline
+### 5.4: Update test baseline
 
 Update `memory-bank/testBaseline.md`:
-- Add any new flows covered by this feature
-- Update progress counters
-- Record any bugs discovered
 
-### E2E Evaluation Summary
-
-Present the evaluation result:
-
-```
-## E2E Test Evaluation
-
-**Feature:** #{number}: {title}
-**Agent A E2E tests:** X tests covering [flows]
-**Additional E2E tests needed:** Yes/No
-**Reason:** [why or why not]
-
-### If additional tests were written:
-- New test file(s): [paths]
-- New flows covered: [list]
-- All E2E tests passing: Yes/No
-
-### Overall E2E status:
-- Total E2E tests: X
-- All passing: Yes/No
-```
+- Add any new flows covered by this feature.
+- Update progress counters.
+- Record any bugs discovered.
 
 ---
 
@@ -371,30 +383,23 @@ Present the evaluation result:
 
 > **Update `activeTask.md`**: Current phase = Phase 6
 
-After all tests pass, launch a **new agent** to perform a code review using the `/ef-review` skill. The review must run in a separate agent to ensure clean context — a reviewer should not review their own work.
+After all tests pass, launch a **new agent** to perform a code review using the `/ef-review` skill. Independent context — a reviewer should not review their own work.
 
-### 6.1: Launch Review Agent
+### 6.1: Launch review agent
 
-Use the **Agent tool** to launch a review agent. The agent's prompt must include:
+Use the **Agent tool**. Prompt must include:
 
-- The feature name and issue number
-- The branch name
-- The acceptance spec path (`acceptance/{feature}.md`)
-- Instructions to follow the `/ef-review` skill workflow (Steps 1-7)
-- The full contents of the `/ef-review` skill file (`.claude/skills/ef-review/SKILL.md`) so the agent knows the review process
+- Feature name + ticket key.
+- Branch name (or "current branch" for subtask runs).
+- Acceptance spec path (`acceptance/{feature}.md`).
+- Instructions to follow the `/ef-review` skill workflow (Steps 1-7).
+- The full contents of `.claude/skills/ef-review/SKILL.md`.
 - Explicit instruction: "You are an independent reviewer. Judge the code against project conventions, acceptance spec, and best practices. Actively look for problems."
 
-### 6.2: Process Review Results
+### 6.2: Process review results
 
-When the review agent returns:
-
-**Verdict: Ready for PR** → proceed to Completion.
-
-**Verdict: Fix critical issues first** →
-1. Fix the issues identified by the reviewer
-2. Re-run the affected tests to confirm fixes
-3. Re-launch the review agent to verify fixes
-4. Repeat until the verdict is "Ready for PR"
+- **Verdict: Ready for PR** → proceed to Phase 7.
+- **Verdict: Fix critical issues first** → fix the issues, re-run affected tests, re-launch review. Repeat until "Ready for PR".
 
 ---
 
@@ -402,7 +407,7 @@ When the review agent returns:
 
 > **Update `activeTask.md`**: Current phase = Phase 7
 
-After review is `Ready for PR`, ship it. Each sub-phase emits its phase marker first so e-frank's UI timeline reflects the live progress.
+Commit, push, open PR, update the ticket source. Each sub-step emits its phase marker first so e-frank's UI timeline reflects live progress.
 
 ### 7.1: Commit
 
@@ -410,19 +415,22 @@ After review is `Ready for PR`, ship it. Each sub-phase emits its phase marker f
 echo '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>'
 ```
 
-Stage all changes, then commit with a Conventional-Commits-style message keyed to the issue:
+Stage the specific files involved (avoid blanket `git add -A` so stray files aren't included), then commit with a Conventional-Commits-style message keyed to the ticket:
 
 ```bash
-git add -A
-git commit -m "feat({ticketKey}): {short summary derived from issue title}
+git add <specific files>
+git commit -m "feat({TICKET-KEY}): {short summary derived from ticket title}
 
-Closes #{number}
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-Co-Authored-By: Claude <noreply@anthropic.com>"
+Closes #{N for GitHub} | {KEY for Jira — referenced in body, not closes-keyword}
+"
 ```
 
-If the working tree is clean (nothing to commit) something has gone wrong — STOP and report back to the developer rather than push an empty commit.
+- Do NOT add `Co-Authored-By` / `Generated by` / any AI attribution.
+- Do NOT modify git user config.
+- For GitHub Issues: include `Closes #{N}` so the PR auto-closes the issue on merge.
+- For Jira: reference the key in the body (Jira's smart-commit syntax respects `{KEY}` inline).
+
+If the working tree is clean (nothing to commit) something has gone wrong — **fail loud and exit**.
 
 ### 7.2: Push
 
@@ -433,8 +441,6 @@ git push -u origin HEAD
 
 ### 7.3: Open PR
 
-Use `gh` to open the pull request. Title: same Conventional-Commits format. Body: short summary + test plan + closing keyword.
-
 ```bash
 PR_URL=$(gh pr create --title "{commit subject}" --body "$(cat <<'EOF'
 ## Summary
@@ -444,38 +450,33 @@ PR_URL=$(gh pr create --title "{commit subject}" --body "$(cat <<'EOF'
 - [ ] {bullet from acceptance spec}
 - [ ] {bullet from acceptance spec}
 
-Closes #{number}
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+{For GitHub: "Closes #{N}"}
+{For Jira: "Ticket: {KEY}"}
 EOF
 )")
 ```
 
-Then emit the phase marker carrying the URL so e-frank's UI links it on the run row:
+Then emit the marker carrying the URL so e-frank's UI links it on the run row:
 
 ```bash
 echo "<<<EF_PHASE>>>{\"phase\":\"creatingPr\",\"prUrl\":\"$PR_URL\"}<<<END_EF_PHASE>>>"
 ```
 
-Use the captured `$PR_URL` in the final summary AND in the ticket update.
-
-### 7.4: Update Ticket
+### 7.4: Update ticket
 
 ```bash
 echo '<<<EF_PHASE>>>{"phase":"updatingTicket"}<<<END_EF_PHASE>>>'
 ```
 
-For Jira tickets, transition to "In Review" (or the project's equivalent) and post the PR URL as a comment:
+**Jira branch:**
 
-```bash
-# Jira (if connected): transition + comment
-# GitHub Issues (if the ticket source is GH): just leave the closing keyword
-# in the PR body — GitHub auto-links + auto-closes on merge.
-```
+Use Atlassian MCP `mcp__claude_ai_Atlassian__transitionJiraIssue` to transition to "In Review" (or the project's review-equivalent transition), and `mcp__claude_ai_Atlassian__addCommentToJiraIssue` to post the PR URL as a comment. If the transition isn't available, just post the comment.
 
-If the ticket source is GitHub Issues and the PR body already contains `Closes #{number}`, no extra ticket update is needed — GitHub handles the link.
+**GitHub branch:**
 
-If the update fails, log it and continue. Ticket-update failure is **non-fatal** — the run still succeeds because the code is shipped.
+The `Closes #{N}` keyword in the PR body already links the PR to the issue. No extra step. (When the PR merges, GitHub auto-closes the issue.)
+
+If the update fails, **log a warning and continue**. Ticket-update failure is **non-fatal** — the run still succeeds because the code is shipped.
 
 ---
 
@@ -483,22 +484,22 @@ If the update fails, log it and continue. Ticket-update failure is **non-fatal**
 
 > **Delete `memory-bank/activeTask.md`** — the workflow is done.
 
-### Update Memory
+### Update memory
 
 Run `/ef-context after-implement` to update the memory bank with everything that was built.
 
-### Final Summary
-
-Present the complete feature summary:
+### Final summary
 
 ```
-## Feature Complete: #{number} — {title}
+## Feature Complete: {KEY} — {title}
 
 ### Implementation
+- Source: [github / jira]
 - Features implemented: X
 - Files created/modified: [list]
 - Branch: [branch name]
-- PR: [URL from Phase 7.3]
+- Commit: [hash + subject]
+- PR: [URL]
 
 ### Test Coverage
 - API tests: X/X PASS
@@ -508,4 +509,8 @@ Present the complete feature summary:
 ### Review
 - Verdict: [Ready for PR / Fixed after review]
 - Issues found: [count or none]
+
+### Ticket Update
+- [Jira] Transitioned to: In Review (with PR URL comment)
+- [GitHub] Closes-keyword in PR body — issue will auto-close on merge
 ```
