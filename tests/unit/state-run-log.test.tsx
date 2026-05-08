@@ -252,6 +252,62 @@ describe('useRunLog — RUNLOG-HOOK', () => {
         expect(allLines.some((l) => l.line === 'compiling...')).toBe(true);
       });
     });
+
+    it('RUNLOG-HOOK-001b: EF_PHASE / EF_APPROVAL_REQUEST marker lines are filtered out of the timeline', async () => {
+      // The skill's `<<<EF_PHASE>>>{...}<<<END_EF_PHASE>>>` markers are an
+      // internal protocol consumed by workflow-runner to drive state
+      // transitions. Their information is fully encoded in the
+      // step-by-step timeline; the raw marker text is just noise to the
+      // user. Same for approval markers. The hook drops them on arrival.
+      const stub = installApi();
+      const cap: CapturedHook = { latest: null, history: [] };
+
+      const run = makeRun({ id: 'r-1', state: 'running' });
+      render(<HookConsumer run={run} capture={cap} />);
+
+      await waitFor(() => {
+        expect(stub.onOutput).toHaveBeenCalledTimes(1);
+      });
+
+      act(() => {
+        // A regular line — should appear.
+        stub.fireOutput({
+          runId: 'r-1',
+          stream: 'stdout',
+          line: 'normal output',
+          timestamp: 1,
+        });
+        // A phase marker — should be dropped.
+        stub.fireOutput({
+          runId: 'r-1',
+          stream: 'stdout',
+          line: '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>',
+          timestamp: 2,
+        });
+        // An approval marker — should be dropped.
+        stub.fireOutput({
+          runId: 'r-1',
+          stream: 'stdout',
+          line: '<<<EF_APPROVAL_REQUEST>>>{"plan":"do x"}<<<END_EF_APPROVAL_REQUEST>>>',
+          timestamp: 3,
+        });
+        // Marker embedded in a longer line — also dropped (defensive).
+        stub.fireOutput({
+          runId: 'r-1',
+          stream: 'stdout',
+          line: 'prefix <<<EF_PHASE>>>{"phase":"pushing"}<<<END_EF_PHASE>>> suffix',
+          timestamp: 4,
+        });
+      });
+
+      await waitFor(() => {
+        const allLines = (cap.latest?.steps ?? []).flatMap((s) => s.lines);
+        const lines = allLines.map((l) => l.line);
+        expect(lines).toContain('normal output');
+        expect(lines.some((l) => l.includes('<<<EF_PHASE'))).toBe(false);
+        expect(lines.some((l) => l.includes('<<<EF_APPROVAL_REQUEST'))).toBe(false);
+      });
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -285,105 +341,6 @@ describe('useRunLog — RUNLOG-HOOK', () => {
         expect(allLines.some((l) => l.line === 'first')).toBe(true);
         expect(allLines.some((l) => l.line === 'second')).toBe(true);
       });
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // RUNLOG-HOOK-003 — Pause halts new lines; bufferedLineCount increments
-  // -------------------------------------------------------------------------
-  describe('RUNLOG-HOOK-003 pause buffers incoming lines', () => {
-    it('RUNLOG-HOOK-003: setPaused(true) → new lines do not append; bufferedLineCount > 0', async () => {
-      const stub = installApi();
-      const cap: CapturedHook = { latest: null, history: [] };
-
-      render(<HookConsumer run={makeRun()} capture={cap} />);
-      await waitFor(() => {
-        expect(stub.onOutput).toHaveBeenCalled();
-      });
-
-      // Establish baseline line count BEFORE pausing.
-      const baselineLineCount = (cap.latest?.steps ?? []).flatMap(
-        (s) => s.lines,
-      ).length;
-
-      // Pause via the hook's exposed setter.
-      act(() => {
-        cap.latest?.setPaused(true);
-      });
-
-      await waitFor(() => {
-        expect(cap.latest?.paused).toBe(true);
-      });
-
-      act(() => {
-        stub.fireOutput({
-          runId: 'r-1',
-          stream: 'stdout',
-          line: 'paused-1',
-          timestamp: 1,
-        });
-        stub.fireOutput({
-          runId: 'r-1',
-          stream: 'stdout',
-          line: 'paused-2',
-          timestamp: 2,
-        });
-      });
-
-      await waitFor(() => {
-        expect(cap.latest?.bufferedLineCount).toBe(2);
-      });
-
-      // Steps did NOT receive the buffered lines.
-      const lineCountWhilePaused = (cap.latest?.steps ?? []).flatMap(
-        (s) => s.lines,
-      ).length;
-      expect(lineCountWhilePaused).toBe(baselineLineCount);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // RUNLOG-HOOK-004 — Resume flushes buffer; bufferedLineCount → 0
-  // -------------------------------------------------------------------------
-  describe('RUNLOG-HOOK-004 resume flushes buffer', () => {
-    it('RUNLOG-HOOK-004: setPaused(false) flushes buffer; bufferedLineCount drops to 0', async () => {
-      const stub = installApi();
-      const cap: CapturedHook = { latest: null, history: [] };
-
-      render(<HookConsumer run={makeRun()} capture={cap} />);
-      await waitFor(() => {
-        expect(stub.onOutput).toHaveBeenCalled();
-      });
-
-      act(() => {
-        cap.latest?.setPaused(true);
-      });
-      await waitFor(() => {
-        expect(cap.latest?.paused).toBe(true);
-      });
-
-      act(() => {
-        stub.fireOutput({
-          runId: 'r-1',
-          stream: 'stdout',
-          line: 'flush-me',
-          timestamp: 1,
-        });
-      });
-      await waitFor(() => {
-        expect(cap.latest?.bufferedLineCount).toBe(1);
-      });
-
-      act(() => {
-        cap.latest?.setPaused(false);
-      });
-
-      await waitFor(() => {
-        expect(cap.latest?.bufferedLineCount).toBe(0);
-      });
-      // The flushed line should now appear in the steps.
-      const allLines = (cap.latest?.steps ?? []).flatMap((s) => s.lines);
-      expect(allLines.some((l) => l.line === 'flush-me')).toBe(true);
     });
   });
 

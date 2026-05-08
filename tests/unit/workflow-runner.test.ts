@@ -1144,6 +1144,42 @@ describe('WorkflowRunner', () => {
       expect(phaseStates).toContain('committing');
       expect(phaseStates).toContain('pushing');
     });
+
+    it('WFR-031b: every step is `done` (or terminal) at finish — no straggler stays `running`', async () => {
+      // Regression: phase steps inserted by transitionToPhase have only
+      // their PREVIOUS sibling closed by the next transition. The LAST
+      // phase step (no successor) used to be left in `running` forever
+      // — surfacing as a perpetual "still working" heartbeat in the UI
+      // after the run finished.
+      const h = await buildHarness();
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(true);
+
+      await waitForState(h, 'running');
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>\n',
+      );
+      await waitForState(h, 'committing');
+      // `pushing` is the final phase the skill emits before exit — the
+      // one most likely to be left dangling.
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"pushing"}<<<END_EF_PHASE>>>\n',
+      );
+      await waitForState(h, 'pushing');
+
+      h.fakeClaude.emitExit(0, 'completed');
+      const final = await waitForFinal(h);
+
+      // No step in the timeline is left `running` once the run has
+      // landed in a terminal state. (`unlocking` / `done` get their own
+      // entries with their own statuses; what we care about is that no
+      // earlier phase straggles.)
+      const stragglers = final.steps.filter((s) => s.status === 'running');
+      expect(stragglers).toEqual([]);
+    });
   });
 
   describe('WFR-032 phase marker (unknown phase) ignored', () => {

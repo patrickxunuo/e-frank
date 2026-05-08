@@ -38,8 +38,31 @@
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
   background: var(--bg-card);
-  transition: border-color var(--duration-base) var(--ease-out),
-    background-color var(--duration-base) var(--ease-out);
+  transition:
+    border-color var(--duration-base) var(--ease-out),
+    background-color var(--duration-base) var(--ease-out),
+    box-shadow var(--duration-base) var(--ease-out);
+}
+
+/*
+ * Hover affordance for expandable rows: lift the border and add a soft
+ * shadow so the row reads as clickable. We target rows that contain a
+ * non-disabled toggle (i.e. an expandable step) — finished-empty steps
+ * keep the static look since clicking them does nothing.
+ */
+.row:has(.toggle:not(.toggleDisabled)):hover {
+  border-color: var(--border-default);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  cursor: default;
+}
+
+/*
+ * Subtle visual demotion of completed steps so the running step holds
+ * focus. The accent bar still indicates status (green); the row body
+ * loses a touch of saturation to fall back into the timeline.
+ */
+.row[data-status='done'] .label {
+  color: var(--text-secondary);
 }
 
 /* Left-side accent bar — driven by status. */
@@ -118,22 +141,34 @@
   appearance: none;
   background: transparent;
   border: none;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   cursor: pointer;
   border-radius: var(--radius-sm);
   flex: 0 0 auto;
-  transition: color var(--duration-fast) var(--ease-out),
+  transition:
+    color var(--duration-fast) var(--ease-out),
     background-color var(--duration-fast) var(--ease-out);
 }
 
 .toggle:hover {
   color: var(--text-primary);
   background: var(--surface-overlay-low);
+}
+
+/*
+ * Whole-row hover ALSO highlights the chevron — the row reads as one
+ * interactive surface even though only the chevron carries the click
+ * target. (Keeping the click target small intentionally, so the user
+ * can also select / copy text from the body without accidentally
+ * collapsing the step.)
+ */
+.row:hover .toggle:not(.toggleDisabled) {
+  color: var(--text-primary);
 }
 
 .toggle:focus-visible {
@@ -290,11 +325,12 @@
  * is running and the body is collapsed.
  */
 .ticker {
-  margin-left: 38px;
-  margin-top: 2px;
+  margin-left: 44px;
+  margin-top: 0;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-tertiary);
+  opacity: 0.85;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -324,8 +360,8 @@
   display: flex;
   flex-direction: column;
   gap: 0;
-  margin-top: var(--space-1);
-  padding: var(--space-3);
+  margin-top: var(--space-2);
+  padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
@@ -333,8 +369,35 @@
   font-size: 12px;
   line-height: 1.55;
   color: var(--text-primary);
-  max-height: 360px;
-  overflow-y: auto;
+  /* Soft inner shadow at the top so the body reads as a recessed surface. */
+  box-shadow: inset 0 6px 8px -6px rgba(0, 0, 0, 0.25);
+  /* Smooth in on expand. */
+  animation: bodyReveal var(--duration-base) var(--ease-out);
+  /*
+   * No internal scroll. Lines flow inside the outer .scroll container
+   * so it sees scrollHeight grow as Claude streams, and the parent's
+   * auto-scroll-to-bottom layout effect can actually follow the tail.
+   * Adding `max-height: Xpx; overflow-y: auto` here breaks that — the
+   * body would scroll internally and the outer container would never
+   * notice new content.
+   */
+}
+
+@keyframes bodyReveal {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .body {
+    animation: none;
+  }
 }
 
 .bodyEmpty {

@@ -315,29 +315,6 @@ describe('<ExecutionView /> — EXEC', () => {
   });
 
   // -------------------------------------------------------------------------
-  // EXEC-004 — Pause button toggles useRunLog paused state; UI shows "Resume"
-  // -------------------------------------------------------------------------
-  it('EXEC-004: clicking Pause flips the label/state to Resume', async () => {
-    installApi({
-      current: {
-        ok: true,
-        data: { run: makeRun({ id: 'r-1', projectId: 'p-1' }) },
-      },
-    });
-
-    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
-
-    const pause = await screen.findByTestId('log-pause-button');
-    expect(pause.textContent ?? '').toMatch(/pause/i);
-
-    fireEvent.click(pause);
-    await waitFor(() => {
-      const after = screen.getByTestId('log-pause-button');
-      expect(after.textContent ?? '').toMatch(/resume/i);
-    });
-  });
-
-  // -------------------------------------------------------------------------
   // EXEC-005 — Cancel button calls runs.cancel; hidden when terminal
   // -------------------------------------------------------------------------
   it('EXEC-005: live run → Cancel button visible and calls runs.cancel', async () => {
@@ -396,49 +373,10 @@ describe('<ExecutionView /> — EXEC', () => {
   // -------------------------------------------------------------------------
   // EXEC-007 — REMOVED in #9: the right-pane placeholder is replaced by
   // <ApprovalPanel>. See EXEC-APPROVAL-001..008 below.
-  // -------------------------------------------------------------------------
-  // EXEC-008 — PromptInput onSubmit → claude.write with id from claude.status()
-  // -------------------------------------------------------------------------
-  it('EXEC-008: PromptInput submit calls claude.status() then claude.write({ runId, text })', async () => {
-    const stub = installApi({
-      current: {
-        ok: true,
-        data: { run: makeRun({ id: 'r-1', projectId: 'p-1' }) },
-      },
-      status: {
-        ok: true,
-        data: { active: { runId: 'claude-run-xyz', pid: 12345, startedAt: 1 } },
-      },
-    });
-
-    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
-
-    const textarea = await screen.findByTestId('log-prompt-input');
-    fireEvent.change(textarea, { target: { value: 'continue please' } });
-    fireEvent.click(screen.getByTestId('log-send-button'));
-
-    await waitFor(() => {
-      expect(stub.claudeStatus).toHaveBeenCalled();
-      expect(stub.claudeWrite).toHaveBeenCalled();
-    });
-
-    // Status MUST be called BEFORE write — runId is sourced from status().
-    const statusOrder = stub.claudeStatus.mock.invocationCallOrder;
-    const writeOrder = stub.claudeWrite.mock.invocationCallOrder;
-    expect(statusOrder.length).toBeGreaterThan(0);
-    expect(writeOrder.length).toBeGreaterThan(0);
-    const lastStatusBeforeWrite = Math.max(
-      ...statusOrder.filter((n) => n < (writeOrder[0] as number)),
-    );
-    expect(lastStatusBeforeWrite).toBeGreaterThan(0);
-
-    // Write was called with the runId from status().
-    expect(stub.claudeWrite).toHaveBeenCalledWith({
-      runId: 'claude-run-xyz',
-      text: 'continue please',
-    });
-  });
-
+  // EXEC-008 — REMOVED: send-message-while-running was a dead path. claude
+  // runs in `-p` (print) mode under stream-json — it doesn't accept stdin
+  // input mid-run. The footer PromptInput was wired to claude.write but
+  // had no effect, so the entire input was removed.
   // -------------------------------------------------------------------------
   // EXEC-009 — Live run with state events updates the timeline
   // -------------------------------------------------------------------------
@@ -504,32 +442,7 @@ describe('<ExecutionView /> — EXEC', () => {
     });
   });
 
-  // -------------------------------------------------------------------------
-  // EXEC-010 — Terminal run, no active claude run: input disabled
-  // -------------------------------------------------------------------------
-  it('EXEC-010: terminal run + no active claude run → PromptInput disabled', async () => {
-    // ExecutionView's #8-scope resolution requires `runs.current()` to return
-    // the matching runId — a terminal run that's still the most recent one.
-    // (Full history navigation for runs that are no longer current lands
-    // with the future Runs tab.)
-    const terminalRun = makeRun({ id: 'r-1', status: 'done', state: 'done' });
-    installApi({
-      current: { ok: true, data: { run: terminalRun } },
-      readLog: { ok: true, data: { entries: [] } },
-      status: { ok: true, data: { active: null } },
-    });
-
-    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
-
-    // Wait for textarea to mount; assert disabled.
-    const textarea = (await screen.findByTestId(
-      'log-prompt-input',
-    )) as HTMLTextAreaElement;
-    expect(textarea.disabled).toBe(true);
-
-    const send = screen.getByTestId('log-send-button') as HTMLButtonElement;
-    expect(send.disabled).toBe(true);
-  });
+  // EXEC-010 — REMOVED: footer PromptInput is gone; see EXEC-008.
 });
 
 /**
@@ -753,42 +666,9 @@ describe('<ExecutionView /> — EXEC-APPROVAL', () => {
     expect(stub.claudeWrite).not.toHaveBeenCalled();
   });
 
-  // -------------------------------------------------------------------------
-  // EXEC-APPROVAL-007 — Page-bottom PromptInput still calls claude.write
-  // -------------------------------------------------------------------------
-  it('EXEC-APPROVAL-007: page-bottom log-prompt-input is still wired to claude.write (regression)', async () => {
-    const stub = installApi({
-      current: {
-        ok: true,
-        data: {
-          // No pendingApproval → no panel competing for the testid.
-          run: makeRun({
-            id: 'r-1',
-            projectId: 'p-1',
-            pendingApproval: null,
-          }),
-        },
-      },
-      status: {
-        ok: true,
-        data: { active: { runId: 'claude-run-xyz', pid: 1, startedAt: 1 } },
-      },
-    });
-    const modifySpy = vi.fn().mockResolvedValue({ ok: true, data: { runId: 'r-1' } });
-    (stub.api.runs as unknown as { modify: typeof modifySpy }).modify = modifySpy;
-
-    render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
-
-    const textarea = await screen.findByTestId('log-prompt-input');
-    fireEvent.change(textarea, { target: { value: 'hello' } });
-    fireEvent.click(screen.getByTestId('log-send-button'));
-
-    await waitFor(() => {
-      expect(stub.claudeWrite).toHaveBeenCalled();
-    });
-    expect(modifySpy).not.toHaveBeenCalled();
-  });
-
+  // EXEC-APPROVAL-007 — REMOVED with the page-bottom PromptInput. ApprovalPanel's
+  // own modify-input is the only way to send text to claude now (and only
+  // during awaitingApproval, which routes via runs.modify).
   // -------------------------------------------------------------------------
   // EXEC-APPROVAL-008 — Transitioning out of awaitingApproval cleanly unmounts
   // -------------------------------------------------------------------------

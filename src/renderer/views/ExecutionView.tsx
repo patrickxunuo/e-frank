@@ -24,7 +24,6 @@ import { ApprovalPanel } from '../components/ApprovalPanel';
 import { Badge, type BadgeVariant } from '../components/Badge';
 import { Button } from '../components/Button';
 import { ExecutionLog } from '../components/ExecutionLog';
-import { PromptInput } from '../components/PromptInput';
 import { Toggle } from '../components/Toggle';
 import {
   IconArrowLeft,
@@ -101,7 +100,6 @@ export function ExecutionView({
   const [resolution, setResolution] = useState<RunResolution>({ kind: 'loading' });
   const [project, setProject] = useState<ProjectInstanceDto | null>(null);
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
-  const [claudeRunId, setClaudeRunId] = useState<string | null>(null);
 
   const run = resolution.kind === 'ready' ? resolution.run : null;
   const log = useRunLog(run);
@@ -198,68 +196,11 @@ export function ExecutionView({
     };
   }, [projectId]);
 
-  // Track the claude runId so PromptInput knows where to write. Refreshes
-  // on a debounce schedule via the active-run subscription, but we also
-  // re-resolve when the user submits — claude runs can swap between
-  // interactive turns.
-  useEffect(() => {
-    let cancelled = false;
-    if (typeof window === 'undefined' || !window.api) return;
-    const api = window.api;
-    void (async () => {
-      try {
-        const result = await api.claude.status();
-        if (cancelled) return;
-        if (result.ok) {
-          setClaudeRunId(result.data.active?.runId ?? null);
-        }
-      } catch {
-        if (cancelled) return;
-      }
-    })();
-    // Listen for exit events so we drop the claude runId promptly.
-    const offExit = api.claude.onExit((event) => {
-      if (cancelled) return;
-      setClaudeRunId((prev) => (prev === event.runId ? null : prev));
-    });
-    return () => {
-      cancelled = true;
-      offExit();
-    };
-  }, [run?.id]);
-
   const handleCancel = useCallback((): void => {
     if (typeof window === 'undefined' || !window.api) return;
     if (run === null) return;
     void window.api.runs.cancel({ runId: run.id });
   }, [run]);
-
-  const handleSubmit = useCallback(
-    async (text: string): Promise<boolean> => {
-      if (typeof window === 'undefined' || !window.api) return false;
-      const api = window.api;
-      // Always re-resolve the claude runId at submit time (per spec) so
-      // we don't write to a process that already exited.
-      let activeRunId = claudeRunId;
-      try {
-        const status = await api.claude.status();
-        if (status.ok) {
-          activeRunId = status.data.active?.runId ?? null;
-          setClaudeRunId(activeRunId);
-        }
-      } catch {
-        // Fall through to whatever we already had.
-      }
-      if (activeRunId === null) return false;
-      try {
-        const result = await api.claude.write({ runId: activeRunId, text });
-        return result.ok;
-      } catch {
-        return false;
-      }
-    },
-    [claudeRunId],
-  );
 
   // ---------- Render branches ----------
 
@@ -334,15 +275,6 @@ export function ExecutionView({
   const ready = resolution.run;
   const showApproval = ready.pendingApproval !== null;
   const terminal = isTerminal(ready);
-  const promptDisabled = terminal || claudeRunId === null;
-
-  // When the run reaches terminal, an in-flight pause would otherwise leave
-  // the Pause button stuck on "Resume" + disabled — a dead control. Reset
-  // local pause state to false so the label flips back to "Pause" and the
-  // (also disabled) button reads sensibly.
-  if (terminal && log.paused) {
-    log.setPaused(false);
-  }
 
   const counterText =
     log.totalUserVisibleSteps === 0
@@ -401,17 +333,6 @@ export function ExecutionView({
               label="Auto-scroll"
               data-testid="log-autoscroll-toggle"
             />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => log.setPaused(!log.paused)}
-              data-testid="log-pause-button"
-              disabled={terminal}
-            >
-              {log.paused
-                ? `Resume${log.bufferedLineCount > 0 ? ` (${log.bufferedLineCount})` : ''}`
-                : 'Pause'}
-            </Button>
             {!terminal && (
               <Button
                 variant="destructive"
@@ -448,22 +369,6 @@ export function ExecutionView({
             />
           </aside>
         )}
-      </div>
-
-      <div
-        className={`${styles.footer} ${promptDisabled ? styles.footerDisabled : ''}`}
-      >
-        <PromptInput
-          onSubmit={handleSubmit}
-          disabled={promptDisabled}
-          placeholder={
-            terminal
-              ? 'Run finished — input disabled.'
-              : claudeRunId === null
-                ? 'No active claude process — input disabled.'
-                : 'Send a message to Claude…'
-          }
-        />
       </div>
     </div>
   );
