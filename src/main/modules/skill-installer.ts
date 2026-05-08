@@ -1,22 +1,22 @@
 /**
- * SkillInstaller — DEV-MODE SYNC for the bundled `ef-feature` skill.
+ * SkillInstaller — DEV-MODE SYNC for the bundled `ef-auto-feature` skill.
  *
  * Claude resolves slash-command skills from `${cwd}/.claude/skills/`
  * first, then falls back to `~/.claude/skills/`. e-frank's
  * WorkflowRunner spawns Claude with `cwd: project.repo.localPath` —
  * the *user's* project, not e-frank's repo — so the user-level
- * fallback is what's loaded. While we iterate on `ef-feature` inside
+ * fallback is what's loaded. While we iterate on `ef-auto-feature` inside
  * this repo, the bundled file diverges from whatever's at
- * `~/.claude/skills/ef-feature/SKILL.md`, and the user has to copy by
+ * `~/.claude/skills/ef-auto-feature/SKILL.md`, and the user has to copy by
  * hand on every change. This installer eliminates that step: on app
  * startup, sync the repo's bundled skill into the user-level dir.
  *
  * Behaviour:
  *   - Reads the skill from a caller-provided source path (dev mode:
- *     `<repoRoot>/.claude/skills/ef-feature/SKILL.md`; the source path
+ *     `<repoRoot>/.claude/skills/ef-auto-feature/SKILL.md`; the source path
  *     simply not existing returns `source-missing` and the caller logs
  *     it without aborting startup).
- *   - Writes to `~/.claude/skills/ef-feature/SKILL.md` (or
+ *   - Writes to `~/.claude/skills/ef-auto-feature/SKILL.md` (or
  *     `destRoot`-overridden in tests).
  *   - **Overwrites unconditionally on content mismatch.** This is the
  *     right policy for the dev-iterate flow — the bundled version is
@@ -85,12 +85,12 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export interface InstallEfFeatureSkillOptions {
+export interface InstallEfAutoFeatureSkillOptions {
   /**
    * Absolute path of the bundled skill source. Caller decides where this
    * lives:
-   *   - Dev mode: `<repoRoot>/.claude/skills/ef-feature/SKILL.md`
-   *   - Production: `<process.resourcesPath>/skills/ef-feature/SKILL.md`
+   *   - Dev mode: `<repoRoot>/.claude/skills/ef-auto-feature/SKILL.md`
+   *   - Production: `<process.resourcesPath>/skills/ef-auto-feature/SKILL.md`
    *     (requires an electron-builder `extraResources` entry; not
    *     required for dev mode).
    */
@@ -104,15 +104,15 @@ export interface InstallEfFeatureSkillOptions {
 }
 
 /**
- * Install or refresh the ef-feature skill in the user's home directory.
+ * Install or refresh the ef-auto-feature skill in the user's home directory.
  * See module docstring for rationale.
  */
-export async function installEfFeatureSkill(
-  options: InstallEfFeatureSkillOptions,
+export async function installEfAutoFeatureSkill(
+  options: InstallEfAutoFeatureSkillOptions,
 ): Promise<SkillInstallResult> {
   const fsImpl = options.fs ?? defaultFs();
   const destRoot = options.destRoot ?? join(homedir(), '.claude', 'skills');
-  const destPath = join(destRoot, 'ef-feature', 'SKILL.md');
+  const destPath = join(destRoot, 'ef-auto-feature', 'SKILL.md');
 
   let bundled: string;
   try {

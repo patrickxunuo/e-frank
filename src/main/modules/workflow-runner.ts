@@ -2,7 +2,7 @@
  * WorkflowRunner — orchestrator for the ticket-to-PR pipeline.
  *
  * After #37 (architectural pivot), the runner is a thin host: it spawns
- * Claude with `/ef-feature <ticketKey>` and lets Claude drive git, PR,
+ * Claude with `/ef-auto-feature <ticketKey>` and lets Claude drive git, PR,
  * and ticket-update via its own Bash tool. The runner only:
  *
  *   1. acquires the per-ticket lock (RunHistory.markRunning),

@@ -18,7 +18,7 @@ const TICKET_KEY_REGEX = /^[A-Z][A-Z0-9_]*-\d+$/;
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const DEFAULT_KILL_GRACE_MS = 5000;
 const DEFAULT_COMMAND = 'claude';
-const DEFAULT_SKILL_NAME = 'ef-feature';
+const DEFAULT_SKILL_NAME = 'ef-auto-feature';
 
 /**
  * Drop a trailing `\r` produced by CRLF line endings on Windows. The line
@@ -40,8 +40,9 @@ export interface ClaudeProcessManagerOptions {
   /**
    * Name of the Claude skill to invoke. The spawn argv is built as
    * `--dangerously-skip-permissions /<skillName> <ticketKey>`. Default
-   * 'ef-feature' — the project's main ticket-to-PR orchestrator. Per-
-   * project / per-run skill selection lands in a follow-up issue (#39).
+   * 'ef-auto-feature' — e-frank's autonomous ticket-to-PR orchestrator
+   * (companion to the human-paced `ef-feature` skill). Per-project /
+   * per-run skill selection lands in a follow-up issue (#39).
    */
   skillName?: string;
 }

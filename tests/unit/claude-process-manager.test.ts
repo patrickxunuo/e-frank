@@ -191,16 +191,17 @@ describe('ClaudeProcessManager', () => {
     });
 
     // -- #37 ----------------------------------------------------------
-    it('CPM-008b: spawn argv contains `/ef-feature <ticketKey>` (skill prompt) by default', () => {
+    it('CPM-008b: spawn argv contains `/ef-auto-feature <ticketKey>` (skill prompt) by default', () => {
       const result = manager.run({ ticketKey: VALID_TICKET, cwd: VALID_CWD });
       expect(result.ok).toBe(true);
       // First positional after the safety flag is the skill invocation;
       // packed as a single argv element so claude CLI parses it as a
-      // slash command. (#37)
+      // slash command. (#37) Default skill is `ef-auto-feature` —
+      // e-frank's autonomous companion to the human-paced `ef-feature`.
       const args = spawner.lastOptions?.args ?? [];
       expect(args).toEqual([
         '--dangerously-skip-permissions',
-        `/ef-feature ${VALID_TICKET}`,
+        `/ef-auto-feature ${VALID_TICKET}`,
       ]);
     });
 
