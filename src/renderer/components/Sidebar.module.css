@@ -163,3 +163,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.appVersion {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  text-align: center;
+  padding: var(--space-2) var(--space-3) 0;
+  letter-spacing: 0.04em;
+}
