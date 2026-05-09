@@ -46,7 +46,7 @@
 }
 
 .static[data-status='failed'] .shadow {
-  fill: #a13d3d;
+  fill: var(--danger-deep);
 }
 
 /* Cancelled: muted neutral; the fold flattens to a single tone. */

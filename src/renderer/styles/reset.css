@@ -27,11 +27,15 @@ body {
   font-weight: 400;
   color: var(--text-primary);
   background-color: var(--bg-app);
-  /* Subtle gradient mesh — depth without visual noise. */
+  /* Subtle gradient mesh — depth without visual noise. The indigo gradients
+   * track the new --accent (#5b8dff); the green follows --success (#3ee0a4).
+   * Inlined rgba (rather than var()) because radial-gradient can't compose
+   * alpha out of a hex CSS var without color-mix(), which we don't yet use
+   * elsewhere — bump these together with --accent / --success. */
   background-image:
-    radial-gradient(1100px 600px at 80% -10%, rgba(77, 124, 255, 0.07), transparent 60%),
-    radial-gradient(900px 540px at -10% 110%, rgba(74, 217, 138, 0.04), transparent 60%),
-    radial-gradient(700px 460px at 50% 120%, rgba(77, 124, 255, 0.05), transparent 65%);
+    radial-gradient(1100px 600px at 80% -10%, rgba(91, 141, 255, 0.07), transparent 60%),
+    radial-gradient(900px 540px at -10% 110%, rgba(62, 224, 164, 0.04), transparent 60%),
+    radial-gradient(700px 460px at 50% 120%, rgba(91, 141, 255, 0.05), transparent 65%);
   background-attachment: fixed;
   overflow: hidden;
 }

@@ -38,34 +38,38 @@
 }
 
 :root[data-theme='dark'] {
-  /* Surfaces */
-  --bg-app: #0e0f13;
-  --bg-sidebar: #14161c;
-  --bg-card: #1a1d24;
-  --bg-card-elevated: #232732;
-  --bg-input: #14161c;
+  /* Surfaces — navy-anchored, ported from design/add_project.png. Each tier
+   * sits a clear step above the previous one so cards lift and section
+   * boundaries read distinctly. */
+  --bg-app: #0a1224;
+  --bg-sidebar: #0d1530;
+  --bg-card: #15203a;
+  --bg-card-elevated: #1c2a4a;
+  --bg-input: #0e1a35;
   --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-default: rgba(255, 255, 255, 0.1);
-  --border-emphasis: rgba(255, 255, 255, 0.18);
+  --border-default: rgba(255, 255, 255, 0.12);
+  --border-emphasis: rgba(255, 255, 255, 0.20);
 
-  /* Brand & status */
-  --accent: #4d7cff;
-  --accent-hover: #6b91ff;
-  --accent-press: #3a64da;
-  --accent-deep: #2c4ea0;
-  --accent-soft: rgba(77, 124, 255, 0.16);
-  --accent-border: rgba(77, 124, 255, 0.32);
-  --success: #4ad98a;
-  --success-soft: rgba(74, 217, 138, 0.14);
-  --warning: #f0b95c;
-  --warning-soft: rgba(240, 185, 92, 0.14);
-  --danger: #f06f6f;
-  --danger-soft: rgba(240, 111, 111, 0.14);
+  /* Brand & status. --accent (#5b8dff) and --accent-deep (#2c4a99) match the
+   * PaperplaneGlyph body + shadow fills — the theme accent IS the brand. */
+  --accent: #5b8dff;
+  --accent-hover: #7aa3ff;
+  --accent-press: #4574e6;
+  --accent-deep: #2c4a99;
+  --accent-soft: rgba(91, 141, 255, 0.12);
+  --accent-border: rgba(91, 141, 255, 0.32);
+  --success: #3ee0a4;
+  --success-soft: rgba(62, 224, 164, 0.14);
+  --warning: #f4c264;
+  --warning-soft: rgba(244, 194, 100, 0.14);
+  --danger: #ff6b6b;
+  --danger-deep: #a13d3d;
+  --danger-soft: rgba(255, 107, 107, 0.14);
 
   /* Text */
-  --text-primary: #ecedf1;
-  --text-secondary: #8a8f99;
-  --text-tertiary: #6b7180;
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.72);
+  --text-tertiary: rgba(255, 255, 255, 0.50);
   --text-on-accent: #ffffff;
 
   /* Surface overlays — used for hover / active surface fills, dividers, scrim. */
@@ -75,90 +79,96 @@
   --surface-overlay-strong: rgba(255, 255, 255, 0.14);
 
   /* Status borders + extras (0.30-ish opacity, used as 1px borders on tinted backgrounds) */
-  --accent-soft-strong: rgba(77, 124, 255, 0.24);
-  --accent-glow: rgba(77, 124, 255, 0.55);
-  --success-border: rgba(74, 217, 138, 0.30);
-  --warning-border: rgba(240, 185, 92, 0.30);
-  --danger-border: rgba(240, 111, 111, 0.30);
-  --danger-soft-strong: rgba(240, 111, 111, 0.22);
+  --accent-soft-strong: rgba(91, 141, 255, 0.24);
+  --accent-glow: rgba(91, 141, 255, 0.45);
+  --success-border: rgba(62, 224, 164, 0.30);
+  --warning-border: rgba(244, 194, 100, 0.30);
+  --danger-border: rgba(255, 107, 107, 0.30);
+  --danger-soft-strong: rgba(255, 107, 107, 0.22);
 
   /* Scrim used over content to highlight modal dialogs. */
-  --bg-scrim: rgba(7, 8, 11, 0.7);
+  --bg-scrim: rgba(5, 8, 18, 0.72);
 
-  /* Translucent backdrops for sticky / blurred surfaces. */
-  --bg-header-from: rgba(20, 22, 28, 0.85);
-  --bg-header-to: rgba(14, 15, 19, 0.85);
-  --bg-panel-from: rgba(35, 39, 50, 0.92);
-  --bg-panel-to: rgba(26, 29, 36, 0.92);
+  /* Translucent backdrops for sticky / blurred surfaces — derived from the
+   * new sidebar / card values so blur passes don't shift hue. */
+  --bg-header-from: rgba(13, 21, 48, 0.85);
+  --bg-header-to: rgba(10, 18, 36, 0.85);
+  --bg-panel-from: rgba(28, 42, 74, 0.92);
+  --bg-panel-to: rgba(21, 32, 58, 0.92);
 
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.45);
   --shadow-strong: 0 20px 60px -20px rgba(0, 0, 0, 0.7);
-  --shadow-glow-accent: 0 0 0 2px rgba(77, 124, 255, 0.55), 0 8px 24px rgba(77, 124, 255, 0.22);
+  --shadow-glow-accent: 0 0 0 2px rgba(91, 141, 255, 0.55), 0 8px 24px rgba(91, 141, 255, 0.22);
 
   color-scheme: dark;
 }
 
 :root[data-theme='light'] {
-  /* Surfaces */
-  --bg-app: #ffffff;
-  --bg-sidebar: #f5f6f8;
+  /* Surfaces — re-grounded as a credible inversion of the dark navy theme.
+   * App / sidebar carry a subtle cool tint so cards (#ffffff) lift visibly
+   * instead of vanishing into a pure-white sea. */
+  --bg-app: #f5f7fb;
+  --bg-sidebar: #eef2f9;
   --bg-card: #ffffff;
   --bg-card-elevated: #ffffff;
-  --bg-input: #ffffff;
-  --border-subtle: rgba(15, 17, 23, 0.06);
-  --border-default: rgba(15, 17, 23, 0.12);
-  --border-emphasis: rgba(15, 17, 23, 0.22);
+  --bg-input: #f8fafd;
+  --border-subtle: rgba(15, 23, 42, 0.06);
+  --border-default: rgba(15, 23, 42, 0.12);
+  --border-emphasis: rgba(15, 23, 42, 0.22);
 
-  /* Brand & status */
-  --accent: #3a6ae8;
-  --accent-hover: #2c54bf;
-  --accent-press: #21449d;
+  /* Brand & status — accent shifts to a slightly deeper indigo so it carries
+   * weight on white. Status colors are saturated enough to read at small
+   * sizes without falling into grayscale. */
+  --accent: #3b6dff;
+  --accent-hover: #2c54d9;
+  --accent-press: #2244b3;
   --accent-deep: #182f6c;
-  --accent-soft: rgba(58, 106, 232, 0.1);
-  --accent-border: rgba(58, 106, 232, 0.3);
-  --success: #138a4f;
-  --success-soft: rgba(19, 138, 79, 0.1);
-  --warning: #b67514;
-  --warning-soft: rgba(182, 117, 20, 0.12);
-  --danger: #c83232;
-  --danger-soft: rgba(200, 50, 50, 0.1);
+  --accent-soft: rgba(91, 141, 255, 0.10);
+  --accent-border: rgba(91, 141, 255, 0.30);
+  --success: #1ba872;
+  --success-soft: rgba(27, 168, 114, 0.10);
+  --warning: #d99a55;
+  --warning-soft: rgba(217, 154, 85, 0.12);
+  --danger: #d63a3a;
+  --danger-deep: #7a1f1f;
+  --danger-soft: rgba(214, 58, 58, 0.10);
 
   /* Text */
-  --text-primary: #0e0f13;
-  --text-secondary: #4a4f59;
-  --text-tertiary: #8a8f99;
+  --text-primary: #0a1224;
+  --text-secondary: #3a4566;
+  --text-tertiary: #6b7790;
   --text-on-accent: #ffffff;
 
   /* Surface overlays — light theme uses tinted dark overlays. */
-  --surface-overlay-subtle: rgba(15, 17, 23, 0.02);
-  --surface-overlay-low: rgba(15, 17, 23, 0.04);
-  --surface-overlay-mid: rgba(15, 17, 23, 0.06);
-  --surface-overlay-strong: rgba(15, 17, 23, 0.10);
+  --surface-overlay-subtle: rgba(15, 23, 42, 0.02);
+  --surface-overlay-low: rgba(15, 23, 42, 0.04);
+  --surface-overlay-mid: rgba(15, 23, 42, 0.06);
+  --surface-overlay-strong: rgba(15, 23, 42, 0.10);
 
   /* Status borders + extras */
-  --accent-soft-strong: rgba(58, 106, 232, 0.20);
-  --accent-glow: rgba(58, 106, 232, 0.45);
-  --success-border: rgba(19, 138, 79, 0.30);
-  --warning-border: rgba(182, 117, 20, 0.30);
-  --danger-border: rgba(200, 50, 50, 0.30);
-  --danger-soft-strong: rgba(200, 50, 50, 0.18);
+  --accent-soft-strong: rgba(91, 141, 255, 0.20);
+  --accent-glow: rgba(91, 141, 255, 0.30);
+  --success-border: rgba(27, 168, 114, 0.30);
+  --warning-border: rgba(217, 154, 85, 0.30);
+  --danger-border: rgba(214, 58, 58, 0.30);
+  --danger-soft-strong: rgba(214, 58, 58, 0.18);
 
   /* Scrim used over content to highlight modal dialogs. */
-  --bg-scrim: rgba(15, 17, 23, 0.45);
+  --bg-scrim: rgba(10, 18, 36, 0.45);
 
   /* Translucent backdrops for sticky / blurred surfaces. */
-  --bg-header-from: rgba(245, 246, 248, 0.92);
-  --bg-header-to: rgba(255, 255, 255, 0.85);
+  --bg-header-from: rgba(238, 242, 249, 0.92);
+  --bg-header-to: rgba(245, 247, 251, 0.85);
   --bg-panel-from: rgba(255, 255, 255, 0.95);
-  --bg-panel-to: rgba(245, 246, 248, 0.92);
+  --bg-panel-to: rgba(248, 250, 253, 0.92);
 
   /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(15, 17, 23, 0.06);
-  --shadow-md: 0 8px 24px rgba(15, 17, 23, 0.08);
-  --shadow-strong: 0 20px 60px -20px rgba(15, 17, 23, 0.18);
-  --shadow-glow-accent: 0 0 0 2px rgba(58, 106, 232, 0.4), 0 8px 24px rgba(58, 106, 232, 0.18);
+  --shadow-sm: 0 1px 2px rgba(10, 18, 36, 0.06);
+  --shadow-md: 0 8px 24px rgba(10, 18, 36, 0.08);
+  --shadow-strong: 0 20px 60px -20px rgba(10, 18, 36, 0.18);
+  --shadow-glow-accent: 0 0 0 2px rgba(91, 141, 255, 0.40), 0 8px 24px rgba(91, 141, 255, 0.18);
 
   color-scheme: light;
 }
