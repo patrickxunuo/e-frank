@@ -40,6 +40,7 @@ const THEMED_TOKEN_NAMES: readonly string[] = [
   '--warning',
   '--warning-soft',
   '--danger',
+  '--danger-deep',
   '--danger-soft',
   // Text
   '--text-primary',
@@ -187,6 +188,52 @@ describe('tokens.css — TOKEN-001..005', () => {
     expect(lightBody).not.toBeNull();
     if (lightBody === null) return;
     expect(lightBody).toMatch(/color-scheme\s*:\s*light/);
+  });
+
+  // ---------------------------------------------------------------------------
+  // TOKEN-006 (GH-49) — dark `--accent` matches the PaperplaneGlyph body fill
+  //
+  // The brand glyph body is locked at `#5b8dff` (PaperplaneGlyph.tsx
+  // DEFAULT_BODY_FILL); the dark theme accent must equal it so the Sidebar
+  // lockup, Titlebar lockup, and IconLogo render with no color seam where
+  // the brand mark meets accent-tinted UI (running-step bar, primary
+  // button, focus ring). If the accent drifts off-brand, this fails.
+  // ---------------------------------------------------------------------------
+  it("TOKEN-006: dark --accent equals PaperplaneGlyph brand body fill #5b8dff", () => {
+    const text = loadTokensCss();
+    const darkBody = extractScopeBody(text, ":root[data-theme='dark']");
+    expect(darkBody).not.toBeNull();
+    if (darkBody === null) return;
+    expect(darkBody).toMatch(/--accent\s*:\s*#5b8dff\s*;/i);
+    // And --accent-deep matches the brand shadow fill so the failed-state
+    // RunStatusFigure shadow tracks brand depth too.
+    expect(darkBody).toMatch(/--accent-deep\s*:\s*#2c4a99\s*;/i);
+  });
+
+  // ---------------------------------------------------------------------------
+  // TOKEN-007 (GH-49) — RunStatusFigure failed-state shadow reads from the
+  // token layer, not a hex literal. Regression guard against re-introducing
+  // hardcoded status colors after the GH-49 cleanup. The body already used
+  // `var(--danger)`; the shadow must use `var(--danger-deep)` so both ends
+  // of the fold track theme.
+  // ---------------------------------------------------------------------------
+  it("TOKEN-007: RunStatusFigure failed-state .shadow uses var(--danger-deep)", () => {
+    const css = readFileSync(
+      resolve(
+        process.cwd(),
+        'src/renderer/components/RunStatusFigure.module.css',
+      ),
+      'utf8',
+    );
+    // The selector's body should reference the token, not a hex literal.
+    const ruleRe =
+      /\.static\[data-status='failed'\]\s+\.shadow\s*\{\s*fill\s*:\s*([^;]+);\s*\}/;
+    const match = ruleRe.exec(css);
+    expect(match, 'failed-state .shadow rule must exist').not.toBeNull();
+    if (!match) return;
+    const fillValue = match[1];
+    expect(fillValue, 'capture group must contain the fill value').toBeDefined();
+    expect(fillValue!.trim()).toBe('var(--danger-deep)');
   });
 
   // ---------------------------------------------------------------------------

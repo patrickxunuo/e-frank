@@ -41,7 +41,7 @@ Tracks the project's automated test coverage as a baseline reference. Updated wh
 | `tests/unit/ipc-contract-chrome.test.ts` | 12 | IPC-CHROME-001..003 — chrome:* channel strings, IpcApi.chrome shape, ChromeState/ChromeStateChangedEvent payload shapes |
 | `tests/unit/components-titlebar.test.tsx` | 6 | TITLEBAR-001..006 — testid present, controls hidden on macOS, button wiring, initial maximize state reflected, live state-changed subscription, no-op when window.api missing |
 
-**Total unit:** 911 tests pass + 12 pre-existing skipped (#50 added 18 new across two files).
+**Total unit:** 938 tests pass + 12 pre-existing skipped (#GH-49 added 2 new in tokens.test.ts: TOKEN-006 dark `--accent` brand-alignment + TOKEN-007 RunStatusFigure failed `.shadow` tokenization regression guard).
 
 ### E2E (Playwright)
 | File | Tests | Covers |

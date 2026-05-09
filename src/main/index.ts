@@ -129,7 +129,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: '#0e0f13',
+    backgroundColor: '#0a1224',
     title: 'PaperPlane',
     ...(isMac
       ? {
