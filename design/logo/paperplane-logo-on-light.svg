@@ -23,8 +23,8 @@
     </style>
   </defs>
 
-  <polygon class="shadow" points="30,14 14,17 2,25"/>
-  <polygon class="body"   points="30,14 2,3 14,17"/>
+  <polygon class="shadow" points="30,8 14,19 12,27 24,14"/>
+  <polygon class="body"   points="30,8 3,13 14,19"/>
 
   <text class="wordmark" x="42" y="16" dominant-baseline="middle">paperplane</text>
 </svg>

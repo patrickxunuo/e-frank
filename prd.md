@@ -1,6 +1,6 @@
 # 🧾 PRD — Desktop AI Ticket → PR Automation (MVP v2)
 
-> **Naming.** The product surface is **Paperplane** (window title, installer, OS app entry). The repo + npm package name remain `e-frank` for now (a later, separately-decided rename can flip those).
+> **Naming.** The product surface is **PaperPlane** (window title, installer, OS app entry). The repo + npm package name remain `e-frank` for now (a later, separately-decided rename can flip those).
 
 ## 1. 🎯 Goal
 

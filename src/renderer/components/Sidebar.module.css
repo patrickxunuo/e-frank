@@ -34,8 +34,9 @@
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text-tertiary);
-  /* Indent ~42px so the tag aligns under the wordmark, not the glyph. */
-  margin-left: 42px;
+  /* Left-aligned with the glyph — sits flush under the icon's left edge,
+   * not under the wordmark. */
+  margin-left: 0;
 }
 
 .nav {

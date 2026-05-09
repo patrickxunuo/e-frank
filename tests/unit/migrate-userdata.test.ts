@@ -30,7 +30,7 @@ async function readFile(p: string): Promise<string> {
 beforeEach(async () => {
   workspace = await fsp.mkdtemp(join(tmpdir(), 'migrate-userdata-'));
   legacy = join(workspace, 'e-frank');
-  next = join(workspace, 'Paperplane');
+  next = join(workspace, 'PaperPlane');
 });
 
 afterEach(async () => {

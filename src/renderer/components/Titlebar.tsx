@@ -6,19 +6,23 @@ import {
   IconWindowMin,
   IconWindowRestore,
 } from './icons';
-import { PaperplaneGlyph } from './PaperplaneGlyph';
 
 /**
  * Custom 32px titlebar that replaces the OS-default Electron chrome
- * (issue #50). Renders the paperplane lockup at the left, a draggable
- * region in the center, and min/max/close window controls at the right.
+ * (issue #50). Renders a draggable region across the bar and min/max/
+ * close window controls at the right.
+ *
+ * The brand mark lives in the sidebar, not here — keeping the titlebar
+ * minimal avoids duplicating the lockup across two adjacent surfaces
+ * that are visible at the same time. The bar is intentionally just
+ * chrome.
  *
  * Platform handling:
  *  - Windows / Linux: `frame: false` strips the OS chrome; this component
  *    paints its own min/max/close glyphs on the right.
  *  - macOS: `titleBarStyle: 'hiddenInset'` keeps the native traffic-light
  *    buttons at the top-left. We hide our right-side controls and reserve
- *    ~80px of left padding so the paperplane lockup doesn't sit under the
+ *    ~80px of left padding so any UI we add later doesn't sit under the
  *    traffic lights.
  *
  * Drag region: the bar gets `-webkit-app-region: drag` (which also enables
@@ -82,10 +86,6 @@ export function Titlebar(): JSX.Element | null {
       data-testid="app-titlebar"
       data-platform={platform || 'unknown'}
     >
-      <div className={styles.brand}>
-        <PaperplaneLockup />
-      </div>
-
       <div className={styles.dragRegion} aria-hidden="true" />
 
       {!isMac && (
@@ -124,35 +124,3 @@ export function Titlebar(): JSX.Element | null {
   );
 }
 
-/**
- * Inline paperplane horizontal lockup. The wordmark uses `fill="currentColor"`
- * so its color follows the SVG's CSS `color` property, which `Titlebar.module.css`
- * binds to `--text-primary`. That keeps the wordmark in sync with theme changes
- * driven anywhere else in the app — `useTheme()` is per-component state, so
- * computing the fill in JS would let the bar drift from the rest of the UI
- * until the Titlebar happened to re-render.
- */
-function PaperplaneLockup(): JSX.Element {
-  return (
-    <svg
-      viewBox="0 0 152 32"
-      role="img"
-      aria-label="paperplane"
-      className={styles.lockup}
-    >
-      <PaperplaneGlyph />
-      <text
-        x="42"
-        y="16"
-        dominantBaseline="middle"
-        fontFamily="'General Sans', 'Inter', 'SF Pro Display', system-ui, sans-serif"
-        fontSize="14"
-        fontWeight="600"
-        letterSpacing="-0.01em"
-        fill="currentColor"
-      >
-        paperplane
-      </text>
-    </svg>
-  );
-}

@@ -360,7 +360,7 @@ export function Connections({ initialAdd = false }: ConnectionsProps): JSX.Eleme
         <EmptyState
           icon={<IconKey size={26} />}
           title="No connections yet"
-          description="Connections store the credentials Paperplane uses to fetch tickets and open PRs (Jira API tokens, GitHub PATs, etc.)."
+          description="Connections store the credentials PaperPlane uses to fetch tickets and open PRs (Jira API tokens, GitHub PATs, etc.)."
           action={
             <Button
               variant="primary"

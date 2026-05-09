@@ -42,9 +42,27 @@ const DEFAULT_SHADOW_FILL = '#2c4a99';
 
 // Coordinates kept in a constant so tests can import + assert exact
 // values, and so a future tweak is one edit. Authored for a 32×32
-// canvas with the plane spanning x=2..30 and y=3..25.
-export const PAPERPLANE_BODY_POINTS = '30,14 2,3 14,17';
-export const PAPERPLANE_SHADOW_POINTS = '30,14 14,17 2,25';
+// canvas as a classic 5-vertex paperplane silhouette — large upper
+// wing on top, small under-fin sticking down from the body underside.
+// This is the shape that universally reads as "paper airplane" rather
+// than "dart" (4-vertex polygons are too generic).
+//
+//   nose       : (30, 8)   sharp tip, upper-right
+//   upper-back : (3, 13)   back-tip of the upper (lit) wing, far-left
+//   fold-back  : (14, 19)  where the upper wing's trailing edge meets
+//                          the fin's back edge — the fold valley
+//   fin-tip    : (12, 27)  bottom point of the under-fin
+//   fin-front  : (24, 14)  where the fin's front edge meets the body
+//                          underside, just below the nose
+//
+// Two polygons render this:
+//   - body (lit upper wing): triangle nose, upper-back, fold-back
+//   - shadow (body underside + fin): quadrilateral nose, fold-back,
+//     fin-tip, fin-front — wraps around the body's lower face and the
+//     protruding fin. Both share the nose↔fold-back edge as the
+//     visible center crease.
+export const PAPERPLANE_BODY_POINTS = '30,8 3,13 14,19';
+export const PAPERPLANE_SHADOW_POINTS = '30,8 14,19 12,27 24,14';
 
 export function PaperplaneGlyph({
   bodyFill = DEFAULT_BODY_FILL,

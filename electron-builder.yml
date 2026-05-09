@@ -1,5 +1,5 @@
 appId: tech.emonster.paperplane
-productName: Paperplane
+productName: PaperPlane
 directories:
   output: release/${version}
   buildResources: build

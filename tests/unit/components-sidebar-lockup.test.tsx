@@ -22,9 +22,9 @@ describe('<Sidebar /> paperplane lockup', () => {
     render(<Sidebar activeNav="projects" />);
     const logo = screen.getByTestId('app-logo');
     expect(logo.tagName.toLowerCase()).toBe('svg');
-    expect(logo).toHaveAttribute('aria-label', 'paperplane');
-    // The lockup contains the lowercase wordmark inside an SVG <text>.
-    expect(logo.textContent).toMatch(/paperplane/);
+    expect(logo).toHaveAttribute('aria-label', 'PaperPlane');
+    // The lockup contains the PaperPlane wordmark inside an SVG <text>.
+    expect(logo.textContent).toMatch(/PaperPlane/);
     // No legacy `IconLogo` rect markers remain.
     expect(logo.querySelector('rect')).toBeNull();
     // Two-tone polygons (glyph) must be present.

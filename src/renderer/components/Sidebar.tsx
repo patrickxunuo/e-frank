@@ -102,7 +102,7 @@ function PaperplaneLockup(): JSX.Element {
     <svg
       viewBox="0 0 152 32"
       role="img"
-      aria-label="paperplane"
+      aria-label="PaperPlane"
       className={styles.lockup}
       data-testid="app-logo"
     >
@@ -117,7 +117,7 @@ function PaperplaneLockup(): JSX.Element {
         letterSpacing="-0.01em"
         fill="currentColor"
       >
-        paperplane
+        PaperPlane
       </text>
     </svg>
   );

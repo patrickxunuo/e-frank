@@ -130,7 +130,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#0e0f13',
-    title: 'Paperplane',
+    title: 'PaperPlane',
     ...(isMac
       ? {
           titleBarStyle: 'hiddenInset' as const,

@@ -262,7 +262,7 @@ export function ProjectList({
         <EmptyState
           icon={<IconProjects size={26} />}
           title="No projects yet"
-          description="Connect a repository, point at a ticket source, and let Paperplane turn tickets into pull requests."
+          description="Connect a repository, point at a ticket source, and let PaperPlane turn tickets into pull requests."
           action={
             <Button
               variant="primary"

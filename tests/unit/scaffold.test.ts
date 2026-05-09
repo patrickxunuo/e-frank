@@ -109,7 +109,7 @@ describe('scaffold (SCAFFOLD-001..004)', () => {
       };
 
       expect(cfg).toBeDefined();
-      // Rebranded to Paperplane in #GH-51 — appId flipped to keep userData
+      // Rebranded to PaperPlane in #GH-51 — appId flipped to keep userData
       // paths and OS app identity in sync with the renamed productName.
       expect(cfg.appId).toBe('tech.emonster.paperplane');
 

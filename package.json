@@ -1,7 +1,7 @@
 {
   "name": "e-frank",
   "version": "0.1.0",
-  "description": "Paperplane — Desktop AI Ticket → PR Automation. Converts Jira/GitHub tickets into pull requests via Claude Code with optional human approval.",
+  "description": "PaperPlane — Desktop AI Ticket → PR Automation. Converts Jira/GitHub tickets into pull requests via Claude Code with optional human approval.",
   "private": true,
   "type": "module",
   "main": "out/main/index.js",

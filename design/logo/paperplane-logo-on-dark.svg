@@ -27,8 +27,8 @@
 
   <!-- Glyph (anchored at left edge of viewBox).
        See paperplane-icon.svg for the silhouette construction. -->
-  <polygon class="shadow" points="30,14 14,17 2,25"/>
-  <polygon class="body"   points="30,14 2,3 14,17"/>
+  <polygon class="shadow" points="30,8 14,19 12,27 24,14"/>
+  <polygon class="body"   points="30,8 3,13 14,19"/>
 
   <!-- Wordmark.
        x=42 leaves a 14px gap between glyph and text — feels balanced
