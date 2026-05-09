@@ -66,13 +66,23 @@ export interface UseRunLogResult {
 // but state-changed events arrive faster than `steps` updates, so the
 // renderer needs its own table for newly-entered states.
 
+// Mirrors the runner's USER_VISIBLE_LABELS table. After GH-52, `running`
+// is the runner-internal umbrella state (hidden) and the skill emits
+// `implementing` to mark the actual feature-build phase. `branching`
+// also surfaces as a visible step now (was hidden previously).
 const USER_VISIBLE_LABELS: Record<RunState, string | null> = {
   idle: null,
   locking: null,
   preparing: null,
-  branching: null,
-  running: 'Implementing feature',
+  fetchingTicket: 'Fetching ticket',
+  branching: 'Setting up branch',
+  understandingContext: 'Understanding context',
+  planning: 'Planning',
+  running: null,
   awaitingApproval: 'Awaiting approval',
+  implementing: 'Implementing feature',
+  evaluatingTests: 'Evaluating tests',
+  reviewingCode: 'Reviewing code',
   committing: 'Committing changes',
   pushing: 'Pushing branch',
   creatingPr: 'Creating pull request',

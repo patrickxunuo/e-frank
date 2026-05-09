@@ -43,6 +43,8 @@ import { normalizePriority, type PriorityBucket } from '../lib/priority';
 import { formatRelative } from '../lib/time';
 import { useActiveRun } from '../state/active-run';
 import { useAutoMode } from '../state/auto-mode';
+import { useRunLog } from '../state/run-log';
+import { stripAnsi } from '../components/ansi';
 import {
   useTicketPages,
   type TicketPagesQuery,
@@ -66,9 +68,15 @@ const RUN_STATE_LABELS: Record<RunState, string> = {
   idle: 'Idle',
   locking: 'Locking ticket',
   preparing: 'Preparing repo',
-  branching: 'Creating branch',
+  fetchingTicket: 'Fetching ticket',
+  branching: 'Setting up branch',
+  understandingContext: 'Understanding context',
+  planning: 'Planning',
   running: 'Implementing feature',
   awaitingApproval: 'Awaiting approval',
+  implementing: 'Implementing feature',
+  evaluatingTests: 'Evaluating tests',
+  reviewingCode: 'Reviewing code',
   committing: 'Committing changes',
   pushing: 'Pushing branch',
   creatingPr: 'Creating pull request',
@@ -98,7 +106,13 @@ const RUN_STATE_LABELS: Record<RunState, string> = {
 const STATE_PROGRESS_ORDER: RunState[] = [
   'locking',
   'running',
+  'fetchingTicket',
   'branching',
+  'understandingContext',
+  'planning',
+  'implementing',
+  'evaluatingTests',
+  'reviewingCode',
   'committing',
   'pushing',
   'creatingPr',
@@ -109,7 +123,10 @@ const STATE_PROGRESS_ORDER: RunState[] = [
 
 function progressForRun(run: Run): { progress: number; index: number; total: number } {
   const total = STATE_PROGRESS_ORDER.length;
-  const effective: RunState = run.state === 'awaitingApproval' ? 'running' : run.state;
+  // `awaitingApproval` is a side trip — collapse it to whichever phase
+  // came before it. Default to `planning` (the most common pre-approval
+  // phase) so the bar doesn't snap backward to the umbrella state.
+  const effective: RunState = run.state === 'awaitingApproval' ? 'planning' : run.state;
   const idx = STATE_PROGRESS_ORDER.indexOf(effective);
   if (idx === -1) {
     // failed / cancelled / idle land here — show full bar so the panel
@@ -218,6 +235,189 @@ function CopyBranchButton({ branchName }: CopyBranchButtonProps): JSX.Element {
     >
       {copied ? 'Copied' : 'Copy'}
     </Button>
+  );
+}
+
+interface ActiveExecutionPanelProps {
+  run: Run;
+  onOpenExecution?: (runId: string) => void;
+  onCancel: () => void;
+}
+
+const TERMINAL_STATUSES_LOCAL = new Set(['done', 'failed', 'cancelled']);
+
+/**
+ * Bottom widget that hovers over the project detail page while a run is
+ * active. After GH-52 it does three new things:
+ *
+ *   #1 — surface the latest streamed line via `useRunLog`, so the
+ *        LogPreview no longer reads "Awaiting output…" forever.
+ *   #2 — pass `running` to ProgressBar so the fill subtly breathes
+ *        on non-terminal states.
+ *   #3 — when the run is awaitingApproval, the page-level Open Details +
+ *        Cancel actions are joined by inline Approve / Reject buttons
+ *        wired to the same `runs.approve` / `runs.reject` IPC calls
+ *        ApprovalPanel uses. The Modify flow stays in ExecutionView
+ *        (it needs a textarea), so the widget links over for that case.
+ */
+function ActiveExecutionPanel({
+  run,
+  onOpenExecution,
+  onCancel,
+}: ActiveExecutionPanelProps): JSX.Element {
+  const log = useRunLog(run);
+  const [pendingDecision, setPendingDecision] = useState<
+    'approve' | 'reject' | null
+  >(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+
+  const { progress } = progressForRun(run);
+  const stateLabel = RUN_STATE_LABELS[run.state];
+  const isTerminal = TERMINAL_STATUSES_LOCAL.has(run.status);
+  const awaiting = run.pendingApproval !== null;
+
+  // Derive the latest streamed line from the current step's tail.
+  const currentStep =
+    log.currentUserVisibleIndex >= 0
+      ? log.steps[log.currentUserVisibleIndex]
+      : log.steps[log.steps.length - 1];
+  const latestLineRaw = currentStep?.lines.length
+    ? currentStep.lines[currentStep.lines.length - 1]?.line ?? ''
+    : '';
+  const recentLines: string[] = latestLineRaw
+    ? [stripAnsi(latestLineRaw)]
+    : [];
+
+  const dispatchApproval = useCallback(
+    async (decision: 'approve' | 'reject'): Promise<void> => {
+      if (typeof window === 'undefined' || !window.api) return;
+      if (pendingDecision !== null) return;
+      setPendingDecision(decision);
+      setApprovalError(null);
+      try {
+        const fn =
+          decision === 'approve' ? window.api.runs.approve : window.api.runs.reject;
+        const res = await fn({ runId: run.id });
+        if (!res.ok) {
+          setApprovalError(
+            res.error.message || res.error.code || `Failed to ${decision}`,
+          );
+        }
+      } catch (err) {
+        setApprovalError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setPendingDecision(null);
+      }
+    },
+    [pendingDecision, run.id],
+  );
+
+  return (
+    <aside
+      className={styles.activePanel}
+      data-testid="active-execution-panel"
+      data-awaiting-approval={awaiting ? 'true' : 'false'}
+    >
+      <div className={styles.activeCard}>
+        <div className={styles.activeLeft}>
+          <div className={styles.activeHead}>
+            <div className={styles.activeBadgeRow}>
+              <span className={styles.activeKey} data-testid="active-execution-key">
+                {run.ticketKey}
+              </span>
+              <Badge variant="running" pulse>
+                {awaiting ? 'Awaiting' : 'Running'}
+              </Badge>
+            </div>
+            <div className={styles.activeActions}>
+              {awaiting && (
+                <>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    leadingIcon={<IconCheck size={12} />}
+                    onClick={() => {
+                      void dispatchApproval('approve');
+                    }}
+                    disabled={pendingDecision !== null}
+                    data-testid="active-execution-approve"
+                  >
+                    Approve
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    leadingIcon={<IconClose size={12} />}
+                    onClick={() => {
+                      void dispatchApproval('reject');
+                    }}
+                    disabled={pendingDecision !== null}
+                    data-testid="active-execution-reject"
+                  >
+                    Reject
+                  </Button>
+                </>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onOpenExecution?.(run.id)}
+                data-testid="active-execution-open-details"
+              >
+                Open Details
+              </Button>
+              {!awaiting && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  leadingIcon={<IconClose size={12} />}
+                  onClick={onCancel}
+                  data-testid="active-execution-cancel"
+                >
+                  Cancel
+                </Button>
+              )}
+            </div>
+          </div>
+          <span className={styles.activeTitle}>{run.ticketKey}</span>
+          <div className={styles.activeBranchRow}>
+            <span className={styles.activeBranchIcon} aria-hidden="true">
+              <IconBranch size={12} />
+            </span>
+            <span
+              className={styles.activeBranchName}
+              title={run.branchName}
+              data-testid="active-execution-branch"
+            >
+              {run.branchName}
+            </span>
+            <CopyBranchButton branchName={run.branchName} />
+          </div>
+          <ProgressBar
+            value={progress}
+            label={stateLabel}
+            running={!isTerminal}
+            data-testid="active-execution-progress"
+          />
+          {approvalError !== null && (
+            <span
+              className={styles.activeApprovalError}
+              role="alert"
+              data-testid="active-execution-approval-error"
+            >
+              {approvalError}
+            </span>
+          )}
+        </div>
+        <div className={styles.activeRight}>
+          <LogPreview
+            lines={recentLines}
+            maxHeight={140}
+            data-testid="active-execution-log"
+          />
+        </div>
+      </div>
+    </aside>
   );
 }
 
@@ -1165,76 +1365,13 @@ export function ProjectDetail({
         );
       })()}
 
-      {activeRun && (() => {
-        const { progress } = progressForRun(activeRun);
-        const stateLabel = RUN_STATE_LABELS[activeRun.state];
-        // #8 will populate streaming logs; for #7 the panel ships without
-        // them. The empty array keeps the LogPreview height stable.
-        const recentLines: string[] = [];
-        return (
-          <aside className={styles.activePanel} data-testid="active-execution-panel">
-            <div className={styles.activeCard}>
-              <div className={styles.activeLeft}>
-                <div className={styles.activeHead}>
-                  <div className={styles.activeBadgeRow}>
-                    <span className={styles.activeKey} data-testid="active-execution-key">
-                      {activeRun.ticketKey}
-                    </span>
-                    <Badge variant="running" pulse>
-                      {activeRun.state === 'awaitingApproval' ? 'Awaiting' : 'Running'}
-                    </Badge>
-                  </div>
-                  <div className={styles.activeActions}>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => onOpenExecution?.(activeRun.id)}
-                      data-testid="active-execution-open-details"
-                    >
-                      Open Details
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      leadingIcon={<IconClose size={12} />}
-                      onClick={handleCancelActive}
-                      data-testid="active-execution-cancel"
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                </div>
-                <span className={styles.activeTitle}>{activeRun.ticketKey}</span>
-                <div className={styles.activeBranchRow}>
-                  <span className={styles.activeBranchIcon} aria-hidden="true">
-                    <IconBranch size={12} />
-                  </span>
-                  <span
-                    className={styles.activeBranchName}
-                    title={activeRun.branchName}
-                    data-testid="active-execution-branch"
-                  >
-                    {activeRun.branchName}
-                  </span>
-                  <CopyBranchButton branchName={activeRun.branchName} />
-                </div>
-                <ProgressBar
-                  value={progress}
-                  label={stateLabel}
-                  data-testid="active-execution-progress"
-                />
-              </div>
-              <div className={styles.activeRight}>
-                <LogPreview
-                  lines={recentLines}
-                  maxHeight={140}
-                  data-testid="active-execution-log"
-                />
-              </div>
-            </div>
-          </aside>
-        );
-      })()}
+      {activeRun && (
+        <ActiveExecutionPanel
+          run={activeRun}
+          onOpenExecution={onOpenExecution}
+          onCancel={handleCancelActive}
+        />
+      )}
     </div>
   );
 }

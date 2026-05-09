@@ -73,4 +73,25 @@ describe('<ProgressBar /> — CMP-PROG', () => {
     const highFill = findFillElement('pb-high');
     expect(highFill.style.width).toBe('100%');
   });
+
+  // -------------------------------------------------------------------------
+  // GH-52 #2 — breathing prop drives an attribute the CSS can hook
+  // -------------------------------------------------------------------------
+  it('CMP-PROG-BREATH-001: running={true} sets data-running="true" on the fill', () => {
+    render(<ProgressBar value={0.4} running={true} data-testid="pb-run" />);
+    const fill = findFillElement('pb-run');
+    expect(fill.getAttribute('data-running')).toBe('true');
+  });
+
+  it('CMP-PROG-BREATH-002: running omitted defaults to false', () => {
+    render(<ProgressBar value={0.4} data-testid="pb-static" />);
+    const fill = findFillElement('pb-static');
+    expect(fill.getAttribute('data-running')).toBe('false');
+  });
+
+  it('CMP-PROG-BREATH-003: running={false} explicitly sets data-running="false"', () => {
+    render(<ProgressBar value={1} running={false} data-testid="pb-done" />);
+    const fill = findFillElement('pb-done');
+    expect(fill.getAttribute('data-running')).toBe('false');
+  });
 });

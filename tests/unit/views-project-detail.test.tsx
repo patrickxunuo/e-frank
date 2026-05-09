@@ -1064,4 +1064,144 @@ describe('<ProjectDetail /> — DET', () => {
     // DET-RUN-001.
     it.skip('DET-RUN-003 (superseded): Run Selected button removed', () => {});
   });
+
+  // ---------------------------------------------------------------------
+  // GH-52 #2 / #3 — widget breathing + inline approve/reject
+  // ---------------------------------------------------------------------
+  describe('DET-WIDGET-BREATH non-terminal run breathes the progress bar', () => {
+    it('DET-WIDGET-BREATH: ProgressBar.fill carries data-running="true" while running', async () => {
+      (useActiveRun as unknown as Mock).mockReturnValue({
+        id: 'run-1',
+        projectId: 'p-1',
+        ticketKey: 'ABC-7',
+        mode: 'interactive',
+        branchName: 'feat/ABC-7',
+        state: 'implementing',
+        status: 'running',
+        steps: [],
+        pendingApproval: null,
+        startedAt: 0,
+      });
+      installApi({ tickets: [makeTicket('ABC-7')] });
+      installRunsStub();
+
+      render(
+        <ProjectDetail
+          projectId="p-1"
+          onBack={noop}
+          onOpenExecution={() => {}}
+        />,
+      );
+
+      const progress = await screen.findByTestId('active-execution-progress');
+      const fill = progress.querySelector('[data-testid="progress-fill"]');
+      expect(fill).not.toBeNull();
+      expect(fill?.getAttribute('data-running')).toBe('true');
+    });
+
+    it('DET-WIDGET-NO-BREATH: terminal status sets data-running="false"', async () => {
+      (useActiveRun as unknown as Mock).mockReturnValue({
+        id: 'run-1',
+        projectId: 'p-1',
+        ticketKey: 'ABC-7',
+        mode: 'interactive',
+        branchName: 'feat/ABC-7',
+        state: 'done',
+        status: 'done',
+        steps: [],
+        pendingApproval: null,
+        startedAt: 0,
+      });
+      installApi({ tickets: [makeTicket('ABC-7')] });
+      installRunsStub();
+
+      render(
+        <ProjectDetail
+          projectId="p-1"
+          onBack={noop}
+          onOpenExecution={() => {}}
+        />,
+      );
+
+      const progress = await screen.findByTestId('active-execution-progress');
+      const fill = progress.querySelector('[data-testid="progress-fill"]');
+      expect(fill?.getAttribute('data-running')).toBe('false');
+    });
+  });
+
+  describe('DET-WIDGET-APPROVE inline approve/reject when awaitingApproval', () => {
+    it('DET-WIDGET-APPROVE: pendingApproval !== null → Approve + Reject buttons visible', async () => {
+      (useActiveRun as unknown as Mock).mockReturnValue({
+        id: 'run-1',
+        projectId: 'p-1',
+        ticketKey: 'ABC-7',
+        mode: 'interactive',
+        branchName: 'feat/ABC-7',
+        state: 'awaitingApproval',
+        status: 'running',
+        steps: [],
+        pendingApproval: { plan: 'check', raw: { plan: 'check' } },
+        startedAt: 0,
+      });
+      installApi({ tickets: [makeTicket('ABC-7')] });
+      installRunsStub();
+
+      render(
+        <ProjectDetail
+          projectId="p-1"
+          onBack={noop}
+          onOpenExecution={() => {}}
+        />,
+      );
+
+      expect(
+        await screen.findByTestId('active-execution-approve'),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId('active-execution-reject'),
+      ).toBeInTheDocument();
+    });
+
+    it('DET-WIDGET-APPROVE-CLICK: clicking Approve dispatches runs.approve({ runId })', async () => {
+      (useActiveRun as unknown as Mock).mockReturnValue({
+        id: 'run-42',
+        projectId: 'p-1',
+        ticketKey: 'ABC-7',
+        mode: 'interactive',
+        branchName: 'feat/ABC-7',
+        state: 'awaitingApproval',
+        status: 'running',
+        steps: [],
+        pendingApproval: { plan: 'check', raw: { plan: 'check' } },
+        startedAt: 0,
+      });
+      installApi({ tickets: [makeTicket('ABC-7')] });
+      const stub = installRunsStub();
+      const api = (window as { api?: IpcApi }).api!;
+      const approveSpy = vi.fn(async () => ({ ok: true, data: { runId: 'run-42' } }));
+      (api as unknown as { runs: Record<string, unknown> }).runs = {
+        ...(api as unknown as { runs: Record<string, unknown> }).runs,
+        approve: approveSpy,
+      };
+
+      render(
+        <ProjectDetail
+          projectId="p-1"
+          onBack={noop}
+          onOpenExecution={() => {}}
+        />,
+      );
+
+      const approveBtn = await screen.findByTestId('active-execution-approve');
+      await act(async () => {
+        fireEvent.click(approveBtn);
+      });
+      await waitFor(() => {
+        expect(approveSpy).toHaveBeenCalledWith({ runId: 'run-42' });
+      });
+      // Cancel reference so the helper isn't flagged unused — installRunsStub
+      // patches the namespace; we keep it for parity with sibling tests.
+      void stub;
+    });
+  });
 });

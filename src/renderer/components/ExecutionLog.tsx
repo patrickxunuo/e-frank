@@ -66,6 +66,12 @@ interface StepRowProps {
   step: ExecLogStep;
   index: number;
   expanded: boolean;
+  /**
+   * True when this row's open/closed state is currently managed by the
+   * auto-follow effect (i.e. the user hasn't manually toggled it). Surfaced
+   * as `data-auto-managed` so tests + future styling can disambiguate.
+   */
+  autoManaged: boolean;
   onToggle: () => void;
 }
 
@@ -77,7 +83,7 @@ interface StepRowProps {
  */
 const QUIET_THRESHOLD_SECONDS = 15;
 
-function StepRow({ step, index, expanded, onToggle }: StepRowProps): JSX.Element {
+function StepRow({ step, index, expanded, autoManaged, onToggle }: StepRowProps): JSX.Element {
   const labelText = step.label ?? step.state;
   const range = formatRange(step);
 
@@ -115,6 +121,7 @@ function StepRow({ step, index, expanded, onToggle }: StepRowProps): JSX.Element
       className={styles.row}
       data-status={step.status}
       data-state={step.state}
+      data-auto-managed={autoManaged ? 'true' : 'false'}
       data-testid={`log-step-${index}`}
     >
       <header className={styles.head}>
@@ -226,24 +233,51 @@ export function ExecutionLog({
     if (expandIndex < 0) return new Set();
     return new Set([expandIndex]);
   });
+  // GH-52 #7: track which indices the user manually toggled open. The
+  // auto-follow effect collapses previously-active steps when the active
+  // step advances — but only if the row was opened by us, not by the
+  // user. Without this distinction, drilling into a finished phase to
+  // read its body would be undone the moment the next phase starts.
+  const [userOpenedSteps, setUserOpenedSteps] = useState<Set<number>>(() => new Set());
 
   // Track whether the user is currently "following" the bottom. Updated
   // on scroll. Once they scroll up, follow stays off until they return
   // to the bottom OR autoScroll is toggled off-then-on.
   const followRef = useRef<boolean>(true);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Last index the auto-follow effect opened. Used to know which row to
+  // collapse when the active step advances. -1 = we haven't opened
+  // anything yet (handled by the seed in `openSteps`).
+  const lastAutoExpandRef = useRef<number>(expandIndex);
 
-  // Keep the openSteps set in sync when `expandIndex` changes — used by
-  // the parent to auto-expand the current step when the timeline grows.
+  // Keep the openSteps set in sync when `expandIndex` changes. Auto-follow
+  // (GH-52 #7): when the active step advances and `autoScroll` is on,
+  // collapse the previously-active step UNLESS the user manually opened it.
   useLayoutEffect(() => {
     if (expandIndex < 0) return;
+    const prevAuto = lastAutoExpandRef.current;
+    lastAutoExpandRef.current = expandIndex;
+    // If the user has manually managed the active row, the auto-effect
+    // backs off entirely — we neither force-open it nor collapse a peer
+    // on its behalf. This is what makes the "user closes the active step,
+    // it stays closed" scenario work without the effect immediately
+    // re-opening it on its next run (e.g. after userOpenedSteps changes).
+    if (userOpenedSteps.has(expandIndex)) return;
     setOpenSteps((prev) => {
-      if (prev.has(expandIndex)) return prev;
+      const alreadyOpen = prev.has(expandIndex);
+      const shouldCollapsePrev =
+        autoScroll &&
+        prevAuto !== expandIndex &&
+        prevAuto >= 0 &&
+        prev.has(prevAuto) &&
+        !userOpenedSteps.has(prevAuto);
+      if (alreadyOpen && !shouldCollapsePrev) return prev;
       const next = new Set(prev);
+      if (shouldCollapsePrev) next.delete(prevAuto);
       next.add(expandIndex);
       return next;
     });
-  }, [expandIndex]);
+  }, [expandIndex, autoScroll, userOpenedSteps]);
 
   // Auto-scroll on content change.
   useLayoutEffect(() => {
@@ -276,6 +310,15 @@ export function ExecutionLog({
       else next.add(i);
       return next;
     });
+    // Mark the row as user-managed so the auto-follow effect leaves it
+    // alone going forward. We add on both open AND close — once the user
+    // has expressed intent for this row, the effect should respect it.
+    setUserOpenedSteps((prev) => {
+      if (prev.has(i)) return prev;
+      const next = new Set(prev);
+      next.add(i);
+      return next;
+    });
   };
 
   return (
@@ -294,6 +337,7 @@ export function ExecutionLog({
             step={step}
             index={i}
             expanded={openSteps.has(i)}
+            autoManaged={!userOpenedSteps.has(i)}
             onToggle={() => toggleStep(i)}
           />
         ))

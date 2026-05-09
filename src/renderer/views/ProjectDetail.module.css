@@ -438,6 +438,28 @@
   min-width: 0;
 }
 
+/*
+ * GH-52 #3: inline approve/reject failure surface. Lives inside
+ * .activeLeft below the ProgressBar so it doesn't displace the layout
+ * when absent. Matches the page-level error banner palette but
+ * compact — the panel is a transient hover surface, not a sticky page
+ * region.
+ */
+.activeApprovalError {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid var(--danger-border);
+  font-family: var(--font-display);
+  font-size: 11.5px;
+  letter-spacing: 0.005em;
+  align-self: flex-start;
+}
+
 /* Runs tab cells (#33). */
 .runTicketKey {
   font-family: var(--font-mono);

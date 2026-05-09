@@ -50,3 +50,32 @@
   transition: width var(--duration-base) var(--ease-out);
   box-shadow: 0 0 16px -2px var(--accent-glow);
 }
+
+/*
+ * GH-52 #2: while the run is still moving (pending/running/awaiting),
+ * the filled portion subtly breathes — same 3.2s ease-in-out cycle as
+ * ExecutionLog's accent bar, so the page reads as one coherent system.
+ * Static fill on terminal states (the prop flips to `false`).
+ */
+.fill[data-running='true'] {
+  animation: progressBreath 3.2s var(--ease-in-out, ease-in-out) infinite;
+  will-change: opacity, box-shadow;
+}
+
+@keyframes progressBreath {
+  0%, 100% {
+    opacity: 0.85;
+    box-shadow: 0 0 12px -3px var(--accent-glow);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 20px -1px var(--accent-glow);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fill[data-running='true'] {
+    animation: none;
+    opacity: 1;
+  }
+}

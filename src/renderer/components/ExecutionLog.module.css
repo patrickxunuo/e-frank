@@ -135,6 +135,42 @@
   align-items: center;
   gap: var(--space-3);
   user-select: none;
+  /*
+   * GH-52 #8: pin the phase header to the top of the scroll viewport so
+   * a long body never orphans the user from "which phase am I reading?".
+   * `top: -1px` hides the row's 1px top border from peeking through the
+   * sticky's underside as the user scrolls past it.
+   *
+   * Background is explicit so streaming lines underneath don't bleed
+   * through. The accent bar (`.row::before`) is positioned at `left: 0`
+   * of the row (3px wide); we deliberately do NOT extend `.head`'s
+   * background over the row's left padding so the bar stays visible
+   * while the head is pinned. We DO extend top/right/bottom-of-head
+   * negative margins so the background covers the row's top + right
+   * padding + the gap between head and body.
+   */
+  position: sticky;
+  top: -1px;
+  z-index: 2;
+  background: var(--bg-card);
+  margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-3)) 0 0;
+  padding: var(--space-3) var(--space-3) var(--space-3) 0;
+  /* Match .row's top corner radius on the right so the sticky header
+   * doesn't read as a sharper edge than the card it lives in. The left
+   * side stays square because the accent bar occupies that corner. */
+  border-top-right-radius: var(--radius-md);
+}
+
+/*
+ * Running rows have a translucent accent gradient bg (`.row[data-status='running']`
+ * around line 124). The sticky head's solid `--bg-card` would visually
+ * pop as the user scrolls past the gradient. Layering `--accent-soft`
+ * over the solid bg approximates the gradient's top-of-row color, so
+ * the sticky transition is much less jarring while still being opaque
+ * enough to obscure scrolled-past body lines.
+ */
+.row[data-status='running'] .head {
+  background: linear-gradient(180deg, var(--accent-soft), var(--bg-card));
 }
 
 .toggle {

@@ -12,23 +12,49 @@
 export type RunMode = 'interactive' | 'yolo';
 
 /**
- * Internal state machine. The pipeline transitions through these states in
- * the order documented in `acceptance/workflow-runner.md`:
+ * Internal state machine. After GH-52 the pipeline mirrors the skill's own
+ * phase decomposition, so the user-facing timeline reads as a story:
  *
- *   idle -> locking -> preparing -> branching -> running
+ *   idle
+ *   -> locking                (runner-internal — hidden in UI)
+ *   -> running                (runner-internal umbrella — hidden in UI;
+ *                              the skill is alive but hasn't yet emitted
+ *                              its first phase marker)
+ *   -> fetchingTicket         (skill phase 1)
+ *   -> branching              (skill phase 0)
+ *   -> understandingContext   (skill phase 2)
+ *   -> planning               (skill phase 3)
  *     (-> awaitingApproval, interactive only — pauses until approve/reject/modify)
- *   -> committing -> pushing -> creatingPr -> updatingTicket -> unlocking -> done
+ *   -> implementing           (skill phase 4)
+ *   -> evaluatingTests        (skill phase 5)
+ *   -> reviewingCode          (skill phase 6)
+ *   -> committing             (skill phase 7.1)
+ *   -> pushing                (skill phase 7.2)
+ *   -> creatingPr             (skill phase 7.3)
+ *   -> updatingTicket         (skill phase 7.4)
+ *   -> unlocking              (runner-internal — hidden in UI)
+ *   -> done | failed | cancelled
  *
- * Failure / cancel paths transition to `failed` or `cancelled` after running
- * the `unlocking` cleanup state.
+ * Phase markers from the skill drive every transition between `running`
+ * and `unlocking`. The runner does not invent any of those transitions
+ * itself — see `PHASE_VALUES` in workflow-runner.ts.
+ *
+ * `preparing` is retained for backward-compat with persisted runs but
+ * the runner never enters it after GH-37.
  */
 export type RunState =
   | 'idle'
   | 'locking'
   | 'preparing'
+  | 'fetchingTicket'
   | 'branching'
+  | 'understandingContext'
+  | 'planning'
   | 'running'
   | 'awaitingApproval'
+  | 'implementing'
+  | 'evaluatingTests'
+  | 'reviewingCode'
   | 'committing'
   | 'pushing'
   | 'creatingPr'

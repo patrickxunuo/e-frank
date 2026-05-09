@@ -37,9 +37,15 @@ const RUN_STATE_VALUES: ReadonlyArray<RunState> = [
   'idle',
   'locking',
   'preparing',
+  'fetchingTicket',
   'branching',
+  'understandingContext',
+  'planning',
   'running',
   'awaitingApproval',
+  'implementing',
+  'evaluatingTests',
+  'reviewingCode',
   'committing',
   'pushing',
   'creatingPr',
@@ -52,13 +58,15 @@ const RUN_STATE_VALUES: ReadonlyArray<RunState> = [
 
 describe('src/shared/schema/run.ts — Run schema', () => {
   // -------------------------------------------------------------------------
-  // RUN-SCHEMA-001 — union covers the 14 documented RunState values
+  // RUN-SCHEMA-001 — union covers the 20 documented RunState values
+  // (14 originals + 6 added by GH-52: fetchingTicket, understandingContext,
+  // planning, implementing, evaluatingTests, reviewingCode)
   // -------------------------------------------------------------------------
   describe('RUN-SCHEMA-001 RunState union', () => {
     it('RUN-SCHEMA-001: every documented state is assignable to RunState', () => {
       // If any literal here is NOT in the union, the assignment below stops
-      // type-checking. The runtime check ensures we have all 14 entries.
-      expect(RUN_STATE_VALUES).toHaveLength(14);
+      // type-checking. The runtime check ensures we have all 20 entries.
+      expect(RUN_STATE_VALUES).toHaveLength(20);
       for (const v of RUN_STATE_VALUES) {
         // Re-assign each value to the typed alias to force a structural check.
         const checked: RunState = v;
@@ -66,15 +74,21 @@ describe('src/shared/schema/run.ts — Run schema', () => {
       }
     });
 
-    it('RUN-SCHEMA-001: RunState is the discriminated union of the 14 literals', () => {
-      // Compile-time: RunState ≡ union of the 14 string literals.
+    it('RUN-SCHEMA-001: RunState is the discriminated union of the 20 literals', () => {
+      // Compile-time: RunState ≡ union of the 20 string literals.
       type Expected =
         | 'idle'
         | 'locking'
         | 'preparing'
+        | 'fetchingTicket'
         | 'branching'
+        | 'understandingContext'
+        | 'planning'
         | 'running'
         | 'awaitingApproval'
+        | 'implementing'
+        | 'evaluatingTests'
+        | 'reviewingCode'
         | 'committing'
         | 'pushing'
         | 'creatingPr'

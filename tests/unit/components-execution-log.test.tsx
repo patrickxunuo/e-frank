@@ -371,4 +371,170 @@ describe('<ExecutionLog /> — CMP-EXEC-LOG', () => {
 
     expect(scrolledToBottom || sentinelScrolled).toBe(true);
   });
+
+  // -------------------------------------------------------------------------
+  // GH-52 #7 — auto-scroll follows active phase accordion
+  // -------------------------------------------------------------------------
+  it('CMP-EXEC-LOG-AUTO-FOLLOW: when expandIndex advances, the previously-active step collapses (auto-scroll on)', () => {
+    const initial: ExecLogStep[] = [
+      makeStep({
+        state: 'planning',
+        label: 'Planning',
+        status: 'running',
+        lines: [makeLine({ state: 'planning', line: 'planning-line-1' })],
+      }),
+    ];
+    const { rerender } = render(
+      <ExecutionLog
+        steps={initial}
+        autoScroll={true}
+        expandIndex={0}
+        data-testid="log"
+      />,
+    );
+
+    // Active step (index 0) is open by default.
+    expect(screen.queryByTestId('log-step-0-body')).not.toBeNull();
+
+    // Advance: planning closes, implementing opens.
+    const advanced: ExecLogStep[] = [
+      makeStep({
+        state: 'planning',
+        label: 'Planning',
+        status: 'done',
+        lines: [makeLine({ state: 'planning', line: 'planning-line-1' })],
+      }),
+      makeStep({
+        state: 'implementing',
+        label: 'Implementing feature',
+        status: 'running',
+        lines: [
+          makeLine({ state: 'implementing', line: 'implementing-line-1' }),
+        ],
+      }),
+    ];
+    rerender(
+      <ExecutionLog
+        steps={advanced}
+        autoScroll={true}
+        expandIndex={1}
+        data-testid="log"
+      />,
+    );
+
+    // The previously-active step (index 0) auto-collapses; the new
+    // active step (index 1) auto-expands.
+    expect(screen.queryByTestId('log-step-0-body')).toBeNull();
+    expect(screen.queryByTestId('log-step-1-body')).not.toBeNull();
+  });
+
+  it('CMP-EXEC-LOG-USER-OPEN: a user-opened step is NOT collapsed when expandIndex advances', () => {
+    const initial: ExecLogStep[] = [
+      makeStep({
+        state: 'planning',
+        label: 'Planning',
+        status: 'running',
+        lines: [makeLine({ state: 'planning', line: 'planning-line-1' })],
+      }),
+    ];
+    const { rerender } = render(
+      <ExecutionLog
+        steps={initial}
+        autoScroll={true}
+        expandIndex={0}
+        data-testid="log"
+      />,
+    );
+
+    // User clicks the toggle — twice (open/close/open) so the row ends
+    // up open AND in the user-opened set. We assert the auto-managed
+    // attribute flips to 'false' as a side-channel signal that the
+    // component recorded the manual intent.
+    const toggle = screen.getByTestId('log-step-0-toggle');
+    fireEvent.click(toggle); // close
+    fireEvent.click(toggle); // re-open (now user-opened)
+
+    const row0 = screen.getByTestId('log-step-0');
+    expect(row0.getAttribute('data-auto-managed')).toBe('false');
+
+    // Now advance the timeline. The new step opens, but step 0 stays
+    // open because the user has expressed intent.
+    const advanced: ExecLogStep[] = [
+      makeStep({
+        state: 'planning',
+        label: 'Planning',
+        status: 'done',
+        lines: [makeLine({ state: 'planning', line: 'planning-line-1' })],
+      }),
+      makeStep({
+        state: 'implementing',
+        label: 'Implementing feature',
+        status: 'running',
+        lines: [
+          makeLine({ state: 'implementing', line: 'implementing-line-1' }),
+        ],
+      }),
+    ];
+    rerender(
+      <ExecutionLog
+        steps={advanced}
+        autoScroll={true}
+        expandIndex={1}
+        data-testid="log"
+      />,
+    );
+
+    // User-opened step 0 stays open; new step 1 also opens.
+    expect(screen.queryByTestId('log-step-0-body')).not.toBeNull();
+    expect(screen.queryByTestId('log-step-1-body')).not.toBeNull();
+  });
+
+  it('CMP-EXEC-LOG-AUTO-OFF: when autoScroll is false, advancing expandIndex does NOT collapse the prior step', () => {
+    const initial: ExecLogStep[] = [
+      makeStep({
+        state: 'planning',
+        label: 'Planning',
+        status: 'running',
+        lines: [makeLine({ state: 'planning', line: 'planning-line-1' })],
+      }),
+    ];
+    const { rerender } = render(
+      <ExecutionLog
+        steps={initial}
+        autoScroll={false}
+        expandIndex={0}
+        data-testid="log"
+      />,
+    );
+    expect(screen.queryByTestId('log-step-0-body')).not.toBeNull();
+
+    const advanced: ExecLogStep[] = [
+      makeStep({
+        state: 'planning',
+        label: 'Planning',
+        status: 'done',
+        lines: [makeLine({ state: 'planning', line: 'planning-line-1' })],
+      }),
+      makeStep({
+        state: 'implementing',
+        label: 'Implementing feature',
+        status: 'running',
+        lines: [
+          makeLine({ state: 'implementing', line: 'implementing-line-1' }),
+        ],
+      }),
+    ];
+    rerender(
+      <ExecutionLog
+        steps={advanced}
+        autoScroll={false}
+        expandIndex={1}
+        data-testid="log"
+      />,
+    );
+    // With auto-scroll OFF we don't auto-collapse the previously-active
+    // step. (Auto-expand of the new step still fires — the user just
+    // doesn't get the collapse half of the follow behavior.)
+    expect(screen.queryByTestId('log-step-0-body')).not.toBeNull();
+  });
 });
