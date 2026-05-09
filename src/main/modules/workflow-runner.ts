@@ -79,15 +79,27 @@ const PHASE_END = '<<<END_EF_PHASE>>>';
  * warn level and ignored (forwards-compatible — newer skills emitting a
  * future phase value won't crash older runners).
  *
+ * GH-52 expanded the set so the timeline mirrors the full skill workflow
+ * — fetchingTicket, understandingContext, planning, implementing,
+ * evaluatingTests, reviewingCode are all visible phases driven by the
+ * skill, alongside the original ship-time phases.
+ *
  * NB: `running` and `awaitingApproval` are deliberately excluded.
- *   - `running` is the umbrella the runner enters when it spawns Claude;
- *     phase markers narrow it to a sub-phase, not back to itself.
+ *   - `running` is the runner-internal umbrella state entered before the
+ *     skill emits its first phase marker; phase markers narrow it to a
+ *     sub-phase, not back to itself.
  *   - `awaitingApproval` is driven by approval markers, not phase markers
  *     (per the spec — phase markers MUST NOT transition into a paused
  *     state, otherwise the resume path becomes ambiguous).
  */
 const PHASE_VALUES: ReadonlySet<RunState> = new Set<RunState>([
+  'fetchingTicket',
   'branching',
+  'understandingContext',
+  'planning',
+  'implementing',
+  'evaluatingTests',
+  'reviewingCode',
   'committing',
   'pushing',
   'creatingPr',
@@ -112,16 +124,28 @@ interface PhaseMarker {
 
 /**
  * User-visible labels for each state. `null` means the state is internal
- * plumbing (locking, preparing, branching, unlocking) and shouldn't surface
- * in the UI timeline.
+ * plumbing (locking, preparing, the `running` umbrella, unlocking) and
+ * shouldn't surface in the UI timeline.
+ *
+ * GH-52: `running` is now hidden — it's the umbrella state the runner
+ * enters before the skill emits its first phase marker, not a visible
+ * step. The skill emits `implementing` to mark the actual feature-build
+ * phase. `branching` is now visible too, because the skill creates the
+ * branch as a meaningful user-facing step (was a runner-internal stub).
  */
 const USER_VISIBLE_LABELS: Record<RunState, string | null> = {
   idle: null,
   locking: null,
   preparing: null,
-  branching: null,
-  running: 'Implementing feature',
+  fetchingTicket: 'Fetching ticket',
+  branching: 'Setting up branch',
+  understandingContext: 'Understanding context',
+  planning: 'Planning',
+  running: null,
   awaitingApproval: 'Awaiting approval',
+  implementing: 'Implementing feature',
+  evaluatingTests: 'Evaluating tests',
+  reviewingCode: 'Reviewing code',
   committing: 'Committing changes',
   pushing: 'Pushing branch',
   creatingPr: 'Creating pull request',
@@ -876,14 +900,28 @@ export class WorkflowRunner extends EventEmitter {
    * Close the in-flight step and open a new one for `phase`. Used by the
    * phase-marker handler (and could be called by approval-resume for
    * symmetry, but that path uses inline mutation today).
+   *
+   * GH-52 dedupe: if the incoming phase already matches the current state
+   * AND the last step is still running, treat the marker as a re-announce
+   * and drop it. The skill is supposed to emit each phase marker exactly
+   * once per run; this guard makes the runner robust to a misbehaving
+   * skill (e.g. one that re-emits `committing` on approval-resume) so the
+   * timeline doesn't accumulate duplicate steps. It also lets the
+   * approval-resume path push a fresh phase step without worrying that
+   * the skill's next marker will spawn a second one.
    */
   private transitionToPhase(ctx: ActiveRunCtx, phase: RunState): void {
     const lastIdx = ctx.run.steps.length - 1;
     const lastStep = ctx.run.steps[lastIdx];
-    if (lastStep !== undefined && lastStep.status === 'running') {
-      lastStep.status = 'done';
-      lastStep.finishedAt = this.clock.now();
+    if (
+      ctx.run.state === phase &&
+      lastStep !== undefined &&
+      lastStep.state === phase &&
+      lastStep.status === 'running'
+    ) {
+      return;
     }
+    this.closeLastRunningStep(ctx);
     ctx.run.state = phase;
     ctx.run.steps.push({
       state: phase,
@@ -896,6 +934,22 @@ export class WorkflowRunner extends EventEmitter {
     // Persist async — same rationale as dispatchApproval. The state
     // transition is already complete in memory; on-disk catches up.
     void this.persist(ctx);
+  }
+
+  /**
+   * Close the most recent step IF it's still `running`. Used by both
+   * `transitionToPhase` (when the next phase marker arrives) and
+   * `dispatchApproval` (when the runner enters `awaitingApproval`) so the
+   * runner never has two simultaneously-running steps in its timeline.
+   * No-op when there's no running tail step.
+   */
+  private closeLastRunningStep(ctx: ActiveRunCtx): void {
+    const lastIdx = ctx.run.steps.length - 1;
+    const lastStep = ctx.run.steps[lastIdx];
+    if (lastStep !== undefined && lastStep.status === 'running') {
+      lastStep.status = 'done';
+      lastStep.finishedAt = this.clock.now();
+    }
   }
 
   private parseApprovalRequest(raw: unknown): ApprovalRequest {
@@ -953,6 +1007,16 @@ export class WorkflowRunner extends EventEmitter {
     // if a phase marker had advanced the run to e.g. `committing` before
     // Claude emitted the approval marker.
     ctx.priorPhase = ctx.run.state;
+
+    // GH-52 #4: close the prior in-flight phase step BEFORE pushing
+    // the awaitingApproval step. Without this, the timeline reads as
+    // two simultaneously-running steps (e.g. `planning` (running) +
+    // `awaitingApproval` (running)) and the user can't tell which
+    // step the run is actually paused on. We close the prior step
+    // here even though the body code in runState would eventually
+    // close it — we need the state to be coherent the moment
+    // `awaitingApproval` is observable to the renderer.
+    this.closeLastRunningStep(ctx);
 
     ctx.run.pendingApproval = approval;
     ctx.run.state = 'awaitingApproval';

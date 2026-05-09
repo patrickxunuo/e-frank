@@ -30,7 +30,30 @@ The runner watches Claude's stdout for one-line markers and uses them to drive i
 <<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>
 ```
 
-Emit one with a plain `echo` at the start of each runner-relevant phase. Two phases carry an optional payload:
+**The contract is simple but strict — get it wrong and the timeline lies to the user:**
+
+- **Marker = START of the action it names**, not the preamble. Don't emit `committing` while you're staging files; emit it the line before `git commit`. Don't emit `pushing` while you're computing the upstream; emit it the line before `git push`.
+- **Each phase fires exactly ONCE per run.** The runner has a dedupe guard against accidental re-announces, but you should not rely on it. In particular: do NOT re-emit a phase marker after an approval-resume — the runner restores the prior phase automatically.
+- **Emit phase markers in the order phases actually run.** The runner doesn't reorder; it pushes a step for each marker as it arrives.
+
+The full set of phases the runner recognizes:
+
+| Skill phase | Marker `phase` value | When to emit |
+| --- | --- | --- |
+| Phase 1 — Fetch ticket | `fetchingTicket` | First line of Phase 1, before the ticket fetch call. |
+| Phase 0 — Branch setup | `branching` | After the branch exists (so `branchName` is real). May carry `branchName`. |
+| Phase 2 — Understand context | `understandingContext` | First line of Phase 2, before reading the memory bank. |
+| Phase 3 — Plan | `planning` | First line of Phase 3, before generating the plan. |
+| (Phase 3.3 — Plan-review) | (approval marker, not a phase marker) | See "Approval marker" below. |
+| Phase 4 — Implement | `implementing` | First line of Phase 4, after approval, before launching agent teams. |
+| Phase 5 — E2E test evaluation | `evaluatingTests` | First line of Phase 5. |
+| Phase 6 — Code review | `reviewingCode` | First line of Phase 6, before launching the reviewer agent. |
+| Phase 7.1 — Commit | `committing` | The line immediately before `git commit`. NOT before `git add`. |
+| Phase 7.2 — Push | `pushing` | The line immediately before `git push`. |
+| Phase 7.3 — Open PR | `creatingPr` | After `gh pr create` returns — carry `prUrl` so the UI links it. |
+| Phase 7.4 — Update ticket | `updatingTicket` | First line of Phase 7.4, before the transition / comment call. |
+
+Two phases carry an optional payload:
 
 - `branching` may include `branchName` (the actual branch you created).
 - `creatingPr` may include `prUrl` (the URL `gh pr create` returned).
@@ -94,6 +117,12 @@ Format:
 ## Phase 1: Fetch Ticket
 
 > **Update `activeTask.md`**: Current phase = Phase 1
+
+**Emit the phase marker first** — before any other work in this phase:
+
+```bash
+echo '<<<EF_PHASE>>>{"phase":"fetchingTicket"}<<<END_EF_PHASE>>>'
+```
 
 ### 1.1: Detect source + parse the argument
 
@@ -224,6 +253,12 @@ echo "<<<EF_PHASE>>>{\"phase\":\"branching\",\"branchName\":\"$(git branch --sho
 
 > **Update `activeTask.md`**: Current phase = Phase 2
 
+**Emit the phase marker first:**
+
+```bash
+echo '<<<EF_PHASE>>>{"phase":"understandingContext"}<<<END_EF_PHASE>>>'
+```
+
 Run the `/ef-context` skill workflow to ensure the memory bank is up to date and understand what the ticket is really about in the context of the project.
 
 ### 2.1: Check Memory Bank State
@@ -263,6 +298,12 @@ Proceed automatically to Phase 3.
 ## Phase 3: Plan
 
 > **Update `activeTask.md`**: Current phase = Phase 3
+
+**Emit the phase marker first:**
+
+```bash
+echo '<<<EF_PHASE>>>{"phase":"planning"}<<<END_EF_PHASE>>>'
+```
 
 Run the `/ef-plan` skill workflow using the ticket requirements as the module definition.
 
@@ -314,6 +355,12 @@ After approval, update `memory-bank/progress.md` with the planned features (prep
 
 > **Update `activeTask.md`**: Current phase = Phase 4
 
+**Emit the phase marker first** — this is the START of the implementation phase, NOT a re-announce after the approval-resume. The runner has already restored the prior phase on resume; it only needs the new `implementing` marker once.
+
+```bash
+echo '<<<EF_PHASE>>>{"phase":"implementing"}<<<END_EF_PHASE>>>'
+```
+
 Execute implementation using the `/ef-implement` skill workflow, enhanced with `frontend-design` for any UI work.
 
 ### 4.1: Implement each feature
@@ -342,6 +389,12 @@ After all features are implemented:
 ## Phase 5: E2E Test Evaluation
 
 > **Update `activeTask.md`**: Current phase = Phase 5
+
+**Emit the phase marker first:**
+
+```bash
+echo '<<<EF_PHASE>>>{"phase":"evaluatingTests"}<<<END_EF_PHASE>>>'
+```
 
 Evaluate whether the new feature needs additional E2E test coverage using the `/ef-baseline` skill.
 
@@ -385,6 +438,12 @@ Update `memory-bank/testBaseline.md`:
 
 > **Update `activeTask.md`**: Current phase = Phase 6
 
+**Emit the phase marker first:**
+
+```bash
+echo '<<<EF_PHASE>>>{"phase":"reviewingCode"}<<<END_EF_PHASE>>>'
+```
+
 After all tests pass, launch a **new agent** to perform a code review using the `/ef-review` skill. Independent context — a reviewer should not review their own work.
 
 ### 6.1: Launch review agent
@@ -413,14 +472,11 @@ Commit, push, open PR, update the ticket source. Each sub-step emits its phase m
 
 ### 7.1: Commit
 
-```bash
-echo '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>'
-```
-
-Stage the specific files involved (avoid blanket `git add -A` so stray files aren't included), then commit with a Conventional-Commits-style message keyed to the ticket:
+Stage the specific files involved (avoid blanket `git add -A` so stray files aren't included), then **emit the marker just before `git commit` runs** — the marker names the next action, not the staging that precedes it. This matches the runner's expectation that "Committing changes" means a `git commit` is in flight, not a `git add` rehearsal.
 
 ```bash
 git add <specific files>
+echo '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>'
 git commit -m "feat({TICKET-KEY}): {short summary derived from ticket title}
 
 Closes #{N for GitHub} | {KEY for Jira — referenced in body, not closes-keyword}

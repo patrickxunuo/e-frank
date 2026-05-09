@@ -93,8 +93,21 @@ of verbose sentinels, JSON body in between:
 <<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>
 ```
 
-The `phase` field maps to one of the existing `RunState` values:
-`branching`, `committing`, `pushing`, `creatingPr`, `updatingTicket`.
+The `phase` field maps to one of the runner's whitelisted `RunState`
+values. After GH-52 the set is:
+
+`fetchingTicket`, `branching`, `understandingContext`, `planning`,
+`implementing`, `evaluatingTests`, `reviewingCode`, `committing`,
+`pushing`, `creatingPr`, `updatingTicket`.
+
+The first six were added in GH-52 so the timeline mirrors the full
+`ef-auto-feature` skill (one runner step per skill phase) instead of
+collapsing the bulk of the run into a single `running` umbrella.
+
+`tests/unit/skill-markers.test.ts` is a static-analysis guard against
+drift between this list and the markers SKILL.md actually emits — if
+either side adds a phase the other doesn't know about, the test fails.
+
 Two phases carry an optional payload field:
 
 - `branching` may include `branchName` (string) — the actual branch
@@ -112,8 +125,17 @@ Other fields are ignored. When the runner parses a valid marker:
 
 Approval markers can interleave with phase markers — when an approval
 arrives, `Run.state` flips to `awaitingApproval` (paused), and on
-resume flips back to whatever phase was active. Phase markers
+resume flips back to whatever phase was active. The runner closes the
+prior in-flight phase step BEFORE pushing the awaitingApproval step
+(GH-52 #4) so the timeline never shows two simultaneously-running
+steps. On resume it pushes a fresh phase step for the restored phase
+so the user sees a clear "paused → resumed" boundary. Phase markers
 themselves do **not** transition into `awaitingApproval`.
+
+Same-phase dedupe (GH-52 #5): if the runner receives a phase marker
+whose phase already matches the current `Run.state` AND the last step
+is still `running` with that same state, the marker is dropped. Keeps
+the timeline honest when a skill accidentally re-announces a phase.
 
 Behaviour for malformed input:
 

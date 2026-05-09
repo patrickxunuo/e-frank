@@ -1618,4 +1618,175 @@ describe('WorkflowRunner', () => {
       );
     });
   });
+
+  // -------------------------------------------------------------------------
+  // GH-52 #4 — awaitingApproval entry must close the prior in-flight step
+  // -------------------------------------------------------------------------
+  describe('WFR-040 awaitingApproval entry closes prior phase step', () => {
+    it('WFR-040: while paused there is exactly ONE step in `running` status (the awaiting one)', async () => {
+      const h = await buildHarness();
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+
+      await waitForState(h, 'running');
+      // Open a phase via marker so there's a definite in-flight step
+      // BEFORE the approval marker fires.
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>\n',
+      );
+      await waitForState(h, 'committing');
+
+      // Approval marker arrives mid-`committing`.
+      h.fakeClaude.emitOutput(
+        '<<<EF_APPROVAL_REQUEST>>>{"plan":"check"}<<<END_EF_APPROVAL_REQUEST>>>\n',
+      );
+      await waitForState(h, 'awaitingApproval');
+
+      // Snapshot the steps array while the run is paused. There must be
+      // exactly ONE step in `running` status — the awaitingApproval one.
+      // The prior `committing` step must already be closed (`done`).
+      const paused = h.runner.current();
+      expect(paused).not.toBeNull();
+      if (!paused) return;
+      const runningStepsWhilePaused = paused.steps.filter(
+        (s) => s.status === 'running',
+      );
+      expect(runningStepsWhilePaused).toHaveLength(1);
+      expect(runningStepsWhilePaused[0]?.state).toBe('awaitingApproval');
+      const committingStep = paused.steps.find(
+        (s) => s.state === 'committing',
+      );
+      expect(committingStep?.status).toBe('done');
+      expect(committingStep?.finishedAt).toBeTypeOf('number');
+
+      // After resume, exactly ONE awaitingApproval step (closed `done`)
+      // and ONE running `committing` step in the timeline tail.
+      const approveRes = await h.runner.approve({ runId: res.data.run.id });
+      expect(approveRes.ok).toBe(true);
+      await new Promise((r) => setTimeout(r, 30));
+      const resumed = h.runner.current();
+      expect(resumed?.state).toBe('committing');
+      const tail = resumed?.steps.slice(-3) ?? [];
+      // Tail order: committing(done) → awaitingApproval(done) → committing(running)
+      expect(tail[0]?.state).toBe('committing');
+      expect(tail[0]?.status).toBe('done');
+      expect(tail[1]?.state).toBe('awaitingApproval');
+      expect(tail[1]?.status).toBe('done');
+      expect(tail[2]?.state).toBe('committing');
+      expect(tail[2]?.status).toBe('running');
+
+      h.fakeClaude.emitExit(0, 'completed');
+      await waitForFinal(h);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GH-52 #5 — runner-side dedupe of consecutive same-phase markers
+  // -------------------------------------------------------------------------
+  describe('WFR-041 transitionToPhase dedupes consecutive same-phase markers', () => {
+    it('WFR-041: emitting `committing` twice in a row produces a single step', async () => {
+      const h = await buildHarness();
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(true);
+
+      await waitForState(h, 'running');
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>\n',
+      );
+      await waitForState(h, 'committing');
+      const beforeCount = h.runner
+        .current()
+        ?.steps.filter((s) => s.state === 'committing').length;
+      expect(beforeCount).toBe(1);
+
+      // Re-announce — runner should drop this on the floor.
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>\n',
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      const afterCount = h.runner
+        .current()
+        ?.steps.filter((s) => s.state === 'committing').length;
+      expect(afterCount).toBe(1);
+
+      h.fakeClaude.emitExit(0, 'completed');
+      await waitForFinal(h);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GH-52 #6 — new phase markers (fetchingTicket, understandingContext, etc.)
+  // -------------------------------------------------------------------------
+  describe('WFR-042 new phase markers transition + push steps', () => {
+    it('WFR-042: each new phase marker advances state and creates a labelled step', async () => {
+      const h = await buildHarness();
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(true);
+
+      await waitForState(h, 'running');
+
+      const newPhases: Array<{
+        marker: string;
+        state: Run['state'];
+        label: string;
+      }> = [
+        {
+          marker: 'fetchingTicket',
+          state: 'fetchingTicket',
+          label: 'Fetching ticket',
+        },
+        {
+          marker: 'understandingContext',
+          state: 'understandingContext',
+          label: 'Understanding context',
+        },
+        { marker: 'planning', state: 'planning', label: 'Planning' },
+        {
+          marker: 'implementing',
+          state: 'implementing',
+          label: 'Implementing feature',
+        },
+        {
+          marker: 'evaluatingTests',
+          state: 'evaluatingTests',
+          label: 'Evaluating tests',
+        },
+        {
+          marker: 'reviewingCode',
+          state: 'reviewingCode',
+          label: 'Reviewing code',
+        },
+      ];
+
+      for (const phase of newPhases) {
+        h.fakeClaude.emitOutput(
+          `<<<EF_PHASE>>>{"phase":"${phase.marker}"}<<<END_EF_PHASE>>>\n`,
+        );
+        await waitForState(h, phase.state);
+        const cur = h.runner.current();
+        expect(cur?.state).toBe(phase.state);
+        const matching = cur?.steps.find((s) => s.state === phase.state);
+        expect(matching?.userVisibleLabel).toBe(phase.label);
+      }
+
+      h.fakeClaude.emitExit(0, 'completed');
+      const final = await waitForFinal(h);
+      // Every phase appears exactly once and is closed at finish.
+      for (const phase of newPhases) {
+        const matches = final.steps.filter((s) => s.state === phase.state);
+        expect(matches).toHaveLength(1);
+        expect(matches[0]?.status).toBe('done');
+      }
+    });
+  });
 });

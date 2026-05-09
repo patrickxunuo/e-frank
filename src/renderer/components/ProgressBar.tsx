@@ -7,6 +7,14 @@ export interface ProgressBarProps {
   label?: string;
   /** Optional hint rendered to the right of the label (e.g. "Step 3 of 6"). */
   hint?: string;
+  /**
+   * When true, the filled portion subtly breathes (slow opacity + glow
+   * pulse) so the bar reads as alive while the run is actively
+   * progressing. Defaults to false (static fill). Honors
+   * `prefers-reduced-motion: reduce` via CSS — reduced-motion users see
+   * a static fill regardless.
+   */
+  running?: boolean;
   'data-testid'?: string;
 }
 
@@ -26,6 +34,7 @@ export function ProgressBar({
   value,
   label,
   hint,
+  running = false,
   'data-testid': testId,
 }: ProgressBarProps): JSX.Element {
   const ratio = clamp01(value);
@@ -50,6 +59,7 @@ export function ProgressBar({
         <div
           className={styles.fill}
           data-testid="progress-fill"
+          data-running={running ? 'true' : 'false'}
           style={{ width: `${pct}%` }}
         />
       </div>
