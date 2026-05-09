@@ -1,0 +1,56 @@
+/*
+ * `<RunStatusFigure>` (#GH-51). The figure has a fixed footprint set inline
+ * (size prop); the inner Lottie or static SVG fills it.
+ */
+
+.figure {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.lottieWrap {
+  width: 100%;
+  height: 100%;
+  /* lottie-react renders its own <svg> inside; keep it filling the slot. */
+}
+
+.lottieWrap > svg {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+/*
+ * Static glyph — paperplane silhouette. Two-tone fold by default (live brand
+ * colors for `done`); status-specific overrides retint per state.
+ */
+.static {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.body {
+  fill: #5b8dff;
+}
+
+.shadow {
+  fill: #2c4a99;
+}
+
+/* Failed: body in danger red, shadow in a darker red so the fold still reads. */
+.static[data-status='failed'] .body {
+  fill: var(--danger);
+}
+
+.static[data-status='failed'] .shadow {
+  fill: #a13d3d;
+}
+
+/* Cancelled: muted neutral; the fold flattens to a single tone. */
+.static[data-status='cancelled'] .body,
+.static[data-status='cancelled'] .shadow {
+  fill: var(--text-tertiary);
+}

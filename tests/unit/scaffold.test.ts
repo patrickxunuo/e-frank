@@ -109,7 +109,9 @@ describe('scaffold (SCAFFOLD-001..004)', () => {
       };
 
       expect(cfg).toBeDefined();
-      expect(cfg.appId).toBe('tech.emonster.efrank');
+      // Rebranded to Paperplane in #GH-51 — appId flipped to keep userData
+      // paths and OS app identity in sync with the renamed productName.
+      expect(cfg.appId).toBe('tech.emonster.paperplane');
 
       // win.target may be a string ("nsis"), an array of strings
       // (["nsis"]), or an array of objects ([{ target: "nsis" }]).

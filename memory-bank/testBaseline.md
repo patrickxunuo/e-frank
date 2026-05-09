@@ -60,6 +60,7 @@ Tracks the project's automated test coverage as a baseline reference. Updated wh
 - **Hot reload**: Cannot be programmatically asserted; developer must verify manually.
 - **Packaging (`npm run dist`)**: Not run in CI yet. SCAFFOLD-004 verifies the `electron-builder.yml` config, but the actual installer build is manual.
 - **Custom titlebar (#50)**: Unit tests cover the React component + IPC contract, but the *frameless* behaviour itself (drag region, Aero Snap, double-click-to-maximize, Alt+Space, macOS traffic-light alignment) can only be verified manually via `npm run dev` — no automated coverage of the actual `BrowserWindow` chrome.
+- **Paperplane rebrand + userData migration (#GH-51)**: 9 migrate-userdata unit tests cover copy/idempotent/skip/marker/log/failed-mkdir paths against a temp dir. The end-to-end "old e-frank install upgraded to new Paperplane build retains projects + secrets" flow needs a manual installer-vs-installer smoke test against a Windows nsis upgrade — `safeStorage` ciphertexts in particular should be round-tripped on the upgrade path because the Windows DPAPI-bound key is account-scoped, not path-scoped.
 
 ## Bugs Discovered
 None during #1 or #2 implementation. (#1 had a critical preload-path bug caught by the reviewer pre-merge, plus the sandbox + ESM incompatibility caught by manual `npm run dev` — both fixed and guarded.)

@@ -233,10 +233,14 @@ describe('<App /> — APP-001/002/006', () => {
     });
   });
 
-  it('APP-006: sidebar shows e-frank product name', async () => {
+  it('APP-006: sidebar shows the paperplane brand lockup', async () => {
     render(<App />);
     await waitFor(() => {
-      expect(screen.getByTestId('sidebar')).toHaveTextContent(/e-frank/i);
+      // The lockup carries `data-testid="app-logo"` and renders the
+      // "paperplane" wordmark inside an SVG <text>.
+      const logo = screen.getByTestId('app-logo');
+      expect(logo).toBeInTheDocument();
+      expect(logo).toHaveTextContent(/paperplane/i);
     });
   });
 });

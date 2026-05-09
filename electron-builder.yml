@@ -1,5 +1,5 @@
-appId: tech.emonster.efrank
-productName: e-frank
+appId: tech.emonster.paperplane
+productName: Paperplane
 directories:
   output: release/${version}
   buildResources: build

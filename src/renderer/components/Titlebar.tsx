@@ -6,6 +6,7 @@ import {
   IconWindowMin,
   IconWindowRestore,
 } from './icons';
+import { PaperplaneGlyph } from './PaperplaneGlyph';
 
 /**
  * Custom 32px titlebar that replaces the OS-default Electron chrome
@@ -139,8 +140,7 @@ function PaperplaneLockup(): JSX.Element {
       aria-label="paperplane"
       className={styles.lockup}
     >
-      <polygon points="29,13 13,16 3,23" fill="#2c4a99" />
-      <polygon points="29,13 3,5 13,16" fill="#5b8dff" />
+      <PaperplaneGlyph />
       <text
         x="42"
         y="16"

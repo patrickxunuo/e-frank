@@ -1,6 +1,7 @@
 import packageJson from '../../../package.json';
 import styles from './Sidebar.module.css';
-import { IconKey, IconLogo, IconProjects, IconSettings } from './icons';
+import { IconKey, IconProjects, IconSettings } from './icons';
+import { PaperplaneGlyph } from './PaperplaneGlyph';
 import { ThemeToggle } from './ThemeToggle';
 
 const APP_VERSION = `v${packageJson.version}`;
@@ -42,15 +43,8 @@ export function Sidebar({ activeNav, user, onNavigate }: SidebarProps): JSX.Elem
   return (
     <aside className={styles.sidebar} data-testid="sidebar">
       <div className={styles.brand}>
-        <span className={styles.mark} aria-hidden="true">
-          <IconLogo />
-        </span>
-        <div className={styles.wordmark}>
-          <span className={styles.name} data-testid="sidebar-product-name">
-            e-frank
-          </span>
-          <span className={styles.tag}>Ticket → PR</span>
-        </div>
+        <PaperplaneLockup />
+        <span className={styles.tag}>Ticket → PR</span>
       </div>
 
       <nav className={styles.nav} aria-label="Primary">
@@ -93,5 +87,38 @@ export function Sidebar({ activeNav, user, onNavigate }: SidebarProps): JSX.Elem
         {APP_VERSION}
       </div>
     </aside>
+  );
+}
+
+/**
+ * Inline paperplane horizontal lockup. Wordmark uses `fill="currentColor"`
+ * so its color follows the SVG's CSS `color` property (bound to
+ * `--text-primary` in `Sidebar.module.css`). That keeps the wordmark in
+ * sync with theme changes without `useTheme()` here — see the same pattern
+ * in `Titlebar.tsx`.
+ */
+function PaperplaneLockup(): JSX.Element {
+  return (
+    <svg
+      viewBox="0 0 152 32"
+      role="img"
+      aria-label="paperplane"
+      className={styles.lockup}
+      data-testid="app-logo"
+    >
+      <PaperplaneGlyph />
+      <text
+        x="42"
+        y="16"
+        dominantBaseline="middle"
+        fontFamily="'General Sans', 'Inter', 'SF Pro Display', system-ui, sans-serif"
+        fontSize="14"
+        fontWeight="600"
+        letterSpacing="-0.01em"
+        fill="currentColor"
+      >
+        paperplane
+      </text>
+    </svg>
   );
 }
