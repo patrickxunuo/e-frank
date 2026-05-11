@@ -587,6 +587,91 @@ describe('WorkflowRunner', () => {
   });
 
   // -------------------------------------------------------------------------
+  // WFR-CROSS-SESSION-LOCK — GH-13 cross-session orphaned-lock rejection
+  // -------------------------------------------------------------------------
+  describe('WFR-CROSS-SESSION-LOCK (GH-13)', () => {
+    it('rejects start() when a leftover RunHistory lock exists for the ticket', async () => {
+      const h = await buildHarness();
+      // Simulate a crashed previous session: a lock survived in RunHistory
+      // but no in-process run is active (h.runner.active === null because
+      // we haven't called start() yet). markRunning is invoked directly so
+      // the runner's start() path encounters the lock the way it would on
+      // a real fresh-launch where releaseStaleLocks somehow missed it (or
+      // before that hook ran).
+      const mark = await h.runHistory.markRunning('p-1', VALID_TICKET);
+      expect(mark.ok).toBe(true);
+
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe('ALREADY_RUNNING');
+      // The message must distinguish the cross-session case from the
+      // in-process duplicate (which says "a run is already active") so
+      // the renderer banner gives the user actionable context.
+      expect(res.error.message).toContain('already locked');
+      // Wording specifically tells the user the lock was NOT auto-cleared
+      // on startup (i.e. restarting the app won't fix this — startup
+      // already tried). Pointing at run-history.json gives an escape hatch.
+      expect(res.error.message).toContain('run-history.json');
+      expect(res.error.message).not.toContain('restart the app to clear');
+    });
+
+    it('uses the "before the last app restart" wording for v1-migrated locks (lockedAt=0 sentinel)', async () => {
+      const h = await buildHarness();
+      // Directly mutate the runHistory envelope to inject a lockedAt=0
+      // entry, simulating a v1-migrated lock that survived startup
+      // releaseStaleLocks (e.g. the release failed and only warned).
+      // Use a private cast — this is the only test path that needs to
+      // observe the sentinel branch of the message.
+      const internal = h.runHistory as unknown as {
+        envelope: { runs: Record<string, { running: { key: string; lockedAt: number }[] }> };
+      };
+      internal.envelope.runs['p-1'] = { running: [{ key: VALID_TICKET, lockedAt: 0 }] };
+
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe('ALREADY_RUNNING');
+      expect(res.error.message).toContain('before the last app restart');
+    });
+
+    it('cross-session check does not fire when the lock is for a different ticket', async () => {
+      const h = await buildHarness();
+      await h.runHistory.markRunning('p-1', 'OTHER-99');
+
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(true);
+
+      // Drive Claude to completion so the harness cleans up.
+      void driveClaudeHappyPath(h);
+      await waitForFinal(h);
+    });
+
+    it('cross-session check does not fire when the lock is for a different project', async () => {
+      const h = await buildHarness();
+      await h.runHistory.markRunning('p-other', VALID_TICKET);
+
+      const res = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(res.ok).toBe(true);
+
+      void driveClaudeHappyPath(h);
+      await waitForFinal(h);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // WFR-004 — unknown projectId
   // -------------------------------------------------------------------------
   describe('WFR-004 PROJECT_NOT_FOUND', () => {

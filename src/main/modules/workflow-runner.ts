@@ -353,6 +353,35 @@ export class WorkflowRunner extends EventEmitter {
       };
     }
     const project = projectRes.data;
+
+    // Cross-session lock pre-check (GH-13). The `this.active !== null` guard
+    // above catches in-process duplicates; this catches orphaned locks
+    // surviving a crash (`runHistory.json` persists across restarts). If we
+    // skip this check, `markRunning` is idempotent and silently re-acquires
+    // the lock, letting the user start a second run on a ticket whose
+    // previous run state was abandoned. The startup `releaseStaleLocks(0)`
+    // hook in `initStores` should clear these on boot — this guard exists
+    // for the rare race where a different in-flight runner instance
+    // (or a programming error elsewhere) left a lock behind.
+    const existingLocks = this.options.runHistory.getRunningWithMetadata(req.projectId);
+    const orphaned = existingLocks.find((entry) => entry.key === req.ticketKey);
+    if (orphaned !== undefined) {
+      const lockedDesc =
+        orphaned.lockedAt > 0
+          ? `started ${new Date(orphaned.lockedAt).toISOString()}`
+          : 'started before the last app restart';
+      return {
+        ok: false,
+        error: {
+          code: 'ALREADY_RUNNING',
+          message:
+            `ticket ${req.ticketKey} is already locked (${lockedDesc}); ` +
+            'the previous run may have crashed and the lock was not auto-cleared on startup — ' +
+            'check the app logs for stale-lock recovery warnings, or remove the entry from ' +
+            'run-history.json in the app userData directory',
+        },
+      };
+    }
     const mode: RunMode = req.modeOverride ?? project.workflow.mode;
 
     // Resolve the ticket summary from the poller's cached list. Without

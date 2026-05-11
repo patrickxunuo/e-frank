@@ -1854,6 +1854,29 @@ async function initStores(): Promise<void> {
       // handlers will surface NOT_INITIALIZED to the renderer.
       return;
     }
+    // GH-13 — stale-lock recovery. A fresh app start can't have any
+    // in-process runs in flight (single-process desktop app), so every
+    // persisted lock is by definition orphaned by a crashed previous
+    // session. `releaseStaleLocks(0)` releases all of them and returns
+    // the released entries; we log each one so the user has a trail of
+    // what was cleared (satisfies the spec's "auto-released or flagged"
+    // criterion). UI surfacing of released locks is deferred.
+    const released = await history.releaseStaleLocks(0);
+    if (!released.ok) {
+      console.warn(
+        `[main] RunHistory.releaseStaleLocks failed: ${released.error.code} - ${released.error.message}`,
+      );
+    } else if (released.data.length > 0) {
+      for (const lock of released.data) {
+        const when =
+          lock.lockedAt > 0
+            ? new Date(lock.lockedAt).toISOString()
+            : 'unknown (pre-v2 schema)';
+        console.warn(
+          `[main] RunHistory released stale lock: projectId=${lock.projectId} key=${lock.key} lockedAt=${when}`,
+        );
+      }
+    }
     runHistory = history;
 
     const poller = new TicketPoller({
