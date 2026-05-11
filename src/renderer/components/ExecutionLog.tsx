@@ -18,6 +18,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RunStatus } from '@shared/ipc';
 import type { ExecLogStep } from '../state/run-log';
 import { stripAnsi } from './ansi';
+import { IconChevronDown } from './icons';
 import styles from './ExecutionLog.module.css';
 
 export interface ExecutionLogProps {
@@ -33,9 +34,19 @@ export interface ExecutionLogProps {
 }
 
 const PIXEL_TOLERANCE = 4;
+/**
+ * GH-57 #4d: the scroll-to-bottom FAB only appears when there's a
+ * meaningful amount of content below the viewport — small overflows
+ * would surface a useless button.
+ */
+const FAB_VISIBILITY_THRESHOLD = 100;
 
 function isAtBottom(el: HTMLElement): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight <= PIXEL_TOLERANCE;
+}
+
+function distanceBelowViewport(el: HTMLElement): number {
+  return el.scrollHeight - el.scrollTop - el.clientHeight;
 }
 
 function formatHHMMSS(timestamp: number | undefined): string {
@@ -249,6 +260,11 @@ export function ExecutionLog({
   // collapse when the active step advances. -1 = we haven't opened
   // anything yet (handled by the seed in `openSteps`).
   const lastAutoExpandRef = useRef<number>(expandIndex);
+  // GH-57 #4d: tracks whether the scroll-to-bottom FAB should be
+  // visible. Recomputed on every scroll + on content/auto-scroll
+  // change. Decoupled from followRef so the FAB can hide when content
+  // simply fits (no overflow) even if the user previously scrolled up.
+  const [showScrollFab, setShowScrollFab] = useState<boolean>(false);
 
   // Keep the openSteps set in sync when `expandIndex` changes. Auto-follow
   // (GH-52 #7): when the active step advances and `autoScroll` is on,
@@ -286,6 +302,8 @@ export function ExecutionLog({
     if (!autoScroll) return;
     if (!followRef.current) return;
     el.scrollTop = el.scrollHeight;
+    // After snapping to bottom the FAB is no longer relevant.
+    setShowScrollFab(false);
   }, [steps, autoScroll]);
 
   // Re-engage follow whenever auto-scroll is toggled on (rule 3 in spec).
@@ -294,6 +312,7 @@ export function ExecutionLog({
       followRef.current = true;
       const el = scrollRef.current;
       if (el) el.scrollTop = el.scrollHeight;
+      setShowScrollFab(false);
     }
   }, [autoScroll]);
 
@@ -301,6 +320,18 @@ export function ExecutionLog({
     const el = scrollRef.current;
     if (!el) return;
     followRef.current = isAtBottom(el);
+    setShowScrollFab(
+      !followRef.current && distanceBelowViewport(el) > FAB_VISIBILITY_THRESHOLD,
+    );
+  };
+
+  const handleScrollToBottom = (): void => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    // Re-engage auto-follow so subsequent streamed lines stay visible.
+    followRef.current = true;
+    setShowScrollFab(false);
   };
 
   const toggleStep = (i: number): void => {
@@ -322,26 +353,40 @@ export function ExecutionLog({
   };
 
   return (
-    <div
-      ref={scrollRef}
-      className={styles.scroll}
-      onScroll={handleScroll}
-      data-testid={testId}
-    >
-      {steps.length === 0 ? (
-        <div className={styles.empty}>Waiting for the runner to start…</div>
-      ) : (
-        steps.map((step, i) => (
-          <StepRow
-            key={`${step.state}-${i}`}
-            step={step}
-            index={i}
-            expanded={openSteps.has(i)}
-            autoManaged={!userOpenedSteps.has(i)}
-            onToggle={() => toggleStep(i)}
-          />
-        ))
-      )}
+    <div className={styles.scrollWrap}>
+      <div
+        ref={scrollRef}
+        className={styles.scroll}
+        onScroll={handleScroll}
+        data-testid={testId}
+      >
+        {steps.length === 0 ? (
+          <div className={styles.empty}>Waiting for the runner to start…</div>
+        ) : (
+          steps.map((step, i) => (
+            <StepRow
+              key={`${step.state}-${i}`}
+              step={step}
+              index={i}
+              expanded={openSteps.has(i)}
+              autoManaged={!userOpenedSteps.has(i)}
+              onToggle={() => toggleStep(i)}
+            />
+          ))
+        )}
+      </div>
+      <button
+        type="button"
+        className={styles.scrollFab}
+        onClick={handleScrollToBottom}
+        aria-label="Scroll to bottom"
+        data-testid="log-scroll-to-bottom"
+        data-visible={showScrollFab ? 'true' : 'false'}
+        aria-hidden={showScrollFab ? undefined : 'true'}
+        tabIndex={showScrollFab ? 0 : -1}
+      >
+        <IconChevronDown size={16} />
+      </button>
     </div>
   );
 }

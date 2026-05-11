@@ -39,6 +39,7 @@
 }
 
 .fill {
+  position: relative;
   height: 100%;
   background: linear-gradient(
     90deg,
@@ -49,33 +50,60 @@
   border-radius: var(--radius-pill);
   transition: width var(--duration-base) var(--ease-out);
   box-shadow: 0 0 16px -2px var(--accent-glow);
+  overflow: hidden;
 }
 
 /*
- * GH-52 #2: while the run is still moving (pending/running/awaiting),
- * the filled portion subtly breathes — same 3.2s ease-in-out cycle as
- * ExecutionLog's accent bar, so the page reads as one coherent system.
- * Static fill on terminal states (the prop flips to `false`).
+ * GH-57 #3: while the run is non-terminal, a semi-transparent gradient
+ * slides across the filled portion — reads as "energy flowing through
+ * the bar" rather than a flat opacity pulse. The base fill underneath
+ * keeps its solid accent gradient; the overlay just adds a moving
+ * highlight on top.
+ *
+ * Replaces the GH-52 opacity breath. The data-running attribute hook
+ * is preserved so the existing prop plumbing (and CMP-PROG-BREATH-*
+ * tests) keeps working.
+ *
+ * Terminal status flips data-running to false; reduced-motion users
+ * see a flat fill regardless.
  */
-.fill[data-running='true'] {
-  animation: progressBreath 3.2s var(--ease-in-out, ease-in-out) infinite;
-  will-change: opacity, box-shadow;
+.fill[data-running='true']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--accent-glow) 50%,
+    transparent 100%
+  );
+  /*
+   * Background is 100% × 100% (one highlight band, the width of the
+   * fill itself) and the position animates from off-screen-left to
+   * off-screen-right exactly once per 2.4s cycle. Using a 400%
+   * position range (e.g. 200% → -200%) over the same duration would
+   * scroll two highlight crests through the bar per cycle and read
+   * as twice as fast — we want a single, deliberate sweep.
+   */
+  background-size: 100% 100%;
+  animation: progressShimmer 2.4s linear infinite;
+  pointer-events: none;
+  border-radius: inherit;
+  will-change: background-position;
 }
 
-@keyframes progressBreath {
-  0%, 100% {
-    opacity: 0.85;
-    box-shadow: 0 0 12px -3px var(--accent-glow);
+@keyframes progressShimmer {
+  from {
+    background-position: 100% 0;
   }
-  50% {
-    opacity: 1;
-    box-shadow: 0 0 20px -1px var(--accent-glow);
+  to {
+    background-position: -100% 0;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fill[data-running='true'] {
+  .fill[data-running='true']::after {
     animation: none;
-    opacity: 1;
+    background: none;
   }
 }

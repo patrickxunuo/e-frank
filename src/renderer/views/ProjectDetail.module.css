@@ -137,7 +137,22 @@
   margin: 0 var(--space-1);
 }
 
+/*
+ * GH-57 #5: rotate-in-place wrapper for the Refresh button's IconRefresh.
+ * The plain `<span>` wrapper defaulted to `display: inline`, whose
+ * bounding box drifts with the surrounding text baseline — so each
+ * rotation frame computed a slightly different pivot and the glyph
+ * traced a small ellipse. Locking the span to a 14×14 inline-flex box
+ * with an explicit transform-origin gives the animation a stable pivot.
+ */
 .refreshSpinning {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
+  transform-origin: center center;
   animation: rspin 0.8s linear infinite;
 }
 
@@ -369,6 +384,16 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  /*
+   * GH-57 #2: when the run is awaitingApproval we surface Approve +
+   * Reject + Open Details in the right action area. Without wrap, a
+   * narrow viewport would crowd the buttons against the status badge
+   * on the left. flex-wrap lets the row break onto two lines, keeping
+   * the badge anchored top-left and the buttons trailing on a second
+   * line if needed.
+   */
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
 }
 
 .activeBadgeRow {

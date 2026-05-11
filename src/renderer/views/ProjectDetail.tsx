@@ -340,7 +340,7 @@ function ActiveExecutionPanel({
                       void dispatchApproval('approve');
                     }}
                     disabled={pendingDecision !== null}
-                    data-testid="active-execution-approve"
+                    data-testid="panel-approve"
                   >
                     Approve
                   </Button>
@@ -352,7 +352,7 @@ function ActiveExecutionPanel({
                       void dispatchApproval('reject');
                     }}
                     disabled={pendingDecision !== null}
-                    data-testid="active-execution-reject"
+                    data-testid="panel-reject"
                   >
                     Reject
                   </Button>

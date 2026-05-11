@@ -7,6 +7,19 @@
  * like a real terminal.
  */
 
+/*
+ * GH-57 #4d: outer relative wrapper so the scroll-to-bottom FAB can
+ * absolute-position against the scroll viewport's edges without
+ * disturbing the inner flex column.
+ */
+.scrollWrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .scroll {
   flex: 1;
   min-height: 0;
@@ -19,6 +32,67 @@
   font-family: var(--font-body);
   /* Soft inner shadow at the top so the header floats over content */
   box-shadow: inset 0 8px 12px -8px rgba(0, 0, 0, 0.4);
+}
+
+/*
+ * GH-57 #4d: floating scroll-to-bottom button. Visible only when the
+ * user has scrolled up far enough that the live tail is meaningfully
+ * out of view (> 100px below). Click smooth-scrolls back + re-engages
+ * the auto-follow.
+ */
+.scrollFab {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 3;
+  box-shadow: 0 6px 14px -8px rgba(0, 0, 0, 0.5);
+  transition:
+    opacity var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+}
+
+.scrollFab[data-visible='true'] {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.scrollFab:hover {
+  background: var(--accent);
+  color: var(--bg-card);
+  transform: translateY(0) scale(1.05);
+}
+
+.scrollFab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrollFab {
+    transition: opacity var(--duration-fast) var(--ease-out);
+    transform: none;
+  }
+  .scrollFab[data-visible='true'] {
+    transform: none;
+  }
+  .scrollFab:hover {
+    transform: none;
+  }
 }
 
 .empty {
@@ -65,27 +139,26 @@
   color: var(--text-secondary);
 }
 
-/* Left-side accent bar — driven by status. */
+/*
+ * Left-side accent bar — driven by status.
+ * GH-57 #4b: bumped 3 → 4px, switched to pill radius, and softened the
+ * running halo by a notch (the previous 16px @ -1px spread read as a
+ * bit too loud against the new #49 color tokens). Terminal states get
+ * a top/bottom mask-fade so the finished bars don't feel as visually
+ * heavy as the active one — keeps the active row the obvious focus.
+ */
 .row::before {
   content: '';
   position: absolute;
   left: 0;
   top: 8px;
   bottom: 8px;
-  width: 3px;
-  border-radius: 2px;
+  width: 4px;
+  border-radius: var(--radius-pill);
   background: var(--text-tertiary);
   transition: background-color var(--duration-base) var(--ease-out);
 }
 
-/*
- * The accent bar on the running step gets a slow, gentle breath in its
- * box-shadow halo. The bar's geometry stays put (no width/height
- * animation) so the row layout never jiggles; only the painted glow
- * around it inhales / exhales. 3.2s cycle, ease-in-out — slow enough to
- * read as "alive, still working" without competing for attention with
- * the streaming stdout below.
- */
 .row[data-status='running']::before {
   background: var(--accent);
   animation: barBreath 3.2s var(--ease-in-out) infinite;
@@ -95,18 +168,37 @@
 @keyframes barBreath {
   0%,
   100% {
-    box-shadow: 0 0 8px -3px var(--accent-glow);
+    box-shadow: 0 0 6px -3px var(--accent-glow);
   }
   50% {
-    box-shadow: 0 0 16px -1px var(--accent-glow);
+    box-shadow: 0 0 12px -2px var(--accent-glow);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .row[data-status='running']::before {
     animation: none;
-    box-shadow: 0 0 12px -2px var(--accent-glow);
+    box-shadow: 0 0 8px -2px var(--accent-glow);
   }
+}
+
+.row[data-status='done']::before,
+.row[data-status='failed']::before,
+.row[data-status='cancelled']::before {
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    transparent 0%,
+    black 14%,
+    black 86%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    180deg,
+    transparent 0%,
+    black 14%,
+    black 86%,
+    transparent 100%
+  );
 }
 
 .row[data-status='done']::before {
@@ -136,29 +228,53 @@
   gap: var(--space-3);
   user-select: none;
   /*
-   * GH-52 #8: pin the phase header to the top of the scroll viewport so
-   * a long body never orphans the user from "which phase am I reading?".
-   * `top: -1px` hides the row's 1px top border from peeking through the
-   * sticky's underside as the user scrolls past it.
+   * GH-52 #8 + GH-57 #4c: pin the phase header to the top of the scroll
+   * viewport so a long body never orphans the user from "which phase
+   * am I reading?". `top: -1px` hides the row's 1px top border from
+   * peeking through the sticky's underside as the user scrolls past it.
    *
-   * Background is explicit so streaming lines underneath don't bleed
-   * through. The accent bar (`.row::before`) is positioned at `left: 0`
-   * of the row (3px wide); we deliberately do NOT extend `.head`'s
-   * background over the row's left padding so the bar stays visible
-   * while the head is pinned. We DO extend top/right/bottom-of-head
-   * negative margins so the background covers the row's top + right
-   * padding + the gap between head and body.
+   * Background is explicit (`var(--bg-card)`) so streaming lines
+   * underneath don't bleed through. The head extends to all four edges
+   * of the row's padding box EXCEPT the accent bar at left:0..4px —
+   * negative margins on top/right plus a 4px-shy negative margin-left
+   * give the sticky a full-width feel while keeping the bar visible.
+   *
+   * GH-57 #4c also adds a solid bottom-border so the user has a clear
+   * "this is the sticky boundary" cue when scrolled.
    */
   position: sticky;
   top: -1px;
   z-index: 2;
   background: var(--bg-card);
-  margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-3)) 0 0;
-  padding: var(--space-3) var(--space-3) var(--space-3) 0;
+  margin:
+    calc(-1 * var(--space-3))
+    calc(-1 * var(--space-3))
+    0
+    calc(-1 * var(--space-4) + 4px);
+  padding:
+    var(--space-3)
+    var(--space-3)
+    var(--space-3)
+    calc(var(--space-4) - 4px);
+  border-bottom: 1px solid var(--border-subtle);
   /* Match .row's top corner radius on the right so the sticky header
    * doesn't read as a sharper edge than the card it lives in. The left
    * side stays square because the accent bar occupies that corner. */
   border-top-right-radius: var(--radius-md);
+}
+
+/*
+ * GH-57 #4a: tighten the children's intrinsic line-height so chevron,
+ * status icon, label and timestamp all visually centre against the
+ * head's cross-axis line. The .head's `align-items: center` already
+ * centres bounding boxes; the tightened line-height removes the extra
+ * vertical slack the display font would otherwise pad onto label/range
+ * text boxes.
+ */
+.head .label,
+.head .range,
+.head .heartbeat {
+  line-height: 1;
 }
 
 /*

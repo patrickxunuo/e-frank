@@ -537,4 +537,114 @@ describe('<ExecutionLog /> — CMP-EXEC-LOG', () => {
     // doesn't get the collapse half of the follow behavior.)
     expect(screen.queryByTestId('log-step-0-body')).not.toBeNull();
   });
+
+  // -------------------------------------------------------------------------
+  // GH-57 #4d — scroll-to-bottom FAB
+  // -------------------------------------------------------------------------
+  it('CMP-EXEC-LOG-FAB-001: FAB is hidden when user is at the bottom', () => {
+    const steps: ExecLogStep[] = [
+      makeStep({
+        state: 'running',
+        label: 'Implementing feature',
+        status: 'running',
+        lines: [makeLine({ line: 'tail-line' })],
+      }),
+    ];
+    render(
+      <ExecutionLog
+        steps={steps}
+        autoScroll={true}
+        expandIndex={0}
+        data-testid="log"
+      />,
+    );
+    const fab = screen.getByTestId('log-scroll-to-bottom');
+    // The button stays in the DOM (so the fade-in animation is purely
+    // CSS-driven) but `data-visible` reports hidden when at-bottom.
+    expect(fab.getAttribute('data-visible')).toBe('false');
+  });
+
+  it('CMP-EXEC-LOG-FAB-002: scrolling far up surfaces the FAB', () => {
+    const steps: ExecLogStep[] = [
+      makeStep({
+        state: 'running',
+        label: 'Implementing feature',
+        status: 'running',
+        lines: [makeLine({ line: 'tail-line' })],
+      }),
+    ];
+    render(
+      <ExecutionLog
+        steps={steps}
+        autoScroll={false}
+        expandIndex={0}
+        data-testid="log"
+      />,
+    );
+    const fab = screen.getByTestId('log-scroll-to-bottom');
+    const scroll = screen.getByTestId('log');
+    // Patch the scroll metrics so the component computes "user is 800px
+    // above the bottom" — well past the FAB_VISIBILITY_THRESHOLD of 100.
+    Object.defineProperty(scroll, 'scrollHeight', {
+      configurable: true,
+      get: () => 2000,
+    });
+    Object.defineProperty(scroll, 'clientHeight', {
+      configurable: true,
+      get: () => 400,
+    });
+    try {
+      (scroll as HTMLElement).scrollTop = 800;
+    } catch {
+      /* jsdom quirk */
+    }
+    fireEvent.scroll(scroll);
+    expect(fab.getAttribute('data-visible')).toBe('true');
+  });
+
+  it('CMP-EXEC-LOG-FAB-003: clicking the FAB re-engages auto-follow and hides itself', async () => {
+    const steps: ExecLogStep[] = [
+      makeStep({
+        state: 'running',
+        label: 'Implementing feature',
+        status: 'running',
+        lines: [makeLine({ line: 'tail-line' })],
+      }),
+    ];
+    render(
+      <ExecutionLog
+        steps={steps}
+        autoScroll={false}
+        expandIndex={0}
+        data-testid="log"
+      />,
+    );
+    const fab = screen.getByTestId('log-scroll-to-bottom');
+    const scroll = screen.getByTestId('log');
+    Object.defineProperty(scroll, 'scrollHeight', {
+      configurable: true,
+      get: () => 2000,
+    });
+    Object.defineProperty(scroll, 'clientHeight', {
+      configurable: true,
+      get: () => 400,
+    });
+    try {
+      (scroll as HTMLElement).scrollTop = 800;
+    } catch {
+      /* jsdom quirk */
+    }
+    // Stub scrollTo so jsdom (which lacks smooth-scroll) doesn't reject
+    // the call and so we can assert it was invoked.
+    const scrollToSpy = vi.fn();
+    (scroll as unknown as { scrollTo: typeof scrollToSpy }).scrollTo = scrollToSpy;
+    fireEvent.scroll(scroll);
+    expect(fab.getAttribute('data-visible')).toBe('true');
+
+    fireEvent.click(fab);
+    expect(scrollToSpy).toHaveBeenCalledWith({ top: 2000, behavior: 'smooth' });
+    await waitFor(() => {
+      expect(fab.getAttribute('data-visible')).toBe('false');
+    });
+  });
 });

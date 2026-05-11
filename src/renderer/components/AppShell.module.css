@@ -32,9 +32,18 @@
  * fixed skeleton (title, action row, tabs) and a single scroll region
  * (the active tab body). Suppressing `.main`'s scroll lets the table
  * card itself claim the leftover height and scroll its rows internally.
+ *
+ * GH-57 #1: also drop the scrollbar-gutter reservation here. The detail
+ * route's `.page` (max-width 1180px, centered) and the fixed-position
+ * `.activeCard` (also 1180px, centered) need to share the same effective
+ * content width so their left/right edges align pixel-perfect. The
+ * gutter reservation on the parent `.main` would shrink `.page`'s
+ * available width by ~17px while leaving the fixed panel untouched,
+ * causing a small asymmetric offset.
  */
 .main[data-route='detail'] {
   overflow: hidden;
+  scrollbar-gutter: auto;
 }
 
 @media (max-width: 900px) {

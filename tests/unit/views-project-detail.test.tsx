@@ -1155,10 +1155,10 @@ describe('<ProjectDetail /> — DET', () => {
       );
 
       expect(
-        await screen.findByTestId('active-execution-approve'),
+        await screen.findByTestId('panel-approve'),
       ).toBeInTheDocument();
       expect(
-        screen.getByTestId('active-execution-reject'),
+        screen.getByTestId('panel-reject'),
       ).toBeInTheDocument();
     });
 
@@ -1192,7 +1192,7 @@ describe('<ProjectDetail /> — DET', () => {
         />,
       );
 
-      const approveBtn = await screen.findByTestId('active-execution-approve');
+      const approveBtn = await screen.findByTestId('panel-approve');
       await act(async () => {
         fireEvent.click(approveBtn);
       });
