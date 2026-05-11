@@ -2,20 +2,24 @@
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { useEffect } from 'react';
-import { useConnections } from '../../src/renderer/state/connections';
-import type { IpcApi, IpcResult } from '../../src/shared/ipc';
-import type { Connection } from '../../src/shared/schema/connection';
+import { useSkills } from '../../src/renderer/state/skills';
+import type {
+  IpcApi,
+  IpcResult,
+  SkillSummary,
+  SkillsListResponse,
+} from '../../src/shared/ipc';
 
 /**
- * CONN-HOOK-001..005 — `useConnections` hook tests.
+ * HOOK-SKILLS-001..005 — `useSkills` hook tests.
  *
- * Mirrors `tests/unit/state-active-run.test.tsx`:
+ * Mirrors `tests/unit/state-connections.test.tsx`:
  *  - Tiny <HookConsumer /> drives the hook and stashes the latest value.
- *  - window.api stub captures `connections.list` calls so the test can
+ *  - window.api stub captures `skills.list` calls so the test can
  *    assert call count / order.
- *  - For CONN-HOOK-005 we delete `window.api` before render and assert the
- *    hook resolves to { loading: false, error: <something> } rather than
- *    throwing.
+ *  - For HOOK-SKILLS-005 we delete `window.api` before render and assert the
+ *    hook resolves to { loading: false, error: 'IPC bridge unavailable' }
+ *    rather than throwing.
  */
 
 declare global {
@@ -24,16 +28,16 @@ declare global {
   }
 }
 
-interface UseConnectionsResult {
-  connections: Connection[];
+interface UseSkillsResult {
+  skills: SkillSummary[];
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
 }
 
 interface CapturedHook {
-  latest: UseConnectionsResult | null;
-  history: UseConnectionsResult[];
+  latest: UseSkillsResult | null;
+  history: UseSkillsResult[];
 }
 
 function HookConsumer({
@@ -41,7 +45,7 @@ function HookConsumer({
 }: {
   capture: CapturedHook;
 }): null {
-  const value = useConnections();
+  const value = useSkills();
   useEffect(() => {
     capture.latest = value;
     capture.history.push(value);
@@ -51,54 +55,41 @@ function HookConsumer({
 
 interface ApiStub {
   api: IpcApi;
-  connectionsList: Mock;
+  skillsList: Mock;
 }
 
-const githubConn: Connection = {
-  id: 'conn-gh-1',
-  provider: 'github',
-  label: 'Personal',
-  host: 'https://api.github.com',
-  authMethod: 'pat',
-  secretRef: 'connection:conn-gh-1:token',
-  accountIdentity: { kind: 'github', login: 'gazhang', scopes: ['repo', 'read:user'] },
-  lastVerifiedAt: 1700000000000,
-  createdAt: 1700000000000,
-  updatedAt: 1700000000000,
+const userSkill: SkillSummary = {
+  id: 'ef-feature',
+  name: 'ef-feature',
+  description: 'Human-paced ticket-to-PR workflow',
+  source: 'user',
+  dirPath: 'C:\\Users\\me\\.claude\\skills\\ef-feature',
+  skillMdPath: 'C:\\Users\\me\\.claude\\skills\\ef-feature\\SKILL.md',
 };
 
-const jiraConn: Connection = {
-  id: 'conn-jr-1',
-  provider: 'jira',
-  label: 'emonster',
-  host: 'https://emonster.atlassian.net',
-  authMethod: 'api-token',
-  secretRef: 'connection:conn-jr-1:token',
-  accountIdentity: {
-    kind: 'jira',
-    accountId: '5f1...',
-    displayName: 'Gary Zhang',
-    emailAddress: 'gazhang@emonster.tech',
-  },
-  lastVerifiedAt: 1700000000000,
-  createdAt: 1700000000000,
-  updatedAt: 1700000000000,
+const projectSkill: SkillSummary = {
+  id: 'frontend-design',
+  name: 'frontend-design',
+  description: 'Create distinctive, production-grade frontend interfaces',
+  source: 'project',
+  dirPath: 'D:\\e-frank\\.claude\\skills\\frontend-design',
+  skillMdPath: 'D:\\e-frank\\.claude\\skills\\frontend-design\\SKILL.md',
 };
 
 function installApi(opts?: {
-  listResult?: IpcResult<Connection[]>;
+  listResult?: IpcResult<SkillsListResponse>;
 }): ApiStub {
   const unusedErr = (): IpcResult<never> => ({
     ok: false,
     error: { code: 'NOT_USED_IN_FE_TESTS', message: '' },
   });
-  const connectionsList = vi
+  const skillsList = vi
     .fn()
-    .mockResolvedValue(opts?.listResult ?? { ok: true, data: [] });
+    .mockResolvedValue(opts?.listResult ?? { ok: true, data: { skills: [] } });
 
-  // Build a minimal IpcApi where only `connections` is used. Other
-  // namespaces are filled with throw-style stubs so accidental access
-  // surfaces as a typed test failure rather than a silent pass.
+  // Build a minimal IpcApi where only `skills` is used. Other namespaces are
+  // filled with throw-style stubs so accidental access surfaces as a typed
+  // test failure rather than a silent pass.
   const api: IpcApi = {
     ping: vi.fn<IpcApi['ping']>().mockResolvedValue({ reply: 'pong', receivedAt: 0 }),
     claude: {
@@ -145,12 +136,8 @@ function installApi(opts?: {
       onCurrentChanged: vi.fn(() => () => {}),
       onStateChanged: vi.fn(() => () => {}),
     } as unknown as IpcApi['runs'],
-    // The connections namespace is the actual focus of these tests. We use
-    // a structural cast — the unit-tested production code only ever reads
-    // `list`, but we expose stubs for the other methods so any code path
-    // that reaches into the namespace doesn't crash.
     connections: {
-      list: connectionsList,
+      list: vi.fn().mockResolvedValue(unusedErr()),
       get: vi.fn().mockResolvedValue(unusedErr()),
       create: vi.fn().mockResolvedValue(unusedErr()),
       update: vi.fn().mockResolvedValue(unusedErr()),
@@ -175,7 +162,7 @@ function installApi(opts?: {
       onStateChanged: vi.fn(() => () => {}),
     } as unknown as IpcApi['chrome'],
     skills: {
-      list: vi.fn().mockResolvedValue(unusedErr()),
+      list: skillsList,
       install: vi.fn().mockResolvedValue(unusedErr()),
       findStart: vi.fn().mockResolvedValue(unusedErr()),
       findCancel: vi.fn().mockResolvedValue(unusedErr()),
@@ -188,7 +175,7 @@ function installApi(opts?: {
   } as IpcApi;
 
   (window as { api?: IpcApi }).api = api;
-  return { api, connectionsList };
+  return { api, skillsList };
 }
 
 afterEach(() => {
@@ -197,26 +184,30 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('useConnections — CONN-HOOK', () => {
+describe('useSkills — HOOK-SKILLS', () => {
   // -------------------------------------------------------------------------
-  // CONN-HOOK-001 — On mount, calls connections.list()
+  // HOOK-SKILLS-001 — Returns loading: true on initial render
   // -------------------------------------------------------------------------
-  it('CONN-HOOK-001: on mount, calls window.api.connections.list() exactly once', async () => {
-    const stub = installApi({ listResult: { ok: true, data: [] } });
+  it('HOOK-SKILLS-001: returns loading: true initially', async () => {
+    installApi({ listResult: { ok: true, data: { skills: [] } } });
     const cap: CapturedHook = { latest: null, history: [] };
 
     render(<HookConsumer capture={cap} />);
 
-    await waitFor(() => {
-      expect(stub.connectionsList).toHaveBeenCalledTimes(1);
-    });
+    // The very first captured value should reflect the initial mount —
+    // before `list()` resolves — and therefore loading: true.
+    expect(cap.history[0]?.loading).toBe(true);
+    expect(cap.history[0]?.skills).toEqual([]);
+    expect(cap.history[0]?.error).toBeNull();
   });
 
   // -------------------------------------------------------------------------
-  // CONN-HOOK-002 — Returns connections array on success
+  // HOOK-SKILLS-002 — Populates skills from a successful list response
   // -------------------------------------------------------------------------
-  it('CONN-HOOK-002: returns the connections array on success', async () => {
-    installApi({ listResult: { ok: true, data: [githubConn, jiraConn] } });
+  it('HOOK-SKILLS-002: populates skills array from window.api.skills.list() ok response', async () => {
+    installApi({
+      listResult: { ok: true, data: { skills: [userSkill, projectSkill] } },
+    });
     const cap: CapturedHook = { latest: null, history: [] };
 
     render(<HookConsumer capture={cap} />);
@@ -224,19 +215,22 @@ describe('useConnections — CONN-HOOK', () => {
     await waitFor(() => {
       expect(cap.latest?.loading).toBe(false);
     });
-    expect(cap.latest?.connections).toHaveLength(2);
-    expect(cap.latest?.connections.map((c) => c.id)).toEqual(['conn-gh-1', 'conn-jr-1']);
+    expect(cap.latest?.skills).toHaveLength(2);
+    expect(cap.latest?.skills.map((s) => s.id)).toEqual([
+      'ef-feature',
+      'frontend-design',
+    ]);
     expect(cap.latest?.error).toBeNull();
   });
 
   // -------------------------------------------------------------------------
-  // CONN-HOOK-003 — Surfaces error message on failure
+  // HOOK-SKILLS-003 — Surfaces error when list() returns ok: false
   // -------------------------------------------------------------------------
-  it('CONN-HOOK-003: surfaces an error message when list() returns ok:false', async () => {
+  it('HOOK-SKILLS-003: sets error when list() returns ok: false', async () => {
     installApi({
       listResult: {
         ok: false,
-        error: { code: 'IO_FAILURE', message: 'disk full' },
+        error: { code: 'SCAN_FAILED', message: 'scan failed' },
       },
     });
     const cap: CapturedHook = { latest: null, history: [] };
@@ -248,44 +242,49 @@ describe('useConnections — CONN-HOOK', () => {
     });
     expect(cap.latest?.error).not.toBeNull();
     // The hook may surface either the message or the code.
-    expect(cap.latest?.error).toMatch(/disk full|IO_FAILURE/);
-    expect(cap.latest?.connections).toEqual([]);
+    expect(cap.latest?.error).toMatch(/scan failed|SCAN_FAILED/);
+    expect(cap.latest?.skills).toEqual([]);
   });
 
   // -------------------------------------------------------------------------
-  // CONN-HOOK-004 — refresh() re-calls list()
+  // HOOK-SKILLS-004 — refresh() re-calls list() and updates state
   // -------------------------------------------------------------------------
-  it('CONN-HOOK-004: refresh() re-calls window.api.connections.list()', async () => {
-    const stub = installApi({ listResult: { ok: true, data: [githubConn] } });
+  it('HOOK-SKILLS-004: refresh() re-invokes list() and updates state', async () => {
+    const stub = installApi({
+      listResult: { ok: true, data: { skills: [userSkill] } },
+    });
     const cap: CapturedHook = { latest: null, history: [] };
 
     render(<HookConsumer capture={cap} />);
 
     await waitFor(() => {
-      expect(stub.connectionsList).toHaveBeenCalledTimes(1);
+      expect(stub.skillsList).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(cap.latest?.skills).toHaveLength(1);
     });
 
     // Update the mock so the refresh sees a different result, then call it.
-    stub.connectionsList.mockResolvedValueOnce({
+    stub.skillsList.mockResolvedValueOnce({
       ok: true,
-      data: [githubConn, jiraConn],
+      data: { skills: [userSkill, projectSkill] },
     });
     await act(async () => {
       await cap.latest?.refresh();
     });
 
     await waitFor(() => {
-      expect(stub.connectionsList).toHaveBeenCalledTimes(2);
+      expect(stub.skillsList).toHaveBeenCalledTimes(2);
     });
     await waitFor(() => {
-      expect(cap.latest?.connections).toHaveLength(2);
+      expect(cap.latest?.skills).toHaveLength(2);
     });
   });
 
   // -------------------------------------------------------------------------
-  // CONN-HOOK-005 — window.api === undefined → loading false, error set
+  // HOOK-SKILLS-005 — window.api === undefined → error 'IPC bridge unavailable'
   // -------------------------------------------------------------------------
-  it('CONN-HOOK-005: window.api === undefined → loading false + error set, no throw', async () => {
+  it("HOOK-SKILLS-005: sets error 'IPC bridge unavailable' when window.api is missing", async () => {
     delete (window as { api?: IpcApi }).api;
     const cap: CapturedHook = { latest: null, history: [] };
 
@@ -296,7 +295,7 @@ describe('useConnections — CONN-HOOK', () => {
     await waitFor(() => {
       expect(cap.latest?.loading).toBe(false);
     });
-    expect(cap.latest?.error).not.toBeNull();
-    expect(cap.latest?.connections).toEqual([]);
+    expect(cap.latest?.error).toBe('IPC bridge unavailable');
+    expect(cap.latest?.skills).toEqual([]);
   });
 });

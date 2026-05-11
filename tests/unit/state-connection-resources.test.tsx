@@ -183,6 +183,17 @@ function installApi(opts?: {
       getState: vi.fn() as unknown as IpcApi['chrome']['getState'],
       onStateChanged: vi.fn(() => () => {}) as unknown as IpcApi['chrome']['onStateChanged'],
     },
+    skills: {
+      list: vi.fn() as unknown as IpcApi['skills']['list'],
+      install: vi.fn() as unknown as IpcApi['skills']['install'],
+      findStart: vi.fn() as unknown as IpcApi['skills']['findStart'],
+      findCancel: vi.fn() as unknown as IpcApi['skills']['findCancel'],
+      onFindOutput: vi.fn(() => () => {}) as unknown as IpcApi['skills']['onFindOutput'],
+      onFindExit: vi.fn(() => () => {}) as unknown as IpcApi['skills']['onFindExit'],
+    },
+    shell: {
+      openPath: vi.fn() as unknown as IpcApi['shell']['openPath'],
+    },
   };
 
   (window as { api?: IpcApi }).api = api;
@@ -517,6 +528,17 @@ function installBranchesApi(opts?: {
       close: vi.fn() as unknown as IpcApi['chrome']['close'],
       getState: vi.fn() as unknown as IpcApi['chrome']['getState'],
       onStateChanged: vi.fn(() => () => {}) as unknown as IpcApi['chrome']['onStateChanged'],
+    },
+    skills: {
+      list: vi.fn() as unknown as IpcApi['skills']['list'],
+      install: vi.fn() as unknown as IpcApi['skills']['install'],
+      findStart: vi.fn() as unknown as IpcApi['skills']['findStart'],
+      findCancel: vi.fn() as unknown as IpcApi['skills']['findCancel'],
+      onFindOutput: vi.fn(() => () => {}) as unknown as IpcApi['skills']['onFindOutput'],
+      onFindExit: vi.fn(() => () => {}) as unknown as IpcApi['skills']['onFindExit'],
+    },
+    shell: {
+      openPath: vi.fn() as unknown as IpcApi['shell']['openPath'],
     },
   };
 
