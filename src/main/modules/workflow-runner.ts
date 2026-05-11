@@ -408,6 +408,10 @@ export class WorkflowRunner extends EventEmitter {
       id: randomUUID(),
       projectId: req.projectId,
       ticketKey: req.ticketKey,
+      // Only persist when distinct from the key — a fallback summary equal
+      // to the key just adds noise (the UI already renders "{key} — …" so
+      // duplicating it would read as "ABC-123 — ABC-123").
+      ...(ticketSummary !== req.ticketKey ? { ticketSummary } : {}),
       mode,
       branchName,
       state: 'idle',

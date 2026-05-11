@@ -108,7 +108,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  padding: var(--space-3);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
   background: var(--bg-card);
@@ -132,86 +132,19 @@
 
 /*
  * Subtle visual demotion of completed steps so the running step holds
- * focus. The accent bar still indicates status (green); the row body
- * loses a touch of saturation to fall back into the timeline.
+ * focus. The 22px solid-filled status icon carries the color signal;
+ * the label loses a touch of saturation to fall back into the timeline.
  */
 .row[data-status='done'] .label {
   color: var(--text-secondary);
 }
 
 /*
- * Left-side accent bar — driven by status.
- * GH-57 #4b: bumped 3 → 4px, switched to pill radius, and softened the
- * running halo by a notch (the previous 16px @ -1px spread read as a
- * bit too loud against the new #49 color tokens). Terminal states get
- * a top/bottom mask-fade so the finished bars don't feel as visually
- * heavy as the active one — keeps the active row the obvious focus.
+ * Design/flow_detail.png drops the left-side accent bar in favor of a
+ * single 22px solid-filled status icon. Without the bar there's no
+ * special left-padding column needed, and the sticky-head CSS below
+ * gets simpler too (no 4px column to dodge).
  */
-.row::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 4px;
-  border-radius: var(--radius-pill);
-  background: var(--text-tertiary);
-  transition: background-color var(--duration-base) var(--ease-out);
-}
-
-.row[data-status='running']::before {
-  background: var(--accent);
-  animation: barBreath 3.2s var(--ease-in-out) infinite;
-  will-change: box-shadow;
-}
-
-@keyframes barBreath {
-  0%,
-  100% {
-    box-shadow: 0 0 6px -3px var(--accent-glow);
-  }
-  50% {
-    box-shadow: 0 0 12px -2px var(--accent-glow);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .row[data-status='running']::before {
-    animation: none;
-    box-shadow: 0 0 8px -2px var(--accent-glow);
-  }
-}
-
-.row[data-status='done']::before,
-.row[data-status='failed']::before,
-.row[data-status='cancelled']::before {
-  -webkit-mask-image: linear-gradient(
-    180deg,
-    transparent 0%,
-    black 14%,
-    black 86%,
-    transparent 100%
-  );
-  mask-image: linear-gradient(
-    180deg,
-    transparent 0%,
-    black 14%,
-    black 86%,
-    transparent 100%
-  );
-}
-
-.row[data-status='done']::before {
-  background: var(--success);
-}
-
-.row[data-status='failed']::before {
-  background: var(--danger);
-}
-
-.row[data-status='cancelled']::before {
-  background: var(--warning);
-}
 
 .row[data-status='running'] {
   border-color: var(--accent-border);
@@ -234,32 +167,18 @@
    * peeking through the sticky's underside as the user scrolls past it.
    *
    * Background is explicit (`var(--bg-card)`) so streaming lines
-   * underneath don't bleed through. The head extends to all four edges
-   * of the row's padding box EXCEPT the accent bar at left:0..4px —
-   * negative margins on top/right plus a 4px-shy negative margin-left
-   * give the sticky a full-width feel while keeping the bar visible.
-   *
-   * GH-57 #4c also adds a solid bottom-border so the user has a clear
-   * "this is the sticky boundary" cue when scrolled.
+   * underneath don't bleed through. With the accent bar removed (per
+   * design/flow_detail.png), the head can span the row's full inner
+   * width — symmetric negative margins, both top corners rounded.
    */
   position: sticky;
   top: -1px;
   z-index: 2;
   background: var(--bg-card);
-  margin:
-    calc(-1 * var(--space-3))
-    calc(-1 * var(--space-3))
-    0
-    calc(-1 * var(--space-4) + 4px);
-  padding:
-    var(--space-3)
-    var(--space-3)
-    var(--space-3)
-    calc(var(--space-4) - 4px);
+  margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-3)) 0;
+  padding: var(--space-3);
   border-bottom: 1px solid var(--border-subtle);
-  /* Match .row's top corner radius on the right so the sticky header
-   * doesn't read as a sharper edge than the card it lives in. The left
-   * side stays square because the accent bar occupies that corner. */
+  border-top-left-radius: var(--radius-md);
   border-top-right-radius: var(--radius-md);
 }
 
@@ -351,46 +270,69 @@
   transform: rotate(90deg);
 }
 
+/*
+ * Status icon — 22px solid-filled circle with a white glyph inside
+ * (check / dot / x / dash / step number). Matches design/flow_detail.png.
+ * The colored fill is the state signal; the glyph is white-on-color so
+ * it reads cleanly at small sizes.
+ */
 .statusIcon {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
   background: var(--surface-overlay-low);
-  border: 1px solid var(--border-subtle);
   color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  transition:
+    background-color var(--duration-base) var(--ease-out),
+    color var(--duration-base) var(--ease-out);
 }
 
 .row[data-status='running'] .statusIcon {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-color: var(--accent-border);
+  background: var(--accent);
+  color: var(--text-on-accent);
 }
 
 .row[data-status='done'] .statusIcon {
-  color: var(--success);
-  background: var(--success-soft);
-  border-color: var(--success-border);
+  background: var(--success);
+  color: var(--text-on-accent);
 }
 
 .row[data-status='failed'] .statusIcon {
-  color: var(--danger);
-  background: var(--danger-soft);
-  border-color: var(--danger-border);
+  background: var(--danger);
+  color: var(--text-on-accent);
 }
 
 .row[data-status='cancelled'] .statusIcon {
-  color: var(--warning);
-  background: var(--warning-soft);
-  border-color: var(--warning-border);
+  background: var(--warning);
+  color: var(--text-on-accent);
+}
+
+/* The white glyph SVG inside the status icon. */
+.statusGlyph {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+/*
+ * Step number rendered inside the status icon for `pending` rows.
+ * Centered numerically; mono font keeps width consistent across digits.
+ */
+.statusNumber {
+  font-variant-numeric: tabular-nums;
 }
 
 .statusDot {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: currentColor;
 }
@@ -586,9 +528,28 @@
 }
 
 /*
+ * Terminal-style prompt prefix on every body line. Matches the design
+ * (`> Reading authentication middleware...` etc.). Rendered via a CSS
+ * pseudo so it stays out of selection / copy-paste — the user gets the
+ * raw text when they copy, not a wall of `> ` markers.
+ */
+.lineText::before {
+  content: '> ';
+  color: var(--text-tertiary);
+  user-select: none;
+}
+
+/*
  * Stderr text gets a muted warning tint so it's visually
- * distinguishable from stdout without a labeled column.
+ * distinguishable from stdout without a labeled column. The prompt
+ * prefix flips to `!` so the stream type reads at a glance even from
+ * just the gutter character.
  */
 .line[data-stream='stderr'] .lineText {
+  color: var(--warning);
+}
+
+.line[data-stream='stderr'] .lineText::before {
+  content: '! ';
   color: var(--warning);
 }

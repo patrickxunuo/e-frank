@@ -67,15 +67,84 @@ function formatRange(step: ExecLogStep): string {
   return `${start} – ${formatHHMMSS(step.finishedAt)}`;
 }
 
-function statusIcon(status: RunStatus): JSX.Element {
-  // Visual variants are driven by CSS via `data-status`; the dot is a
-  // single shared element so animations live in one place.
+function statusIcon(status: RunStatus, stepNumber?: number): JSX.Element {
+  // Design/flow_detail.png promotes the status icon to a 22px solid-filled
+  // circle with a white glyph inside (check / dot / x / dash / number).
+  // The .statusIcon parent supplies the colored background via
+  // `data-status` rules in CSS.
+  if (status === 'done') {
+    return (
+      <svg
+        className={styles.statusGlyph}
+        viewBox="0 0 14 14"
+        fill="none"
+        aria-hidden="true"
+      >
+        <path
+          d="M3 7.5 L6 10 L11 4.5"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <svg
+        className={styles.statusGlyph}
+        viewBox="0 0 14 14"
+        fill="none"
+        aria-hidden="true"
+      >
+        <path
+          d="M4.5 4.5 L9.5 9.5 M9.5 4.5 L4.5 9.5"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  if (status === 'cancelled') {
+    return (
+      <svg
+        className={styles.statusGlyph}
+        viewBox="0 0 14 14"
+        fill="none"
+        aria-hidden="true"
+      >
+        <path
+          d="M3.5 7 L10.5 7"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  // pending or running: a small animated dot. Running gets the pulse
+  // animation via the existing `.statusDot` keyframes; pending sits
+  // static. Step number is rendered for pending rows so users can read
+  // the timeline like a numbered list.
+  if (status === 'pending' && stepNumber !== undefined) {
+    return <span className={styles.statusNumber} aria-hidden="true">{stepNumber}</span>;
+  }
   return <span className={styles.statusDot} aria-hidden="true" data-status={status} />;
 }
 
 interface StepRowProps {
   step: ExecLogStep;
   index: number;
+  /**
+   * 1-based position of this row among user-visible steps (steps with a
+   * non-null label). Used as the numeric prefix in the row label —
+   * "1. Fetching ticket", "2. Setting up branch", etc. Matches
+   * design/flow_detail.png. `undefined` for non-user-visible internal
+   * states (which the runner emits but the timeline hides).
+   */
+  stepNumber?: number;
   expanded: boolean;
   /**
    * True when this row's open/closed state is currently managed by the
@@ -94,8 +163,12 @@ interface StepRowProps {
  */
 const QUIET_THRESHOLD_SECONDS = 15;
 
-function StepRow({ step, index, expanded, autoManaged, onToggle }: StepRowProps): JSX.Element {
-  const labelText = step.label ?? step.state;
+function StepRow({ step, index, stepNumber, expanded, autoManaged, onToggle }: StepRowProps): JSX.Element {
+  const rawLabel = step.label ?? step.state;
+  // Prepend a numeric prefix when this is a user-visible step — matches
+  // design/flow_detail.png ("1. Fetching ticket details", etc.). Internal
+  // states without a label don't render in the timeline.
+  const labelText = stepNumber !== undefined ? `${stepNumber}. ${rawLabel}` : rawLabel;
   const range = formatRange(step);
 
   // A finished step with zero captured output has nothing to show. Render
@@ -136,41 +209,8 @@ function StepRow({ step, index, expanded, autoManaged, onToggle }: StepRowProps)
       data-testid={`log-step-${index}`}
     >
       <header className={styles.head}>
-        {isExpandable ? (
-          <button
-            type="button"
-            className={styles.toggle}
-            onClick={onToggle}
-            aria-expanded={expanded}
-            aria-label={expanded ? `Collapse ${labelText}` : `Expand ${labelText}`}
-            data-testid={`log-step-${index}-toggle`}
-          >
-            <span
-              className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`}
-              aria-hidden="true"
-            >
-              {/* Right-pointing chevron; CSS rotates when open. */}
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                <path
-                  d="M3 1.5 6.5 5 3 8.5"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </span>
-          </button>
-        ) : (
-          // Spacer keeps the row aligned with expandable peers. No toggle,
-          // no aria-expanded — the row is purely informational.
-          <span
-            className={`${styles.toggle} ${styles.toggleDisabled}`}
-            aria-hidden="true"
-          />
-        )}
-        <span className={styles.statusIcon} aria-hidden="true">
-          {statusIcon(step.status)}
+        <span className={styles.statusIcon} aria-hidden="true" data-status={step.status}>
+          {statusIcon(step.status, stepNumber)}
         </span>
         <span className={styles.label}>{labelText}</span>
         {showHeartbeat && (
@@ -184,6 +224,43 @@ function StepRow({ step, index, expanded, autoManaged, onToggle }: StepRowProps)
           </span>
         )}
         {range && <span className={styles.range}>{range}</span>}
+        {/*
+         * Chevron lives on the RIGHT side of the head (matches
+         * design/flow_detail.png). The button still owns the click
+         * target so test interactions via `log-step-{i}-toggle` keep
+         * working — only the position changed.
+         */}
+        {isExpandable ? (
+          <button
+            type="button"
+            className={styles.toggle}
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={expanded ? `Collapse ${labelText}` : `Expand ${labelText}`}
+            data-testid={`log-step-${index}-toggle`}
+          >
+            <span
+              className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`}
+              aria-hidden="true"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <path
+                  d="M3 1.5 6.5 5 3 8.5"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+          </button>
+        ) : (
+          // Spacer keeps the row's right edge aligned with expandable peers.
+          <span
+            className={`${styles.toggle} ${styles.toggleDisabled}`}
+            aria-hidden="true"
+          />
+        )}
       </header>
       {/*
        * Latest-line ticker. When the step is running and the body is
@@ -363,16 +440,31 @@ export function ExecutionLog({
         {steps.length === 0 ? (
           <div className={styles.empty}>Waiting for the runner to start…</div>
         ) : (
-          steps.map((step, i) => (
-            <StepRow
-              key={`${step.state}-${i}`}
-              step={step}
-              index={i}
-              expanded={openSteps.has(i)}
-              autoManaged={!userOpenedSteps.has(i)}
-              onToggle={() => toggleStep(i)}
-            />
-          ))
+          (() => {
+            // Compute the 1-based user-visible position for each row in
+            // one pass — used to prepend "{n}." to the label (matches
+            // design/flow_detail.png). Internal-state rows (label === null)
+            // remain unnumbered.
+            const userVisibleNumbers = new Map<number, number>();
+            let n = 0;
+            for (let i = 0; i < steps.length; i++) {
+              if (steps[i]!.label !== null) {
+                n++;
+                userVisibleNumbers.set(i, n);
+              }
+            }
+            return steps.map((step, i) => (
+              <StepRow
+                key={`${step.state}-${i}`}
+                step={step}
+                index={i}
+                stepNumber={userVisibleNumbers.get(i)}
+                expanded={openSteps.has(i)}
+                autoManaged={!userOpenedSteps.has(i)}
+                onToggle={() => toggleStep(i)}
+              />
+            ));
+          })()
         )}
       </div>
       <button

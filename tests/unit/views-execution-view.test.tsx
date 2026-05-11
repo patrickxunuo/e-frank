@@ -260,15 +260,11 @@ describe('<ExecutionView /> — EXEC', () => {
 
     render(<ExecutionView runId="r-1" projectId="p-1" onBack={noop} />);
 
-    // Project name lands in the header. Asserted via the title testid since
-    // the name renders in multiple places (sidebar, breadcrumb, title).
+    // Title is now "{ticketKey} — {ticketSummary?}" (matches design/flow_detail.png).
+    // Project name moved to the subtitle row alongside the run id.
     await waitFor(() => {
-      expect(screen.getByTestId('execution-title')).toHaveTextContent(
-        /alpha project/i,
-      );
+      expect(screen.getByTestId('execution-title')).toHaveTextContent(/ABC-7/);
     });
-    // Ticket key visible.
-    expect(screen.getByTestId('execution-ticket-key')).toHaveTextContent(/ABC-7/);
     // Status badge testid present.
     expect(screen.getByTestId('execution-status-badge')).toBeInTheDocument();
   });

@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+import type { Run } from '@shared/ipc';
 import packageJson from '../../../package.json';
 import styles from './Sidebar.module.css';
 import { IconKey, IconProjects, IconSettings } from './icons';
@@ -39,7 +41,85 @@ function initialsOf(name: string): string {
   return (first + second).toUpperCase() || '?';
 }
 
+/**
+ * Tracks whatever run is currently active across the whole runner —
+ * project-agnostic. Powers the "Active Project / Active Ticket" pills
+ * that match design/flow_detail.png's sidebar. Returns null when the
+ * runner is idle or when the IPC bridge isn't available (tests).
+ */
+function useAnyActiveRun(): Run | null {
+  const [run, setRun] = useState<Run | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (typeof window === 'undefined' || !window.api) {
+      setRun(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    const api = window.api;
+    void (async () => {
+      try {
+        const result = await api.runs.current();
+        if (cancelled) return;
+        if (result.ok) {
+          setRun(result.data.run);
+        }
+      } catch {
+        if (cancelled) return;
+      }
+    })();
+    const off = api.runs.onCurrentChanged((event) => {
+      if (cancelled) return;
+      setRun(event.run);
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, []);
+
+  return run;
+}
+
+/**
+ * Resolves a project's display name for the sidebar pill. We do this
+ * per-projectId rather than caching globally because the user only ever
+ * has one active run at a time — the lookup is rare and cheap.
+ */
+function useProjectName(projectId: string | null): string | null {
+  const [name, setName] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (projectId === null || typeof window === 'undefined' || !window.api) {
+      setName(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    const api = window.api;
+    void (async () => {
+      try {
+        const result = await api.projects.get({ id: projectId });
+        if (cancelled) return;
+        if (result.ok) {
+          setName(result.data.name);
+        }
+      } catch {
+        if (cancelled) return;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+  return name;
+}
+
 export function Sidebar({ activeNav, user, onNavigate }: SidebarProps): JSX.Element {
+  const activeRun = useAnyActiveRun();
+  const activeProjectName = useProjectName(activeRun?.projectId ?? null);
   return (
     <aside className={styles.sidebar} data-testid="sidebar">
       <div className={styles.brand}>
@@ -68,6 +148,24 @@ export function Sidebar({ activeNav, user, onNavigate }: SidebarProps): JSX.Elem
       </nav>
 
       <div className={styles.spacer} />
+
+      {activeRun && (
+        <div
+          className={styles.activeContext}
+          data-testid="sidebar-active-context"
+        >
+          <div className={styles.activeRow}>
+            <span className={styles.activeLabel}>Active Project</span>
+            <span className={styles.activeValue} title={activeProjectName ?? activeRun.projectId}>
+              {activeProjectName ?? activeRun.projectId}
+            </span>
+          </div>
+          <div className={styles.activeRow}>
+            <span className={styles.activeLabel}>Active Ticket</span>
+            <span className={styles.activeValueMono}>{activeRun.ticketKey}</span>
+          </div>
+        </div>
+      )}
 
       <ThemeToggle />
 

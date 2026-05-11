@@ -94,6 +94,13 @@ export interface Run {
   id: string;
   projectId: string;
   ticketKey: string;
+  /**
+   * Resolved ticket summary at run-start (from the poller's cached list).
+   * Used by the ExecutionView title and downstream surfaces that want to
+   * show "ABC-123 — Add login validation" instead of just the bare key.
+   * Falls back to `ticketKey` when the poller doesn't have it cached.
+   */
+  ticketSummary?: string;
   mode: RunMode;
   branchName: string;
   /** Current state of the run. */

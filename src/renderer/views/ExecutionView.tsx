@@ -319,15 +319,23 @@ export function ExecutionView({
             />
             <div className={styles.titleBlock}>
               <div className={styles.titleRow}>
+                {/*
+                 * Title is "{ticketKey} — {ticketSummary}" when the summary
+                 * is available; bare ticketKey otherwise. Matches
+                 * design/flow_detail.png. The ticketSummary lands on the Run
+                 * snapshot at workflow-runner start (from the poller's
+                 * cached list); legacy runs without it just show the key.
+                 */}
                 <h1 className={styles.title} data-testid="execution-title">
-                  {project?.name ?? 'Run'}
+                  {ready.ticketSummary !== undefined
+                    ? `${ready.ticketKey} — ${ready.ticketSummary}`
+                    : ready.ticketKey}
                 </h1>
-                <span className={styles.ticketKey} data-testid="execution-ticket-key">
-                  {ready.ticketKey}
-                </span>
                 {statusBadge(ready)}
               </div>
-              <span className={styles.subtitle}>Run · {ready.id.slice(0, 8)}</span>
+              <span className={styles.subtitle}>
+                {project?.name ?? projectId} · Run {ready.id.slice(0, 8)}
+              </span>
             </div>
           </div>
           <div className={styles.headActions}>
@@ -361,6 +369,7 @@ export function ExecutionView({
         data-has-panel={showApproval ? 'true' : 'false'}
       >
         <div className={styles.leftPane}>
+          <h2 className={styles.logSectionTitle}>AI Execution Log</h2>
           <ExecutionLog
             steps={log.steps}
             autoScroll={autoScroll}
