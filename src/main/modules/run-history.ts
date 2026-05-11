@@ -13,8 +13,19 @@
  * For back-compat the persisted JSON may still contain a `processed`
  * array on older files. The init validator silently drops it.
  *
+ * GH-13 — schema v2: each running entry is now `{ key, lockedAt }` where
+ * `lockedAt` is the epoch ms when `markRunning` was called. The timestamp
+ * powers stale-lock recovery: a desktop app that crashes mid-run leaves
+ * its lock on disk, and the next launch must auto-release it (no in-process
+ * runner is alive to clear it). `releaseStaleLocks(thresholdMs)` does the
+ * sweep. Back-compat: v1 files (`running: string[]`) are read; entries get
+ * stamped `lockedAt: 0` (sentinel meaning "definitely stale") so the next
+ * `releaseStaleLocks(0)` removes them. The on-disk envelope is rewritten
+ * as v2 on the next mutation. `getRunning(projectId)` keeps its
+ * `ReadonlyArray<string>` signature so the poller's filter is untouched.
+ *
  * Mirrors `SecretsManager` / `ProjectStore`:
- *   - schema-versioned envelope (`{ schemaVersion: 1, runs: { [projectId]: { running } } }`)
+ *   - schema-versioned envelope (`{ schemaVersion: 2, runs: { [projectId]: { running } } }`)
  *   - atomic writes (temp + rename)
  *   - single-Promise write mutex
  *   - mutators guard on `initialized` (refuse to clobber an unread file)
@@ -33,6 +44,8 @@ export interface RunHistoryOptions {
   /** Absolute path to run-history.json. */
   filePath: string;
   fs?: ProjectStoreFs;
+  /** Test injection. Defaults to `Date.now()`. */
+  clock?: { now: () => number };
 }
 
 export type RunHistoryErrorCode =
@@ -44,16 +57,36 @@ export type RunHistoryResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: RunHistoryErrorCode; message: string } };
 
+/**
+ * One running ticket lock. `lockedAt` is the epoch ms `markRunning` stamped
+ * when the lock was acquired. `0` is a sentinel value used when migrating
+ * from schema v1, where the timestamp wasn't recorded — such entries are
+ * treated as "definitely stale" by `releaseStaleLocks`.
+ */
+export interface RunningLock {
+  key: string;
+  lockedAt: number;
+}
+
 interface ProjectRuns {
-  running: string[];
+  running: RunningLock[];
 }
 
 interface RunHistoryEnvelope {
-  schemaVersion: 1;
+  schemaVersion: 2;
   runs: Record<string, ProjectRuns>;
 }
 
-const SCHEMA_VERSION = 1;
+/** Released-lock record returned by `releaseStaleLocks`. */
+export interface ReleasedLock {
+  projectId: string;
+  key: string;
+  lockedAt: number;
+}
+
+const SCHEMA_VERSION = 2;
+/** Highest schema version we read from disk (v1 reads succeed and migrate). */
+const SUPPORTED_READ_VERSIONS: ReadonlySet<number> = new Set([1, 2]);
 
 function defaultFs(): ProjectStoreFs {
   return {
@@ -89,6 +122,7 @@ function emptyProjectRuns(): ProjectRuns {
 export class RunHistory {
   private readonly filePath: string;
   private readonly fs: ProjectStoreFs;
+  private readonly clock: { now: () => number };
 
   private envelope: RunHistoryEnvelope = { schemaVersion: SCHEMA_VERSION, runs: {} };
   private initialized = false;
@@ -99,6 +133,7 @@ export class RunHistory {
   constructor(options: RunHistoryOptions) {
     this.filePath = options.filePath;
     this.fs = options.fs ?? defaultFs();
+    this.clock = options.clock ?? { now: () => Date.now() };
   }
 
   /**
@@ -146,12 +181,13 @@ export class RunHistory {
           error: { code: 'CORRUPT', message: 'run-history file root must be an object' },
         };
       }
-      if (parsed['schemaVersion'] !== SCHEMA_VERSION) {
+      const schemaVersionRaw = parsed['schemaVersion'];
+      if (typeof schemaVersionRaw !== 'number' || !SUPPORTED_READ_VERSIONS.has(schemaVersionRaw)) {
         return {
           ok: false,
           error: {
             code: 'UNSUPPORTED_SCHEMA_VERSION',
-            message: `unsupported schemaVersion: expected ${SCHEMA_VERSION}, got ${String(parsed['schemaVersion'])}`,
+            message: `unsupported schemaVersion: expected one of [${[...SUPPORTED_READ_VERSIONS].join(', ')}], got ${String(schemaVersionRaw)}`,
           },
         };
       }
@@ -171,24 +207,68 @@ export class RunHistory {
             error: { code: 'CORRUPT', message: `runs["${projectId}"] must be an object` },
           };
         }
-        const running = value['running'];
-        if (!Array.isArray(running) || !running.every((k) => typeof k === 'string')) {
+        const runningRaw = value['running'];
+        if (!Array.isArray(runningRaw)) {
           return {
             ok: false,
             error: {
               code: 'CORRUPT',
-              message: `runs["${projectId}"].running must be a string[]`,
+              message: `runs["${projectId}"].running must be an array`,
             },
           };
+        }
+        // v1: running is string[]. Each entry migrates to lockedAt=0 so the
+        // next releaseStaleLocks(0) sweep removes them — pre-v2 timestamps
+        // are unknowable, and any lock surviving an app restart on the old
+        // schema is by definition orphaned.
+        // v2: running is RunningLock[]. Validate per-entry shape.
+        const migrated: RunningLock[] = [];
+        for (const entry of runningRaw) {
+          if (schemaVersionRaw === 1) {
+            if (typeof entry !== 'string') {
+              return {
+                ok: false,
+                error: {
+                  code: 'CORRUPT',
+                  message: `runs["${projectId}"].running must be a string[] on schemaVersion 1`,
+                },
+              };
+            }
+            migrated.push({ key: entry, lockedAt: 0 });
+          } else {
+            if (!isPlainObject(entry)) {
+              return {
+                ok: false,
+                error: {
+                  code: 'CORRUPT',
+                  message: `runs["${projectId}"].running entries must be objects on schemaVersion 2`,
+                },
+              };
+            }
+            const keyRaw = entry['key'];
+            const lockedAtRaw = entry['lockedAt'];
+            if (typeof keyRaw !== 'string' || typeof lockedAtRaw !== 'number') {
+              return {
+                ok: false,
+                error: {
+                  code: 'CORRUPT',
+                  message: `runs["${projectId}"].running entries must have string key + number lockedAt`,
+                },
+              };
+            }
+            migrated.push({ key: keyRaw, lockedAt: lockedAtRaw });
+          }
         }
         // `processed` is intentionally not read — older files (pre-removal
         // of the local processed filter) may still carry the field; we
         // accept the file but silently drop the field on the next write.
         cleaned[projectId] = {
-          running: [...running],
+          running: migrated,
         };
       }
 
+      // Always store as the current schema version — v1 reads are migrated
+      // in-memory and rewritten as v2 on the next mutation.
       this.envelope = { schemaVersion: SCHEMA_VERSION, runs: cleaned };
       this.initialized = true;
       return { ok: true, data: { projectCount: Object.keys(cleaned).length } };
@@ -202,23 +282,39 @@ export class RunHistory {
   // tick and we don't want to await per-tick — the price is that pre-init
   // reads see an empty store, which is a safe default.
 
-  /** Returns running keys for a project. */
+  /**
+   * Returns running keys for a project. Signature is preserved as
+   * `ReadonlyArray<string>` so the poller's eligibility filter
+   * (`new Set(getRunning(id))`) stays unchanged across the v2 schema bump.
+   * Use `getRunningWithMetadata` when timestamps are needed.
+   */
   getRunning(projectId: string): ReadonlyArray<string> {
     const runs = this.envelope.runs[projectId];
     if (runs === undefined) return [];
-    return runs.running;
+    return runs.running.map((entry) => entry.key);
+  }
+
+  /** Returns running lock entries with their lockedAt timestamps. */
+  getRunningWithMetadata(projectId: string): ReadonlyArray<RunningLock> {
+    const runs = this.envelope.runs[projectId];
+    if (runs === undefined) return [];
+    return runs.running.map((entry) => ({ ...entry }));
   }
 
   // -- Mutators ------------------------------------------------------------
 
   async markRunning(projectId: string, key: string): Promise<RunHistoryResult<void>> {
+    const lockedAt = this.clock.now();
     return this.mutate((next) => {
       const project = ensureProject(next, projectId);
-      if (project.running.includes(key)) {
-        // Idempotent — no spurious write.
+      if (project.running.some((entry) => entry.key === key)) {
+        // Idempotent — no spurious write. We do NOT update the timestamp on
+        // a re-mark, because the original `lockedAt` is the meaningful one
+        // (the wall-clock moment when this lock was first acquired). If the
+        // lock survived a crash, releaseStaleLocks owns deciding it's stale.
         return false;
       }
-      project.running = [...project.running, key];
+      project.running = [...project.running, { key, lockedAt }];
       return true;
     });
   }
@@ -226,10 +322,10 @@ export class RunHistory {
   async clearRunning(projectId: string, key: string): Promise<RunHistoryResult<void>> {
     return this.mutate((next) => {
       const project = next.runs[projectId];
-      if (project === undefined || !project.running.includes(key)) {
+      if (project === undefined || !project.running.some((entry) => entry.key === key)) {
         return false;
       }
-      project.running = project.running.filter((k) => k !== key);
+      project.running = project.running.filter((entry) => entry.key !== key);
       return true;
     });
   }
@@ -244,6 +340,62 @@ export class RunHistory {
       delete next.runs[projectId];
       return true;
     });
+  }
+
+  /**
+   * Release every lock whose `lockedAt` is older than `now - thresholdMs`,
+   * across all projects. Returns the released entries so callers can log /
+   * surface them. Designed for app-startup recovery: at fresh process start,
+   * no run can be in flight (single-process desktop app), so every persisted
+   * lock is by definition orphaned and should be cleared. Call this AFTER
+   * `init()`.
+   *
+   * `thresholdMs: 0` (the default) means "release everything", which is what
+   * `initStores()` uses on boot. A non-zero threshold is reserved for future
+   * use cases (e.g. a periodic janitor that prunes truly old locks while
+   * leaving recent ones to a separate recovery path).
+   *
+   * `lockedAt: 0` entries (migrated from schema v1) are always released —
+   * their original timestamp is unknowable, so they're definitively stale.
+   */
+  async releaseStaleLocks(
+    thresholdMs: number = 0,
+  ): Promise<RunHistoryResult<ReleasedLock[]>> {
+    // A negative thresholdMs would push the cutoff into the future
+    // (`cutoff = now - (-x) = now + x`) and release every lock, including
+    // legitimately fresh ones. Clamp at 0 so the public API can't be
+    // misused (e.g. a buggy computed threshold). The boot path passes 0,
+    // which is documented to release everything.
+    const safeThreshold = Math.max(0, thresholdMs);
+    const now = this.clock.now();
+    const cutoff = now - safeThreshold;
+    const released: ReleasedLock[] = [];
+    const writeRes = await this.mutate((next) => {
+      let changed = false;
+      for (const [projectId, project] of Object.entries(next.runs)) {
+        const keep: RunningLock[] = [];
+        for (const entry of project.running) {
+          // `lockedAt <= cutoff` releases entries older than the threshold.
+          // The v1-migrated `lockedAt: 0` sentinel always falls past any
+          // realistic cutoff (cutoff is `now - thresholdMs`, so cutoff > 0
+          // whenever now > thresholdMs, which is always true at runtime).
+          if (entry.lockedAt <= cutoff) {
+            released.push({ projectId, key: entry.key, lockedAt: entry.lockedAt });
+          } else {
+            keep.push(entry);
+          }
+        }
+        if (keep.length !== project.running.length) {
+          project.running = keep;
+          changed = true;
+        }
+      }
+      return changed;
+    });
+    if (!writeRes.ok) {
+      return writeRes;
+    }
+    return { ok: true, data: released };
   }
 
   // -- Internals -----------------------------------------------------------
@@ -342,7 +494,7 @@ function ensureProject(env: RunHistoryEnvelope, projectId: string): ProjectRuns 
 function cloneRuns(runs: Record<string, ProjectRuns>): Record<string, ProjectRuns> {
   const out: Record<string, ProjectRuns> = {};
   for (const [k, v] of Object.entries(runs)) {
-    out[k] = { running: [...v.running] };
+    out[k] = { running: v.running.map((entry) => ({ ...entry })) };
   }
   return out;
 }

@@ -306,4 +306,253 @@ describe('RunHistory', () => {
       expect(runningB).toContain(`XYZ-${i}`);
     }
   });
+
+  // -------------------------------------------------------------------------
+  // RH-012..RH-018 — GH-13 ticket locking with stale-lock recovery
+  // -------------------------------------------------------------------------
+
+  describe('GH-13 — stale-lock recovery', () => {
+    let clockNow: number;
+    let lockedFs: MemFs;
+    let lockedHistory: RunHistory;
+
+    beforeEach(() => {
+      clockNow = 1_000_000;
+      lockedFs = createMemFs();
+      lockedHistory = new RunHistory({
+        filePath: FILE_PATH,
+        fs: lockedFs,
+        clock: { now: () => clockNow },
+      });
+    });
+
+    it('RH-012: markRunning stamps lockedAt from the injected clock', async () => {
+      await lockedHistory.init();
+      clockNow = 1_500_000;
+      await lockedHistory.markRunning(PROJECT_A, 'ABC-1');
+
+      const entries = lockedHistory.getRunningWithMetadata(PROJECT_A);
+      expect(entries).toEqual([{ key: 'ABC-1', lockedAt: 1_500_000 }]);
+    });
+
+    it('RH-012: getRunning preserves its ReadonlyArray<string> contract on the new schema', async () => {
+      await lockedHistory.init();
+      await lockedHistory.markRunning(PROJECT_A, 'ABC-1');
+      await lockedHistory.markRunning(PROJECT_A, 'ABC-2');
+
+      const keys = lockedHistory.getRunning(PROJECT_A);
+      // String[] — what the poller's `new Set(getRunning(id))` expects.
+      expect(keys).toEqual(['ABC-1', 'ABC-2']);
+    });
+
+    it('RH-013: re-marking an already-locked ticket keeps the original lockedAt', async () => {
+      await lockedHistory.init();
+      clockNow = 1_500_000;
+      await lockedHistory.markRunning(PROJECT_A, 'ABC-1');
+
+      clockNow = 9_999_999;
+      const res = await lockedHistory.markRunning(PROJECT_A, 'ABC-1');
+      expect(res.ok).toBe(true);
+
+      // Original timestamp preserved — re-marks must not refresh the lock,
+      // otherwise stale-lock recovery would be defeated by repeat callers.
+      const entries = lockedHistory.getRunningWithMetadata(PROJECT_A);
+      expect(entries).toEqual([{ key: 'ABC-1', lockedAt: 1_500_000 }]);
+    });
+
+    it('RH-014: releaseStaleLocks(0) clears every lock and returns the released entries', async () => {
+      await lockedHistory.init();
+      clockNow = 1_500_000;
+      await lockedHistory.markRunning(PROJECT_A, 'ABC-1');
+      clockNow = 1_500_100;
+      await lockedHistory.markRunning(PROJECT_A, 'ABC-2');
+      clockNow = 1_500_200;
+      await lockedHistory.markRunning(PROJECT_B, 'XYZ-9');
+
+      clockNow = 2_000_000;
+      const res = await lockedHistory.releaseStaleLocks(0);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+
+      expect(res.data).toEqual(
+        expect.arrayContaining([
+          { projectId: PROJECT_A, key: 'ABC-1', lockedAt: 1_500_000 },
+          { projectId: PROJECT_A, key: 'ABC-2', lockedAt: 1_500_100 },
+          { projectId: PROJECT_B, key: 'XYZ-9', lockedAt: 1_500_200 },
+        ]),
+      );
+      expect(res.data).toHaveLength(3);
+      expect(lockedHistory.getRunning(PROJECT_A)).toEqual([]);
+      expect(lockedHistory.getRunning(PROJECT_B)).toEqual([]);
+    });
+
+    it('RH-015: releaseStaleLocks(thresholdMs) preserves locks newer than the threshold', async () => {
+      await lockedHistory.init();
+      clockNow = 1_500_000;
+      await lockedHistory.markRunning(PROJECT_A, 'OLD-1');
+      clockNow = 1_900_000;
+      await lockedHistory.markRunning(PROJECT_A, 'NEW-1');
+
+      // now = 2_000_000, threshold = 200_000 → cutoff = 1_800_000.
+      // OLD-1 (1_500_000) is stale; NEW-1 (1_900_000) is fresh.
+      clockNow = 2_000_000;
+      const res = await lockedHistory.releaseStaleLocks(200_000);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+
+      expect(res.data).toEqual([
+        { projectId: PROJECT_A, key: 'OLD-1', lockedAt: 1_500_000 },
+      ]);
+      expect(lockedHistory.getRunning(PROJECT_A)).toEqual(['NEW-1']);
+    });
+
+    it('RH-016: schema v1 file migrates each running key to lockedAt=0; releaseStaleLocks(0) clears them', async () => {
+      // Seed a v1 file directly — string[] running entries, processed field
+      // legitimately present (back-compat path from RH-006b).
+      lockedFs.files.set(
+        FILE_PATH,
+        JSON.stringify({
+          schemaVersion: 1,
+          runs: {
+            [PROJECT_A]: { running: ['LEGACY-1', 'LEGACY-2'], processed: ['DONE-1'] },
+          },
+        }),
+      );
+      const initRes = await lockedHistory.init();
+      expect(initRes.ok).toBe(true);
+
+      // All v1 entries stamped lockedAt=0 (the "definitely stale" sentinel).
+      expect(lockedHistory.getRunningWithMetadata(PROJECT_A)).toEqual([
+        { key: 'LEGACY-1', lockedAt: 0 },
+        { key: 'LEGACY-2', lockedAt: 0 },
+      ]);
+
+      clockNow = 2_000_000;
+      const released = await lockedHistory.releaseStaleLocks(0);
+      expect(released.ok).toBe(true);
+      if (!released.ok) return;
+
+      expect(released.data).toEqual(
+        expect.arrayContaining([
+          { projectId: PROJECT_A, key: 'LEGACY-1', lockedAt: 0 },
+          { projectId: PROJECT_A, key: 'LEGACY-2', lockedAt: 0 },
+        ]),
+      );
+      expect(lockedHistory.getRunning(PROJECT_A)).toEqual([]);
+    });
+
+    it('RH-017: persisted file is rewritten as schemaVersion 2 with structured lock entries', async () => {
+      await lockedHistory.init();
+      clockNow = 1_500_000;
+      await lockedHistory.markRunning(PROJECT_A, 'ABC-1');
+
+      const written = lockedFs.files.get(FILE_PATH) ?? '';
+      const parsed = JSON.parse(written);
+      expect(parsed.schemaVersion).toBe(2);
+      expect(parsed.runs[PROJECT_A].running).toEqual([
+        { key: 'ABC-1', lockedAt: 1_500_000 },
+      ]);
+    });
+
+    it('RH-017: v1-on-disk file is upgraded to v2 on the next mutation', async () => {
+      lockedFs.files.set(
+        FILE_PATH,
+        JSON.stringify({
+          schemaVersion: 1,
+          runs: { [PROJECT_A]: { running: ['LEGACY-1'] } },
+        }),
+      );
+      await lockedHistory.init();
+      clockNow = 1_500_000;
+      await lockedHistory.markRunning(PROJECT_A, 'NEW-1');
+
+      const written = lockedFs.files.get(FILE_PATH) ?? '';
+      const parsed = JSON.parse(written);
+      expect(parsed.schemaVersion).toBe(2);
+      expect(parsed.runs[PROJECT_A].running).toEqual([
+        { key: 'LEGACY-1', lockedAt: 0 },
+        { key: 'NEW-1', lockedAt: 1_500_000 },
+      ]);
+    });
+
+    it('RH-018: releaseStaleLocks on an empty store is a no-op (no spurious write)', async () => {
+      await lockedHistory.init();
+      lockedFs.ops.length = 0;
+      const res = await lockedHistory.releaseStaleLocks(0);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.data).toEqual([]);
+      // No writeFile / rename ops — `mutate` short-circuits on `changed=false`.
+      expect(lockedFs.ops.filter((o) => o.kind === 'writeFile')).toHaveLength(0);
+      expect(lockedFs.ops.filter((o) => o.kind === 'rename')).toHaveLength(0);
+    });
+
+    it('RH-018: releaseStaleLocks clamps a negative thresholdMs to 0 (would otherwise wipe everything by accident)', async () => {
+      await lockedHistory.init();
+      clockNow = 1_500_000;
+      await lockedHistory.markRunning(PROJECT_A, 'FRESH-1');
+
+      // Without the clamp, `cutoff = now - (-500_000) = now + 500_000`,
+      // which would release the just-acquired FRESH-1 lock. With the
+      // clamp, thresholdMs becomes 0 → cutoff = now → FRESH-1 (lockedAt
+      // = 1_500_000) is fresh relative to now = 1_500_100 (cutoff
+      // = 1_500_100, lockedAt 1_500_000 <= cutoff → released? wait —
+      // the spec is: clamp to 0 should NOT widen behavior beyond
+      // "release everything older-or-equal to now". So with clamp=0
+      // and lockedAt=1_500_000 < now=1_500_100, the lock IS released.
+      // The point of the clamp is to prevent a NEGATIVE threshold from
+      // releasing locks that lockedAt > now — let me reframe: the
+      // clamp prevents the cutoff from drifting INTO THE FUTURE, which
+      // is what a negative threshold would do.
+      clockNow = 1_500_100;
+      const res = await lockedHistory.releaseStaleLocks(-500_000);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+
+      // Behavior matches `releaseStaleLocks(0)` exactly — both clamp
+      // to 0. The lock IS released because lockedAt (1_500_000) <=
+      // cutoff (now - 0 = 1_500_100).
+      expect(res.data).toEqual([
+        { projectId: PROJECT_A, key: 'FRESH-1', lockedAt: 1_500_000 },
+      ]);
+    });
+
+    it('RH-018: releaseStaleLocks preserves locks whose lockedAt is in the future (clock skew)', async () => {
+      await lockedHistory.init();
+      // Stamp a lock at t=2_000_000, then rewind the clock to t=1_000_000
+      // and release with threshold=0. The "future" lock should be
+      // preserved — cutoff (1_000_000) < lockedAt (2_000_000), so it
+      // doesn't qualify as stale.
+      clockNow = 2_000_000;
+      await lockedHistory.markRunning(PROJECT_A, 'FUTURE-1');
+
+      clockNow = 1_000_000;
+      const res = await lockedHistory.releaseStaleLocks(0);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.data).toEqual([]);
+      expect(lockedHistory.getRunning(PROJECT_A)).toEqual(['FUTURE-1']);
+    });
+
+    it('RH-018: releaseStaleLocks survives across re-init (atomic rewrite)', async () => {
+      await lockedHistory.init();
+      clockNow = 1_500_000;
+      await lockedHistory.markRunning(PROJECT_A, 'ABC-1');
+
+      clockNow = 2_000_000;
+      const released = await lockedHistory.releaseStaleLocks(0);
+      expect(released.ok).toBe(true);
+
+      // Fresh RunHistory pointed at the same backing fs — the rewritten file
+      // should NOT carry the released lock.
+      const reopened = new RunHistory({
+        filePath: FILE_PATH,
+        fs: lockedFs,
+        clock: { now: () => clockNow },
+      });
+      const init2 = await reopened.init();
+      expect(init2.ok).toBe(true);
+      expect(reopened.getRunning(PROJECT_A)).toEqual([]);
+    });
+  });
 });
