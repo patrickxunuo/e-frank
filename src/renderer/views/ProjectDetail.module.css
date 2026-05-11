@@ -79,11 +79,11 @@
 
 .title {
   font-family: var(--font-display);
-  font-size: 30px;
+  font-size: 26px;
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--text-primary);
-  line-height: 1.1;
+  line-height: 1.15;
 }
 
 .pillRow {
@@ -348,10 +348,15 @@
     var(--shadow-strong),
     0 0 0 1px var(--accent-soft);
   padding: var(--space-4) var(--space-5);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--space-5);
-  align-items: stretch;
+  /*
+   * Two-row layout: top bar (badge + actions, spans full width) +
+   * body (2-column grid: status on the left, log preview on the
+   * right). Matches design/project_detail.png — actions anchor at
+   * the panel's top-right, above the terminal log column.
+   */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
   animation: activeRise var(--duration-base) var(--ease-out);
 }
 
@@ -366,8 +371,30 @@
   }
 }
 
+/*
+ * GH-57 #2: badge anchored top-left, action buttons (Approve / Reject /
+ * Open Details / Cancel — varies by run state) anchored top-right. The
+ * row wraps onto two lines on a narrow viewport so the badge never
+ * collides with the action cluster.
+ */
+.activeTopBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
+.activeBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: stretch;
+}
+
 @media (max-width: 760px) {
-  .activeCard {
+  .activeBody {
     grid-template-columns: 1fr;
   }
 }
@@ -377,23 +404,6 @@
   flex-direction: column;
   gap: var(--space-3);
   min-width: 0;
-}
-
-.activeHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  /*
-   * GH-57 #2: when the run is awaitingApproval we surface Approve +
-   * Reject + Open Details in the right action area. Without wrap, a
-   * narrow viewport would crowd the buttons against the status badge
-   * on the left. flex-wrap lets the row break onto two lines, keeping
-   * the badge anchored top-left and the buttons trailing on a second
-   * line if needed.
-   */
-  flex-wrap: wrap;
-  row-gap: var(--space-2);
 }
 
 .activeBadgeRow {
@@ -415,7 +425,7 @@
 
 .activeTitle {
   font-family: var(--font-display);
-  font-size: 14.5px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: -0.005em;

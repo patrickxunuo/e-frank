@@ -276,16 +276,20 @@ function ActiveExecutionPanel({
   const isTerminal = TERMINAL_STATUSES_LOCAL.has(run.status);
   const awaiting = run.pendingApproval !== null;
 
-  // Derive the latest streamed line from the current step's tail.
+  // Tail of streamed lines from the current step — design/project_detail.png
+  // shows ~6 lines of terminal output in the panel's right column, not
+  // just the single latest line. Keep the slice modest so a runaway log
+  // doesn't blow up the panel height (LogPreview enforces maxHeight
+  // anyway, but bounding here keeps the React render cheap).
+  const LOG_TAIL_SIZE = 6;
   const currentStep =
     log.currentUserVisibleIndex >= 0
       ? log.steps[log.currentUserVisibleIndex]
       : log.steps[log.steps.length - 1];
-  const latestLineRaw = currentStep?.lines.length
-    ? currentStep.lines[currentStep.lines.length - 1]?.line ?? ''
-    : '';
-  const recentLines: string[] = latestLineRaw
-    ? [stripAnsi(latestLineRaw)]
+  const recentLines: string[] = currentStep
+    ? currentStep.lines
+        .slice(-LOG_TAIL_SIZE)
+        .map((entry) => stripAnsi(entry.line))
     : [];
 
   const dispatchApproval = useCallback(
@@ -319,102 +323,115 @@ function ActiveExecutionPanel({
       data-awaiting-approval={awaiting ? 'true' : 'false'}
     >
       <div className={styles.activeCard}>
-        <div className={styles.activeLeft}>
-          <div className={styles.activeHead}>
-            <div className={styles.activeBadgeRow}>
-              <span className={styles.activeKey} data-testid="active-execution-key">
-                {run.ticketKey}
-              </span>
-              <Badge variant="running" pulse>
-                {awaiting ? 'Awaiting' : 'Running'}
-              </Badge>
-            </div>
-            <div className={styles.activeActions}>
-              {awaiting && (
-                <>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    leadingIcon={<IconCheck size={12} />}
-                    onClick={() => {
-                      void dispatchApproval('approve');
-                    }}
-                    disabled={pendingDecision !== null}
-                    data-testid="panel-approve"
-                  >
-                    Approve
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    leadingIcon={<IconClose size={12} />}
-                    onClick={() => {
-                      void dispatchApproval('reject');
-                    }}
-                    disabled={pendingDecision !== null}
-                    data-testid="panel-reject"
-                  >
-                    Reject
-                  </Button>
-                </>
-              )}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onOpenExecution?.(run.id)}
-                data-testid="active-execution-open-details"
-              >
-                Open Details
-              </Button>
-              {!awaiting && (
+        {/*
+         * Top bar spans the full panel width — matches the design's
+         * layout where badge sits top-left and action buttons sit
+         * top-right, both above the 2-column body.
+         */}
+        <div className={styles.activeTopBar}>
+          <div className={styles.activeBadgeRow}>
+            <span className={styles.activeKey} data-testid="active-execution-key">
+              {run.ticketKey}
+            </span>
+            <Badge variant="running" pulse>
+              {awaiting ? 'Awaiting' : 'Running'}
+            </Badge>
+          </div>
+          <div className={styles.activeActions}>
+            {awaiting && (
+              <>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  leadingIcon={<IconCheck size={12} />}
+                  onClick={() => {
+                    void dispatchApproval('approve');
+                  }}
+                  disabled={pendingDecision !== null}
+                  data-testid="panel-approve"
+                >
+                  Approve
+                </Button>
                 <Button
                   variant="destructive"
                   size="sm"
                   leadingIcon={<IconClose size={12} />}
-                  onClick={onCancel}
-                  data-testid="active-execution-cancel"
+                  onClick={() => {
+                    void dispatchApproval('reject');
+                  }}
+                  disabled={pendingDecision !== null}
+                  data-testid="panel-reject"
                 >
-                  Cancel
+                  Reject
                 </Button>
-              )}
-            </div>
-          </div>
-          <span className={styles.activeTitle}>{run.ticketKey}</span>
-          <div className={styles.activeBranchRow}>
-            <span className={styles.activeBranchIcon} aria-hidden="true">
-              <IconBranch size={12} />
-            </span>
-            <span
-              className={styles.activeBranchName}
-              title={run.branchName}
-              data-testid="active-execution-branch"
+              </>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onOpenExecution?.(run.id)}
+              data-testid="active-execution-open-details"
             >
-              {run.branchName}
-            </span>
-            <CopyBranchButton branchName={run.branchName} />
+              Open Details
+            </Button>
+            {!awaiting && (
+              <Button
+                variant="destructive"
+                size="sm"
+                leadingIcon={<IconClose size={12} />}
+                onClick={onCancel}
+                data-testid="active-execution-cancel"
+              >
+                Cancel
+              </Button>
+            )}
           </div>
-          <ProgressBar
-            value={progress}
-            label={stateLabel}
-            running={!isTerminal}
-            data-testid="active-execution-progress"
-          />
-          {approvalError !== null && (
-            <span
-              className={styles.activeApprovalError}
-              role="alert"
-              data-testid="active-execution-approval-error"
-            >
-              {approvalError}
-            </span>
-          )}
         </div>
-        <div className={styles.activeRight}>
-          <LogPreview
-            lines={recentLines}
-            maxHeight={140}
-            data-testid="active-execution-log"
-          />
+        <div className={styles.activeBody}>
+          <div className={styles.activeLeft}>
+            <span
+              className={styles.activeTitle}
+              title={run.ticketSummary ?? run.ticketKey}
+              data-testid="active-execution-title"
+            >
+              {run.ticketSummary ?? run.ticketKey}
+            </span>
+            <div className={styles.activeBranchRow}>
+              <span className={styles.activeBranchIcon} aria-hidden="true">
+                <IconBranch size={12} />
+              </span>
+              <span
+                className={styles.activeBranchName}
+                title={run.branchName}
+                data-testid="active-execution-branch"
+              >
+                {run.branchName}
+              </span>
+              <CopyBranchButton branchName={run.branchName} />
+            </div>
+            <ProgressBar
+              value={progress}
+              label={stateLabel}
+              running={!isTerminal}
+              data-testid="active-execution-progress"
+            />
+            {approvalError !== null && (
+              <span
+                className={styles.activeApprovalError}
+                role="alert"
+                data-testid="active-execution-approval-error"
+              >
+                {approvalError}
+              </span>
+            )}
+          </div>
+          <div className={styles.activeRight}>
+            <LogPreview
+              lines={recentLines}
+              maxHeight={140}
+              data-testid="active-execution-log"
+            />
+          </div>
         </div>
       </div>
     </aside>
