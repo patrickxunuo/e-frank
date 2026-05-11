@@ -120,6 +120,26 @@
   flex: 0 0 auto;
 }
 
+/*
+ * Project-cell badge — per-row colored tile mirroring the
+ * `.providerBadge` treatment on the Repository / Ticket Source cells,
+ * but with per-project colors. The bg / fg come in via custom props
+ * set inline on each instance (see `projectBadgeColors` in
+ * ProjectList.tsx) so this rule stays static + token-bound while
+ * still varying row-to-row.
+ */
+.projectBadge {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: var(--badge-bg, var(--accent-soft));
+  color: var(--badge-fg, var(--accent));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
 .cellText {
   display: flex;
   flex-direction: column;

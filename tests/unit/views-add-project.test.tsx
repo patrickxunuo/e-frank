@@ -651,13 +651,19 @@ describe('<AddProject /> — ADD-PROJ', () => {
       });
       await fillValidForm();
 
-      // Spec keeps the existing mode picker (YOLO toggle). The view exposes
-      // either `mode-yolo` button OR `field-workflow-mode` dropdown. Try the
-      // button first; if absent, fall back to the dropdown.
-      const yoloBtn = screen.queryByTestId('mode-yolo');
-      if (yoloBtn) {
-        fireEvent.click(yoloBtn);
+      // Workflow Mode is now a RadioCardGroup; each card exposes a stable
+      // testid as `{groupTestId}-option-{value}`. Older shapes (a `mode-yolo`
+      // button or a `field-workflow-mode` <select>) were tried first by
+      // earlier iterations of this test; the current shape is the
+      // RadioCardGroup option card.
+      const yoloCard =
+        screen.queryByTestId('field-workflow-mode-option-yolo') ??
+        screen.queryByTestId('mode-yolo');
+      if (yoloCard) {
+        fireEvent.click(yoloCard);
       } else {
+        // Last-resort fallback for the legacy Dropdown shape — left in
+        // place so a partial revert doesn't silently break this test.
         fireEvent.change(screen.getByTestId('field-workflow-mode'), {
           target: { value: 'yolo' },
         });

@@ -1,4 +1,4 @@
-import type { ProjectInstanceDto } from '@shared/ipc';
+import type { ProjectInstanceDto, Run } from '@shared/ipc';
 import { Badge, type BadgeVariant } from '../components/Badge';
 import { Button } from '../components/Button';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
@@ -15,6 +15,7 @@ import {
   IconRefresh,
 } from '../components/icons';
 import { useAutoMode } from '../state/auto-mode';
+import { useGlobalActiveRun } from '../state/global-active-run';
 import styles from './ProjectList.module.css';
 
 export interface ProjectListProps {
@@ -33,11 +34,25 @@ interface ProjectStatus {
 }
 
 /**
- * MVP status: persisted projects don't carry execution state yet, so every
- * row reads as `idle`. The hook into the live poller arrives in #6 and will
- * map to the other variants without changing this view's contract.
+ * Live status for a project row. Driven by the global active run from the
+ * runner (`useGlobalActiveRun`). Three states:
+ *   - the active run targets this project AND is awaiting approval → "Awaiting"
+ *   - the active run targets this project (any other state) → "Running"
+ *   - otherwise → "Idle"
+ *
+ * The runner enforces a single active run at a time, so at most one row in
+ * the table can ever read as Running / Awaiting.
  */
-function statusFor(_project: ProjectInstanceDto): ProjectStatus {
+function statusFor(
+  project: ProjectInstanceDto,
+  activeRun: Run | null,
+): ProjectStatus {
+  if (activeRun !== null && activeRun.projectId === project.id) {
+    if (activeRun.state === 'awaitingApproval') {
+      return { variant: 'running', label: 'Awaiting', pulse: true };
+    }
+    return { variant: 'running', label: 'Running', pulse: true };
+  }
   return { variant: 'idle', label: 'Idle' };
 }
 
@@ -106,6 +121,30 @@ function basenameOf(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
+/**
+ * Stable color palette for the project-cell badge tile. Picks one of four
+ * token pairs based on a hash of `project.id` so each project gets a
+ * visually distinguishable tile that's consistent across sessions — no
+ * schema change required (no `iconColor` field). Skips `--danger` so the
+ * happy-path list doesn't accidentally signal "broken" via color.
+ */
+const PROJECT_BADGE_PALETTE: ReadonlyArray<{ bg: string; fg: string }> = [
+  { bg: 'var(--accent-soft)', fg: 'var(--accent)' },
+  { bg: 'var(--success-soft)', fg: 'var(--success)' },
+  { bg: 'var(--warning-soft)', fg: 'var(--warning)' },
+  { bg: 'var(--accent-soft-strong)', fg: 'var(--accent)' },
+];
+
+function projectBadgeColors(projectId: string): { bg: string; fg: string } {
+  // Cheap deterministic hash; modulo into the palette. djb2-ish.
+  let h = 0;
+  for (let i = 0; i < projectId.length; i++) {
+    h = (h * 31 + projectId.charCodeAt(i)) | 0;
+  }
+  const idx = Math.abs(h) % PROJECT_BADGE_PALETTE.length;
+  return PROJECT_BADGE_PALETTE[idx]!;
+}
+
 export function ProjectList({
   projects,
   loading,
@@ -115,22 +154,36 @@ export function ProjectList({
   onOpen,
 }: ProjectListProps): JSX.Element {
   const [autoMode, setAutoMode] = useAutoMode();
+  const activeRun = useGlobalActiveRun();
 
   const columns: DataTableColumn<ProjectInstanceDto>[] = [
     {
       key: 'project',
       header: 'Project',
-      render: (row) => (
-        <div className={styles.cell}>
-          <span className={styles.cellIcon}>
-            <IconCode />
-          </span>
-          <div className={styles.cellText}>
-            <span className={styles.cellPrimary}>{row.name}</span>
-            <span className={styles.cellSecondary}>{basenameOf(row.repo.localPath)}</span>
+      render: (row) => {
+        const palette = projectBadgeColors(row.id);
+        return (
+          <div className={styles.cell}>
+            <span
+              className={styles.projectBadge}
+              style={{
+                // Per-row colors flow in as custom props so the CSS rule
+                // stays static. Deterministic per project id; see
+                // `projectBadgeColors` above.
+                ['--badge-bg' as string]: palette.bg,
+                ['--badge-fg' as string]: palette.fg,
+              }}
+              aria-hidden="true"
+            >
+              <IconCode size={16} />
+            </span>
+            <div className={styles.cellText}>
+              <span className={styles.cellPrimary}>{row.name}</span>
+              <span className={styles.cellSecondary}>{basenameOf(row.repo.localPath)}</span>
+            </div>
           </div>
-        </div>
-      ),
+        );
+      },
     },
     {
       key: 'repository',
@@ -162,7 +215,7 @@ export function ProjectList({
       key: 'status',
       header: 'Status',
       render: (row) => {
-        const status = statusFor(row);
+        const status = statusFor(row, activeRun);
         return (
           <Badge
             variant={status.variant}

@@ -13,10 +13,13 @@ import { FormSection } from '../components/FormSection';
 import { Input } from '../components/Input';
 import { Textarea } from '../components/Textarea';
 import { AddConnectionDialog } from '../components/AddConnectionDialog';
+import { RadioCardGroup } from '../components/RadioCardGroup';
 import {
   IconAlert,
+  IconCheck,
   IconFolder,
   IconKey,
+  IconPlay,
   IconPlus,
   IconRefresh,
 } from '../components/icons';
@@ -877,18 +880,27 @@ export function AddProject({ onClose, onCreated, editing }: AddProjectProps): JS
           description="How the agent should behave once a ticket is picked up."
           data-testid="add-project-section-4"
         >
-          <Dropdown
+          <RadioCardGroup<WorkflowMode>
             label="Workflow Mode"
             required
             value={form.workflowMode}
-            onChange={(value) => set('workflowMode', value as WorkflowMode)}
+            onChange={(value) => set('workflowMode', value)}
             options={[
-              { value: 'interactive', label: 'Interactive — pause at every checkpoint' },
-              { value: 'yolo', label: 'YOLO — auto-approve every checkpoint' },
+              {
+                value: 'interactive',
+                title: 'Interactive',
+                description: 'Pause at every checkpoint for human approval.',
+                icon: <IconCheck size={14} />,
+              },
+              {
+                value: 'yolo',
+                title: 'YOLO (Auto-approve)',
+                description: 'Auto-approve every checkpoint and run straight through.',
+                icon: <IconPlay size={14} />,
+              },
             ]}
-            hint="Interactive lets you approve / reject / modify each step. YOLO runs straight through."
-            data-testid="field-workflow-mode"
             name="workflowMode"
+            data-testid="field-workflow-mode"
           />
           <Input
             label="Branch Naming Format"

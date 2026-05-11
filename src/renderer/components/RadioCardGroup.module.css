@@ -1,0 +1,129 @@
+/*
+ * `<RadioCardGroup>` styles.
+ *
+ * Layout: 2-up grid by default (the common case — binary mode pickers).
+ * For 3+ options the grid wraps naturally because each card is `min-width: 0`
+ * inside a `1fr` track. Mobile / narrow viewports collapse to a single column
+ * via the `max-width` query at the bottom.
+ */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.label {
+  font-family: var(--font-display);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0.005em;
+}
+
+.required {
+  color: var(--danger);
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+@media (max-width: 600px) {
+  .cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+.card {
+  appearance: none;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-family: inherit;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.card:hover {
+  background: var(--surface-overlay-low);
+  border-color: var(--border-default);
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cardSelected {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+
+.cardSelected:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+/*
+ * The icon tile mirrors the brand pattern used in ProjectList's
+ * `.providerBadge` — a small colored square with the glyph centered.
+ * When the card is selected it adopts the accent palette; otherwise
+ * it sits muted to keep the unselected card visually quieter.
+ */
+.cardIcon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-overlay-low);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.cardSelected .cardIcon {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.cardTitle {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.005em;
+}
+
+.cardDescription {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    transition: none;
+  }
+  .cardIcon {
+    transition: none;
+  }
+}
