@@ -1,13 +1,15 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { AppShell } from './components/AppShell';
 import type { SidebarNavId } from './components/Sidebar';
 import { Dialog } from './components/Dialog';
 import { Titlebar } from './components/Titlebar';
+import { ToastStack } from './components/ToastStack';
 import { AddProject } from './views/AddProject';
 import { Connections } from './views/Connections';
 import { ExecutionView } from './views/ExecutionView';
 import { ProjectDetail } from './views/ProjectDetail';
 import { ProjectList } from './views/ProjectList';
+import { useNotificationDispatchers } from './state/notification-dispatchers';
 import { useProjects } from './state/projects';
 import styles from './App.module.css';
 
@@ -59,6 +61,18 @@ export function App(): JSX.Element {
   const [addOpen, setAddOpen] = useState<boolean>(false);
   const projects = useProjects();
 
+  const currentExecutionRunId = view.kind === 'execution' ? view.runId : null;
+  const handleNavigateToExecution = useCallback(
+    (runId: string, projectId: string): void => {
+      setView({ kind: 'execution', runId, projectId });
+    },
+    [],
+  );
+  useNotificationDispatchers({
+    currentExecutionRunId,
+    onNavigateToExecution: handleNavigateToExecution,
+  });
+
   const handleNavigate = (id: SidebarNavId): void => {
     if (id === 'connections') {
       setView({ kind: 'connections' });
@@ -109,6 +123,7 @@ export function App(): JSX.Element {
           />
         </Dialog>
       </AppShell>
+      <ToastStack />
     </div>
   );
 }
