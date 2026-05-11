@@ -1,0 +1,199 @@
+/*
+ * <Toast> — single bottom-right notification (#GH-59).
+ *
+ * Width 360px, glass-card surface, type-tinted left accent bar. Entry
+ * slides up 8px + fades 200ms; exit (driven by parent removal) is just
+ * an opacity transition since the React tree drops it. `prefers-reduced-
+ * motion: reduce` flattens motion to opacity only.
+ */
+
+.toast {
+  position: relative;
+  width: 360px;
+  display: flex;
+  background: var(--bg-card-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(8px);
+  overflow: hidden;
+  pointer-events: auto;
+  animation: toastEnter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes toastEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: toastEnterReducedMotion 120ms linear both;
+  }
+}
+
+@keyframes toastEnterReducedMotion {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Left accent bar — tinted per type. */
+.accent {
+  flex: 0 0 3px;
+  background: var(--accent);
+}
+
+.toast[data-type='success'] .accent {
+  background: var(--success);
+}
+.toast[data-type='error'] .accent {
+  background: var(--danger);
+}
+.toast[data-type='warning'] .accent {
+  background: var(--warning);
+}
+.toast[data-type='info'] .accent {
+  background: var(--accent);
+}
+.toast[data-type='approval'] .accent {
+  background: var(--accent);
+}
+
+/* Approval toasts get a subtle pulsing border to match the runner's
+ * awaiting state. */
+.toast[data-type='approval'] {
+  border-color: var(--accent-border);
+  animation:
+    toastEnter 200ms cubic-bezier(0.22, 1, 0.36, 1) both,
+    approvalPulse 2.6s ease-in-out 200ms infinite;
+}
+
+@keyframes approvalPulse {
+  0%,
+  100% {
+    box-shadow: var(--shadow-md);
+  }
+  50% {
+    box-shadow:
+      var(--shadow-md),
+      0 0 0 2px var(--accent-soft);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast[data-type='approval'] {
+    animation: toastEnterReducedMotion 120ms linear both;
+  }
+}
+
+.body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  min-width: 0;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.toast[data-type='success'] .icon {
+  color: var(--success);
+}
+.toast[data-type='error'] .icon {
+  color: var(--danger);
+}
+.toast[data-type='warning'] .icon {
+  color: var(--warning);
+}
+.toast[data-type='info'] .icon,
+.toast[data-type='approval'] .icon {
+  color: var(--accent);
+}
+
+.title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+}
+
+.close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.close:hover {
+  color: var(--text-primary);
+  background: var(--surface-overlay-mid);
+}
+
+.close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  word-break: break-word;
+  /* Bound the body so a multi-line stack trace or long plan summary can't
+   * stretch the toast vertically off the viewport. ~6 lines of body height
+   * comfortably; overflow clips and the user can still hit "View run" to
+   * see the full payload. */
+  max-height: calc(1.5em * 6);
+  overflow: hidden;
+}
+
+.actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  padding-top: var(--space-1);
+}

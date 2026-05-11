@@ -1,0 +1,22 @@
+/*
+ * <ToastStack> — bottom-right notification stack (#GH-59).
+ *
+ * `pointer-events: none` on the container so clicks pass through the gaps
+ * between toasts to the underlying page; each `<Toast>` re-enables them
+ * for itself. `flex-direction: column-reverse` so the newest toast lives
+ * at the bottom of the visual stack while still being appended to the
+ * store's tail.
+ */
+
+.stack {
+  position: fixed;
+  bottom: var(--space-4);
+  right: var(--space-4);
+  z-index: 2000;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-end;
+  gap: var(--space-3);
+  pointer-events: none;
+  max-width: calc(100vw - var(--space-7));
+}
