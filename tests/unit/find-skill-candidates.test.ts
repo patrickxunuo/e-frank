@@ -239,4 +239,55 @@ The top result is the very skill that produced this list.`;
     expect(result.candidates.length).toBe(1);
     expect(result.candidates[0]?.name).toBe('table-skill');
   });
+
+  // -------------------------------------------------------------------------
+  // CANDIDATE-PARSE-019 — 3-column table where the Skill column already
+  // carries the full `owner/repo@skill` install ref in a single cell.
+  // Captured live from a "find skills" query; the parser previously
+  // bailed because it required a separate "Source" column (header-text
+  // detection), so cards never rendered.
+  // -------------------------------------------------------------------------
+  it('CANDIDATE-PARSE-019: extracts from 3-col table with combined repo@skill refs', () => {
+    const out = `Here are skills matching "find":
+| Skill | Installs | Purpose |
+|---|---|---|
+| \`vercel-labs/skills@find-skills\` | 1.5M | Discover & install other skills |
+| \`googleworkspace/cli@recipe-find-free-time\` | 12.8K | Find free time on Google Calendar |
+| \`getsentry/skills@find-bugs\` | 2.4K | Bug hunting via Sentry |`;
+    const result = parseSkillCandidates(out);
+    expect(result.parsed).toBe(true);
+    expect(result.candidates.length).toBe(3);
+    expect(result.candidates[0]?.name).toBe('find-skills');
+    expect(result.candidates[0]?.ref).toBe('vercel-labs/skills@find-skills');
+    expect(result.candidates[0]?.stars).toBe(1_500_000);
+    expect(result.candidates[0]?.description).toBe('Discover & install other skills');
+    expect(result.candidates[1]?.ref).toBe('googleworkspace/cli@recipe-find-free-time');
+    expect(result.candidates[1]?.stars).toBe(12_800);
+    expect(result.candidates[2]?.ref).toBe('getsentry/skills@find-bugs');
+  });
+
+  // -------------------------------------------------------------------------
+  // CANDIDATE-PARSE-020 — Header text MUST NOT constrain detection.
+  // Regression guard against the original bug: a parser that only
+  // accepts headers it has been hard-coded for will keep breaking on
+  // every fresh Claude variation. Cell-shape detection is required.
+  // -------------------------------------------------------------------------
+  it('CANDIDATE-PARSE-020: extracts candidates regardless of header words (data-driven)', () => {
+    // Headers "Title / Origin / Count / Vibe" — none of these are in
+    // any hard-coded vocabulary list; detection must rely on the
+    // *shape* of cells (backticked repo refs, numeric install counts,
+    // longest text cell as description).
+    const out = `| Title | Origin | Count | Vibe |
+|---|---|---|---|
+| **mood-board** | \`creative/skills\` | 500 | curate visual references |
+| **flow-state** | \`focus/skills\` | 200 | enter deep work |`;
+    const result = parseSkillCandidates(out);
+    expect(result.parsed).toBe(true);
+    expect(result.candidates.length).toBe(2);
+    expect(result.candidates[0]?.name).toBe('mood-board');
+    expect(result.candidates[0]?.ref).toBe('creative/skills@mood-board');
+    expect(result.candidates[0]?.stars).toBe(500);
+    expect(result.candidates[0]?.description).toBe('curate visual references');
+    expect(result.candidates[1]?.ref).toBe('focus/skills@flow-state');
+  });
 });

@@ -86,7 +86,10 @@ function extractFromMarkdown(output: string): SkillCandidate[] {
 
 const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
 const TABLE_SEP_CELL_RE = /^:?-+:?$/;
-const INSTALL_COUNT_RE = /^(\d+(?:\.\d+)?)\s*([KkMmBb])?/;
+const INSTALL_COUNT_RE = /^(\d+(?:\.\d+)?)\s*([KkMmBb])?$/;
+const REF_FULL_RE = /^[a-zA-Z0-9][\w.-]*\/[\w.-]+@[\w.-]+$/;
+const REF_REPO_RE = /^[a-zA-Z0-9][\w.-]*\/[\w.-]+$/;
+const IDENT_RE = /^[a-zA-Z][\w-]*$/;
 
 function parseRow(line: string): string[] {
   return line
@@ -113,52 +116,124 @@ function parseInstallsCount(text: string): number | null {
   return Math.max(0, Math.floor(base * multiplier));
 }
 
+function pickDescription(cells: string[], exclude: Set<string>): string {
+  // Longest cell that isn't the ref/name/installs-count.
+  let best = '';
+  for (const c of cells) {
+    if (exclude.has(c)) continue;
+    if (INSTALL_COUNT_RE.test(c)) continue;
+    if (c.length > best.length) best = c;
+  }
+  return best;
+}
+
+function pickStars(cells: string[]): number | null {
+  for (const c of cells) {
+    if (!INSTALL_COUNT_RE.test(c)) continue;
+    const n = parseInstallsCount(c);
+    if (n !== null) return n;
+  }
+  return null;
+}
+
 /**
- * Claude's *other* favorite shape: a markdown table with columns like
- * `| Skill | Source | Installs | What it does |`. Header detection
- * maps cells to roles; rows compose `{source}@{name}` as the install
- * ref when source looks like a repo path (contains `/`), matching the
- * `npx skills add owner/repo@skill` convention.
+ * Identify the candidate in a single table row by inspecting the
+ * *shape* of each cell rather than relying on the header text. Claude
+ * uses wildly inconsistent header words ("Skill", "Mark", "Purpose",
+ * "Vibe", …) and inconsistent column layouts (4-col split vs 3-col
+ * where the skill column already carries a full `owner/repo@skill`
+ * ref). Header-driven detection breaks on every shape it wasn't
+ * specifically tuned for — see CANDIDATE-PARSE-019/020.
+ *
+ *   Pass 1 — a cell already in `owner/repo@skill` form is the install
+ *            ref. Name = the part after the last `@`.
+ *   Pass 2 — `owner/repo` cell + a sibling identifier cell → compose
+ *            `{repo}@{name}` (matches `npx skills add` syntax).
+ *   Pass 3 — identifier cell alone (the skill is registry-resolved by
+ *            its bare name, e.g. `find-skills`).
+ */
+function extractCandidateFromRow(cells: string[]): SkillCandidate | null {
+  const cleaned = cells.map(cleanCell);
+
+  for (const c of cleaned) {
+    if (REF_FULL_RE.test(c)) {
+      const atIdx = c.lastIndexOf('@');
+      const name = c.slice(atIdx + 1);
+      return {
+        name,
+        ref: c,
+        description: pickDescription(cleaned, new Set([c])),
+        stars: pickStars(cleaned),
+      };
+    }
+  }
+
+  let repo: string | null = null;
+  let identName: string | null = null;
+  for (const c of cleaned) {
+    if (repo === null && REF_REPO_RE.test(c)) {
+      repo = c;
+      continue;
+    }
+    if (identName === null && IDENT_RE.test(c)) {
+      identName = c;
+    }
+  }
+  if (repo !== null && identName !== null) {
+    const ref = `${repo}@${identName}`;
+    return {
+      name: identName,
+      ref,
+      description: pickDescription(cleaned, new Set([repo, identName])),
+      stars: pickStars(cleaned),
+    };
+  }
+  if (identName !== null) {
+    return {
+      name: identName,
+      ref: identName,
+      description: pickDescription(cleaned, new Set([identName])),
+      stars: pickStars(cleaned),
+    };
+  }
+  return null;
+}
+
+/**
+ * Pull skill candidates out of the first markdown table in `output`.
+ * Detection is anchored on the separator row (`|---|---|...`) — any
+ * line above that with `|...|` shape is the header; subsequent `|...|`
+ * lines (until the first non-table line) are data rows. Row parsing
+ * is fully data-driven (see `extractCandidateFromRow`), so we tolerate
+ * arbitrary header words and column counts (≥2) from Claude.
  */
 function extractFromMarkdownTable(output: string): SkillCandidate[] {
-  const tableLines = output
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => TABLE_ROW_RE.test(l));
-  if (tableLines.length < 3) return [];
+  const lines = output.split('\n').map((l) => l.trim());
 
-  const headerRow = tableLines[0];
-  const sepRow = tableLines[1];
-  if (headerRow === undefined || sepRow === undefined) return [];
-  const header = parseRow(headerRow);
-  const sep = parseRow(sepRow);
-  if (sep.length === 0 || !sep.every((c) => TABLE_SEP_CELL_RE.test(c))) return [];
-
-  const findCol = (re: RegExp): number => header.findIndex((h) => re.test(h));
-  const nameCol = findCol(/\b(skill|name)\b/i);
-  const srcCol = findCol(/\b(source|ref|repo)\b/i);
-  const descCol = findCol(/\b(what|desc|about)/i);
-  const starsCol = findCol(/\b(install|star|score)/i);
-  if (nameCol === -1 || srcCol === -1) return [];
+  let sepIdx = -1;
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (!TABLE_ROW_RE.test(line)) continue;
+    const above = lines[i - 1] ?? '';
+    if (!TABLE_ROW_RE.test(above)) continue;
+    const sepCells = parseRow(line);
+    if (sepCells.length === 0) continue;
+    if (!sepCells.every((c) => TABLE_SEP_CELL_RE.test(c))) continue;
+    sepIdx = i;
+    break;
+  }
+  if (sepIdx === -1) return [];
 
   const candidates: SkillCandidate[] = [];
   const seen = new Set<string>();
-  for (let i = 2; i < tableLines.length; i++) {
-    const row = tableLines[i];
-    if (row === undefined) continue;
-    const cells = parseRow(row);
-    const name = cleanCell(cells[nameCol] ?? '');
-    const src = cleanCell(cells[srcCol] ?? '');
-    if (name === '' || src === '') continue;
-    // Compose installable ref. Repo-style sources (`owner/repo`) need
-    // the `@skill` suffix for `npx skills add` to know which skill to
-    // pull. Plain refs stand on their own.
-    const ref = src.includes('/') && !src.includes('@') ? `${src}@${name}` : src;
-    if (seen.has(ref)) continue;
-    seen.add(ref);
-    const description = descCol >= 0 ? cleanCell(cells[descCol] ?? '') : '';
-    const stars = starsCol >= 0 ? parseInstallsCount(cells[starsCol] ?? '') : null;
-    candidates.push({ name, ref, description, stars });
+  for (let i = sepIdx + 1; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (!TABLE_ROW_RE.test(line)) break;
+    const cells = parseRow(line);
+    const c = extractCandidateFromRow(cells);
+    if (c === null || seen.has(c.ref)) continue;
+    seen.add(c.ref);
+    candidates.push(c);
   }
   return candidates;
 }

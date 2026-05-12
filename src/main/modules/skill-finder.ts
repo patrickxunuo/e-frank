@@ -54,16 +54,26 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
  */
 export function buildFindSkillsPrompt(_skillName: string, query: string): string {
   const q = query.trim();
+  // Framing: treat the user's text as a natural-language description
+  // of *intent*, not as a keyword to search for. Empirically Claude
+  // would otherwise latch onto the first content word — a query like
+  // "find a skill that can design my personal portfolio" came back as
+  // skills containing "find" in their name (find-bugs, find-keywords,
+  // …) instead of skills relevant to portfolio design. The "filler
+  // phrases" line tells Claude to strip the meta-language and focus
+  // on what the user actually wants to accomplish.
   return (
-    `I need Claude Code skill recommendations for: "${q}". ` +
-    `List up to 5 relevant public Claude Code skills you know about. ` +
+    `A user is searching for a Claude Code skill that helps with this task: "${q}". ` +
+    `Treat the quoted text as a natural-language description of what they want to accomplish, NOT a literal keyword search. ` +
+    `Strip filler phrases like "find a skill that can", "I need", "help me", "for me" — focus on the underlying intent. ` +
+    `Recommend up to 5 public Claude Code skills that would help with that intent. ` +
     `Respond ONLY with a JSON array, no prose before or after, no markdown fences. ` +
     `Each item must be an object with these exact fields: ` +
     `"name" (string, the skill display name), ` +
-    `"ref" (string, the install reference like "ef-feature" or "owner/repo"), ` +
+    `"ref" (string, prefer the full "owner/repo@skill" install reference like "vercel-labs/skills@frontend-design"), ` +
     `"description" (string, one-line, max ~120 chars), ` +
-    `"stars" (number or null, GitHub stars if known). ` +
-    `Example: [{"name":"ef-feature","ref":"ef-feature","description":"Ticket-to-PR workflow","stars":42}]. ` +
+    `"stars" (number or null, GitHub stars or install count if known). ` +
+    `Example: [{"name":"frontend-design","ref":"vercel-labs/skills@frontend-design","description":"Distinctive production-grade UI","stars":42}]. ` +
     `If you don't know any matching skills, respond with [].`
   );
 }
