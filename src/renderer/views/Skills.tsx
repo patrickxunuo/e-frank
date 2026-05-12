@@ -17,6 +17,11 @@ export function Skills(): JSX.Element {
   const { skills, loading, error, refresh } = useSkills();
   const [findOpen, setFindOpen] = useState<boolean>(false);
   const [findPrefill, setFindPrefill] = useState<string>('');
+  // "Refreshing" = a refetch with data already on screen. The Skills page
+  // separates this from the initial load so the table stays mounted +
+  // the user gets a spinning icon as feedback. (The icon-only feedback
+  // is why the previous build felt like the Refresh button did nothing.)
+  const refreshing = loading && skills.length > 0;
 
   const openFindDialog = useCallback((prefill: string): void => {
     setFindPrefill(prefill);
@@ -106,10 +111,15 @@ export function Skills(): JSX.Element {
           <Button
             variant="ghost"
             size="sm"
-            leadingIcon={<IconRefresh />}
+            leadingIcon={
+              <span className={refreshing ? styles.refreshSpinning : undefined}>
+                <IconRefresh size={14} />
+              </span>
+            }
             onClick={() => {
               void refresh();
             }}
+            disabled={refreshing}
             data-testid="skills-refresh"
           >
             Refresh
@@ -125,61 +135,64 @@ export function Skills(): JSX.Element {
         </div>
       </header>
 
-      {error && (
-        <div className={styles.errorBanner} role="alert" data-testid="skills-error">
-          <span>
-            <strong>Couldn't load skills.</strong> {error}
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            leadingIcon={<IconRefresh />}
-            onClick={() => {
-              void refresh();
-            }}
-            data-testid="skills-retry"
-          >
-            Retry
-          </Button>
-        </div>
-      )}
-
-      {showSkeleton && (
-        <div className={styles.skeleton} data-testid="skills-loading">
-          <div className={styles.skeletonRow} style={{ width: '36%' }} />
-          <div className={styles.skeletonRow} style={{ width: '92%' }} />
-          <div className={styles.skeletonRow} style={{ width: '78%' }} />
-        </div>
-      )}
-
-      {showEmpty && (
-        <EmptyState
-          icon={<IconSkills size={26} />}
-          title="No skills installed yet"
-          description="Skills extend Claude with custom commands. Install ef-feature to unlock the human-paced ticket-to-PR workflow, or browse other skills."
-          action={
+      <div className={styles.body}>
+        {error && (
+          <div className={styles.errorBanner} role="alert" data-testid="skills-error">
+            <span>
+              <strong>Couldn't load skills.</strong> {error}
+            </span>
             <Button
-              variant="primary"
-              leadingIcon={<IconSkills size={14} />}
-              onClick={() => openFindDialog('ef-feature')}
-              data-testid="skills-empty-cta"
+              variant="ghost"
+              size="sm"
+              leadingIcon={<IconRefresh />}
+              onClick={() => {
+                void refresh();
+              }}
+              data-testid="skills-retry"
             >
-              Find Skill
+              Retry
             </Button>
-          }
-          data-testid="skills-empty"
-        />
-      )}
+          </div>
+        )}
 
-      {showTable && (
-        <DataTable
-          columns={columns}
-          rows={skills}
-          rowKey={(row) => row.id}
-          rowTestId={(row) => `skill-row-${row.id}`}
-          data-testid="skills-table"
-        />
-      )}
+        {showSkeleton && (
+          <div className={styles.skeleton} data-testid="skills-loading">
+            <div className={styles.skeletonRow} style={{ width: '36%' }} />
+            <div className={styles.skeletonRow} style={{ width: '92%' }} />
+            <div className={styles.skeletonRow} style={{ width: '78%' }} />
+          </div>
+        )}
+
+        {showEmpty && (
+          <EmptyState
+            icon={<IconSkills size={26} />}
+            title="No skills installed yet"
+            description="Skills extend Claude with custom commands. Install ef-feature to unlock the human-paced ticket-to-PR workflow, or browse other skills."
+            action={
+              <Button
+                variant="primary"
+                leadingIcon={<IconSkills size={14} />}
+                onClick={() => openFindDialog('ef-feature')}
+                data-testid="skills-empty-cta"
+              >
+                Find Skill
+              </Button>
+            }
+            data-testid="skills-empty"
+          />
+        )}
+
+        {showTable && (
+          <DataTable
+            columns={columns}
+            rows={skills}
+            rowKey={(row) => row.id}
+            rowTestId={(row) => `skill-row-${row.id}`}
+            fillHeight
+            data-testid="skills-table"
+          />
+        )}
+      </div>
 
       <FindSkillDialog
         open={findOpen}

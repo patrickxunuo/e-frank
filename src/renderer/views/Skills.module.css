@@ -1,9 +1,21 @@
+/*
+ * Fixed-header + inner-scroll layout. The page fills the AppShell main
+ * area (height: 100%, min-height: 0 so flex children can shrink) and
+ * hides its own overflow — the inner `.body` wrapper claims the leftover
+ * height and the DataTable's `fillHeight` scroll container handles the
+ * actual scrolling. Without `min-height: 0` on a flex column child,
+ * Chromium expands the column to its natural content height and the
+ * table's `overflow: auto` never engages.
+ */
 .page {
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--space-5);
   max-width: 1180px;
+  width: 100%;
   margin: 0 auto;
+  height: 100%;
+  min-height: 0;
 }
 
 .head {
@@ -12,6 +24,15 @@
   justify-content: space-between;
   gap: var(--space-5);
   flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .titleBlock {
@@ -30,11 +51,40 @@
 
 .title {
   font-family: var(--font-display);
-  font-size: 30px;
+  font-size: 26px;
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--text-primary);
-  line-height: 1.1;
+  line-height: 1.15;
+}
+
+/*
+ * Refresh button icon spin while a refetch is in flight. Same pattern
+ * as ProjectDetail's `.refreshSpinning` (GH-57 #5) — locks the span to a
+ * 14x14 inline-flex box so the rotation pivot doesn't drift with the
+ * surrounding text baseline.
+ */
+.refreshSpinning {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
+  transform-origin: center center;
+  animation: skillsRspin 0.8s linear infinite;
+}
+
+@keyframes skillsRspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .refreshSpinning {
+    animation: none;
+  }
 }
 
 .subtitle {
