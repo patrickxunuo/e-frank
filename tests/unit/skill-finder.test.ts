@@ -31,15 +31,22 @@ describe('SkillFinder', () => {
     finder = new SkillFinder({ spawner, cwd: CWD });
   });
 
-  it('FIND-001: spawns claude with /find-skills prompt and the dangerous flag', () => {
+  it('FIND-001: spawns claude with the structured-output prompt and the dangerous flag', () => {
     finder.start('image cropping');
     const opts = spawner.lastOptions;
     expect(opts?.command).toBe('claude');
-    expect(opts?.args).toEqual([
-      '--dangerously-skip-permissions',
-      '-p',
-      '/find-skills image cropping',
-    ]);
+    expect(opts?.args?.[0]).toBe('--dangerously-skip-permissions');
+    expect(opts?.args?.[1]).toBe('-p');
+    // The prompt now wraps the query in a structured-output meta-prompt;
+    // assert the query is embedded and the JSON-output directive is
+    // present. We don't pin the exact wording so prompt iterations don't
+    // break this test for no reason.
+    const prompt = opts?.args?.[2] ?? '';
+    expect(prompt).toContain('image cropping');
+    expect(prompt).toContain('/find-skills');
+    expect(prompt).toContain('JSON array');
+    expect(prompt).toContain('"name"');
+    expect(prompt).toContain('"ref"');
     expect(opts?.cwd).toBe(CWD);
   });
 

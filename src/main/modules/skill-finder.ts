@@ -1,5 +1,8 @@
 /**
- * SkillFinder — spawn `claude /find-skills <query>` and stream output.
+ * SkillFinder — spawn `claude` with a structured-output prompt that
+ * asks it to invoke `/find-skills <query>` internally and respond ONLY
+ * with a JSON array of candidates. The renderer parses that array via
+ * `parseSkillCandidates` and renders the results as a card grid.
  *
  * Deliberately separate from `ClaudeProcessManager` (which guards a
  * single active workflow run): the user must be able to search for
@@ -11,9 +14,10 @@
  * if a find is in flight. Renderer-side UX is to disable the search
  * button while `findId` is set.
  *
- * Line-buffered stdout/stderr. No stream-json parsing — `/find-skills`
- * produces plain text recommendations for human reading; the renderer
- * regex-extracts install candidates from those lines.
+ * Line-buffered stdout/stderr. The renderer accumulates lines and runs
+ * `parseSkillCandidates` to pick out the JSON array; if Claude rambles
+ * instead of emitting JSON, the renderer falls back to a raw-stream
+ * view with a manual install input.
  */
 
 import { EventEmitter } from 'node:events';
@@ -23,6 +27,31 @@ import type { Spawner, SpawnedProcess } from './spawner.js';
 const DEFAULT_COMMAND = 'claude';
 const DEFAULT_SKILL_NAME = 'find-skills';
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * Build the prompt Claude receives. Wraps the user's `<query>` in a
+ * structured-output meta-prompt that asks Claude to use `/find-skills`
+ * internally and respond ONLY with a JSON array. Kept single-line so
+ * cmd.exe / `shell: true` quoting doesn't get confused by embedded
+ * newlines inside the argv element.
+ *
+ * Exported so unit tests can assert against the exact prompt string
+ * without having to inspect a mocked spawn call's args.
+ */
+export function buildFindSkillsPrompt(skillName: string, query: string): string {
+  const q = query.trim();
+  return (
+    `Use the /${skillName} skill to find Claude Code skills matching: "${q}". ` +
+    `Respond ONLY with a JSON array, no prose before or after. ` +
+    `Each item must be an object with these exact fields: ` +
+    `"name" (string, the skill display name), ` +
+    `"ref" (string, the install reference like "ef-feature" or "owner/repo"), ` +
+    `"description" (string, one-line, max ~120 chars), ` +
+    `"stars" (number or null, GitHub stars if known). ` +
+    `Example: [{"name":"ef-feature","ref":"ef-feature","description":"Ticket-to-PR workflow","stars":42}]. ` +
+    `If no skills match, respond with [].`
+  );
+}
 
 export interface FinderOutputEvent {
   findId: string;
@@ -120,7 +149,7 @@ export class SkillFinder extends EventEmitter {
     if (this.state !== null) throw new FinderAlreadyActiveError();
     const findId = randomUUID();
     const startedAt = Date.now();
-    const prompt = `/${this.opts.skillName} ${query}`.trim();
+    const prompt = buildFindSkillsPrompt(this.opts.skillName, query);
     const child = this.opts.spawner.spawn({
       command: this.opts.command,
       args: [...this.opts.flags, prompt],

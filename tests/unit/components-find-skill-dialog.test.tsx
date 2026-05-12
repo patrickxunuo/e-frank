@@ -280,7 +280,7 @@ describe('<FindSkillDialog /> — DIALOG-FIND', () => {
   // -------------------------------------------------------------------------
   // DIALOG-FIND-005 — Candidate line surfaces inline install card
   // -------------------------------------------------------------------------
-  it('DIALOG-FIND-005: a streamed candidate line surfaces find-skill-install-{ref} card with description', async () => {
+  it('DIALOG-FIND-005: a JSON-array stdout payload surfaces find-skill-install-{ref} card with description', async () => {
     const stub = installApi();
     render(<FindSkillDialog open={true} initialQuery="ef-feature" onClose={noop} />);
 
@@ -293,11 +293,14 @@ describe('<FindSkillDialog /> — DIALOG-FIND', () => {
       expect(skills.onFindOutput).toHaveBeenCalled();
     });
 
+    // The finder is now driven by a structured-output prompt — Claude is
+    // expected to respond with a JSON array; the dialog parses that into
+    // candidate cards.
     act(() => {
       stub.emitOutput({
         findId: 'find-1',
         stream: 'stdout',
-        line: '- ef-feature: Human-paced ticket-to-PR workflow',
+        line: '[{"name":"ef-feature","ref":"ef-feature","description":"Human-paced ticket-to-PR workflow","stars":42}]',
         timestamp: 2,
       });
     });
@@ -305,6 +308,8 @@ describe('<FindSkillDialog /> — DIALOG-FIND', () => {
     expect(screen.getByTestId('find-skill-install-ef-feature')).toBeInTheDocument();
     const candidates = screen.getByTestId('find-skill-candidates');
     expect(candidates).toHaveTextContent(/Human-paced ticket-to-PR workflow/);
+    // Stars badge renders the count.
+    expect(candidates).toHaveTextContent(/42/);
   });
 
   // -------------------------------------------------------------------------
@@ -327,7 +332,7 @@ describe('<FindSkillDialog /> — DIALOG-FIND', () => {
       stub.emitOutput({
         findId: 'find-1',
         stream: 'stdout',
-        line: '- ef-feature: Human-paced ticket-to-PR workflow',
+        line: '[{"name":"ef-feature","ref":"ef-feature","description":"Human-paced ticket-to-PR workflow","stars":null}]',
         timestamp: 3,
       });
     });
