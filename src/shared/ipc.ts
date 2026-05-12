@@ -504,9 +504,11 @@ export interface SkillsListResponse {
 export type SkillInstallStatus = 'installed' | 'failed';
 
 export interface SkillsInstallRequest {
-  /** Bare skill name or `<owner>/<name>` reference. Validated against
-   * `^[a-zA-Z0-9][\w./@-]+$` in the main process — anything else returns
-   * an `INVALID_REF` error without spawning. */
+  /** Bare skill name, `<owner>/<name>`, or `@scope/<name>` reference.
+   * Validated against `^[a-zA-Z0-9@][\w./@-]+$` in the main process —
+   * anything else returns an `INVALID_REF` error without spawning. The
+   * leading `@` opens the door to scoped-npm-package refs the way `npx
+   * skills add @org/skill` expects them. */
   ref: string;
 }
 

@@ -93,7 +93,7 @@ shell:open-path       → IpcResult<null>   # companion: open a skill folder in 
 
 **`skills-scanner.ts`** — accepts injected `fs` + `userHome` + `cwd` deps so tests can use a fake fs. Walks `~/.claude/skills/*/SKILL.md` and `<cwd>/.claude/skills/*/SKILL.md`. Hand-rolled `---` frontmatter parser (key: value, no nesting — keeps the dep surface tiny). Returns scans sorted by name. Project-level entries with the same slug as user-level entries override them.
 
-**`skill-npx-installer.ts`** — `Spawner`-wrapped invocation of `npx skills add <ref> -g -y`. The `<ref>` is regex-checked against `^[a-zA-Z0-9][\w./@-]+$` to harden against `shell: true` injection (the spawner default). `cwd` is the userData dir so `npx` cache hits the standard location. Captures stdout + stderr; returns `{ status: 'installed' | 'failed', stdout, stderr }`.
+**`skill-npx-installer.ts`** — `Spawner`-wrapped invocation of `npx skills add <ref> -g -y`. The `<ref>` is regex-checked against `^[a-zA-Z0-9@][\w./@-]+$` to harden against `shell: true` injection (the spawner default). The leading `@` opens the door to `@scope/name` npm refs. `cwd` is the userData dir so `npx` cache hits the standard location. Captures stdout + stderr; returns `{ status: 'installed' | 'failed', stdout, stderr }`.
 
 **`skill-finder.ts`** — single-active finder (`FinderAlreadyActiveError` if a second `start()` lands while one's running). Spawns `claude --dangerously-skip-permissions -p /find-skills "<query>"`. EventEmitter for `output` (line-buffered) + `exit`. Query length capped at 200 chars + rejected for shell metachars by the IPC handler in `main/index.ts` BEFORE reaching the finder.
 
@@ -117,7 +117,7 @@ shell:open-path       → IpcResult<null>   # companion: open a skill folder in 
 - [x] `skills:list` returns scanned skills with name + description + source + dirPath.
 - [x] Project-level skills with the same slug as user-level override them in the response.
 - [x] Hand-rolled frontmatter parser handles `name: ...` + `description: ...` (single-line values; multi-line bodies pass through untouched).
-- [x] `skills:install` rejects refs that don't match `^[a-zA-Z0-9][\w./@-]+$` BEFORE spawning.
+- [x] `skills:install` rejects refs that don't match `^[a-zA-Z0-9@][\w./@-]+$` BEFORE spawning.
 - [x] `skills:install` surfaces stdout + stderr + a status flag so the renderer can show a useful error.
 - [x] `skills:find-start` rejects empty / >200-char / shell-metachar-bearing queries.
 - [x] `skills:find-start` returns `ALREADY_ACTIVE` (FinderAlreadyActiveError) when a second `start()` lands during an active find.

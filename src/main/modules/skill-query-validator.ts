@@ -14,7 +14,16 @@
  */
 
 const MAX_QUERY_LENGTH = 200;
-const BANNED = /[`$<>|&;"'\\(){}[\]\r\n\t]/;
+// Banned characters split into POSIX-shell + cmd.exe lanes. The POSIX
+// lane (`$`, backtick, `|&;`, quotes, etc.) blocks substitution + command
+// chaining on sh/bash. The Windows lane (`%`, `^`) blocks two cmd.exe
+// quirks that survive even inside `"..."` quoting:
+//   - `%FOO%` expands environment variables (e.g. `%USERNAME%` leaks the
+//     username into the query that shows up in `tasklist`/process logs).
+//   - `^` is cmd.exe's escape character — relevant if delayed-expansion
+//     contexts arise via future code paths.
+// Both are low-severity (not RCE), but cheap defense in depth.
+const BANNED = /[`$<>|&;"'\\(){}[\]\r\n\t%^]/;
 
 export function isValidFindSkillsQuery(q: string): boolean {
   if (typeof q !== 'string') return false;

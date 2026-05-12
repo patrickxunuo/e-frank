@@ -1796,7 +1796,17 @@ function registerIpcHandlers(): void {
     IPC_CHANNELS.SKILLS_LIST,
     async (): Promise<IpcResult<SkillsListResponse>> => {
       try {
-        const skills = await scanInstalledSkills();
+        // `projectRoot` enables the project-level lane (`<cwd>/.claude/skills/`).
+        // Without it the scanner silently skips that lane entirely — and the
+        // bundled `ef-auto-feature` skill (which lives under the e-frank repo's
+        // own `.claude/skills/` directory in dev) wouldn't appear in the list.
+        // `process.cwd()` resolves to the running Electron process's working
+        // directory — the repo root in dev, the install dir in dist:win
+        // (where there's no `.claude/skills/`, so the project lane is a
+        // graceful no-op).
+        const skills = await scanInstalledSkills({
+          projectRoot: process.cwd(),
+        });
         return { ok: true, data: { skills } };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

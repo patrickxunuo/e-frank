@@ -72,4 +72,14 @@ describe('isValidFindSkillsQuery', () => {
     expect(isValidFindSkillsQuery(null as unknown as string)).toBe(false);
     expect(isValidFindSkillsQuery(undefined as unknown as string)).toBe(false);
   });
+
+  it('FIND-QUERY-012: rejects cmd.exe escape (^) and env-var expansion (%)', () => {
+    // `%FOO%` expands env vars even inside `"..."` on cmd.exe — leaks
+    // host info into the claude argv visible via `tasklist`/`ps`.
+    expect(isValidFindSkillsQuery('hi %USERNAME%')).toBe(false);
+    expect(isValidFindSkillsQuery('100%')).toBe(false);
+    // `^` is cmd.exe's escape — irrelevant inside `"..."` today, but cheap
+    // defense-in-depth against future code paths.
+    expect(isValidFindSkillsQuery('a^b')).toBe(false);
+  });
 });
