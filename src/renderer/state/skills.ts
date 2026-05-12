@@ -1,11 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SkillSummary } from '@shared/ipc';
 
+export interface RemoveSkillResult {
+  ok: boolean;
+  error?: string;
+}
+
 export interface UseSkillsResult {
   skills: SkillSummary[];
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
+  /**
+   * Removes a skill via `npx skills remove <ref>` and refreshes the list
+   * on success. Returns `{ ok: false, error }` on any failure path
+   * (IPC unavailable, invalid ref, npm error) so the UI can surface it.
+   */
+  remove: (ref: string) => Promise<RemoveSkillResult>;
 }
 
 const BRIDGE_UNAVAILABLE = 'IPC bridge unavailable';
@@ -61,6 +72,34 @@ export function useSkills(): UseSkillsResult {
     }
   }, []);
 
+  const remove = useCallback(
+    async (ref: string): Promise<RemoveSkillResult> => {
+      if (typeof window === 'undefined' || !window.api) {
+        return { ok: false, error: BRIDGE_UNAVAILABLE };
+      }
+      try {
+        const result = await window.api.skills.remove({ ref });
+        if (!result.ok) {
+          return {
+            ok: false,
+            error: result.error.message || result.error.code || 'Remove failed',
+          };
+        }
+        if (result.data.status === 'failed') {
+          const tail = result.data.stderr.trim() || result.data.stdout.trim() || 'remove failed';
+          return { ok: false, error: tail };
+        }
+        // Success — refresh the list so the row disappears.
+        await refresh();
+        return { ok: true };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: message };
+      }
+    },
+    [refresh],
+  );
+
   useEffect(() => {
     mountedRef.current = true;
     void refresh();
@@ -69,5 +108,5 @@ export function useSkills(): UseSkillsResult {
     };
   }, [refresh]);
 
-  return { skills, loading, error, refresh };
+  return { skills, loading, error, refresh, remove };
 }

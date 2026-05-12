@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   installSkillViaNpx,
+  uninstallSkillViaNpx,
   InvalidSkillRefError,
   SKILL_REF_REGEX,
 } from '../../src/main/modules/skill-npx-installer';
@@ -114,6 +115,67 @@ describe('SkillNpxInstaller', () => {
       expect(result.exitCode).toBeNull();
       expect(spawner.lastSpawned?.lastSignal).toBe('SIGTERM');
       expect(result.stderr).toContain('timed out');
+    });
+  });
+
+  describe('NPX-UNINSTALL-001..005 remove path', () => {
+    it('NPX-UNINSTALL-001: spawns `npx skills remove <ref> -g` by default', async () => {
+      const spawner = new FakeSpawner();
+      const promise = uninstallSkillViaNpx({
+        spawner,
+        ref: 'ef-feature',
+        cwd: VALID_CWD,
+      });
+      expect(spawner.lastOptions?.command).toBe('npx');
+      expect(spawner.lastOptions?.args).toEqual(['skills', 'remove', 'ef-feature', '-g']);
+      expect(spawner.lastOptions?.cwd).toBe(VALID_CWD);
+      spawner.lastSpawned?.emitExit(0, null);
+      const result = await promise;
+      expect(result.status).toBe('installed'); // shared union — "npm op succeeded"
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('NPX-UNINSTALL-002: rejects invalid ref before spawning', async () => {
+      const spawner = new FakeSpawner();
+      await expect(
+        uninstallSkillViaNpx({ spawner, ref: 'foo; rm -rf /', cwd: VALID_CWD }),
+      ).rejects.toBeInstanceOf(InvalidSkillRefError);
+      expect(spawner.lastOptions).toBeNull();
+    });
+
+    it('NPX-UNINSTALL-003: non-zero exit → status: failed (with stderr tail)', async () => {
+      const spawner = new FakeSpawner();
+      const promise = uninstallSkillViaNpx({ spawner, ref: 'nope', cwd: VALID_CWD });
+      spawner.lastSpawned?.emitStderr('npm ERR! not installed\n');
+      spawner.lastSpawned?.emitExit(1, null);
+      const result = await promise;
+      expect(result.status).toBe('failed');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('not installed');
+    });
+
+    it('NPX-UNINSTALL-004: timeout kills child + resolves failed', async () => {
+      const spawner = new FakeSpawner();
+      const promise = uninstallSkillViaNpx({
+        spawner,
+        ref: 'slow',
+        cwd: VALID_CWD,
+        timeoutMs: 5,
+      });
+      const result = await promise;
+      expect(result.status).toBe('failed');
+      expect(spawner.lastSpawned?.lastSignal).toBe('SIGTERM');
+      expect(result.stderr).toContain('timed out');
+    });
+
+    it('NPX-UNINSTALL-005: spawn error resolves failed with diagnostic', async () => {
+      const spawner = new FakeSpawner();
+      const promise = uninstallSkillViaNpx({ spawner, ref: 'noop', cwd: VALID_CWD });
+      spawner.lastSpawned?.emitError(new Error('ENOENT npx'));
+      const result = await promise;
+      expect(result.status).toBe('failed');
+      expect(result.exitCode).toBeNull();
+      expect(result.stderr).toContain('ENOENT npx');
     });
   });
 });

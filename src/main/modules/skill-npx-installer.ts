@@ -65,6 +65,28 @@ export class InvalidSkillRefError extends Error {
   }
 }
 
+export interface UninstallSkillOptions {
+  spawner: Spawner;
+  /** Skill reference to remove. Same regex validation as install. */
+  ref: string;
+  /** Working directory for the spawn. Typically `app.getPath('userData')`. */
+  cwd: string;
+  /** Override the binary. Defaults to `npx`. */
+  command?: string;
+  /** Override the remove flags. Defaults to `-g`. */
+  flags?: ReadonlyArray<string>;
+  /** Hard timeout in ms. Defaults to 5 minutes. */
+  timeoutMs?: number;
+}
+
+export interface UninstallSkillResult {
+  /** Reuses the install status union — `installed` ⇒ successfully removed. */
+  status: SkillInstallStatus;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+}
+
 export async function installSkillViaNpx(
   options: InstallSkillOptions,
 ): Promise<InstallSkillResult> {
@@ -92,6 +114,87 @@ export async function installSkillViaNpx(
   });
 
   return await new Promise<InstallSkillResult>((resolve) => {
+    let resolved = false;
+    const timer = setTimeout(() => {
+      if (resolved) return;
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        // ignore
+      }
+      resolved = true;
+      resolve({
+        status: 'failed',
+        stdout: stdoutTail,
+        stderr: stderrTail + '\n[timed out]',
+        exitCode: null,
+      });
+    }, timeoutMs);
+
+    child.on('exit', (code) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      resolve({
+        status: code === 0 ? 'installed' : 'failed',
+        stdout: stdoutTail,
+        stderr: stderrTail,
+        exitCode: code,
+      });
+    });
+
+    child.on('error', (err) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      resolve({
+        status: 'failed',
+        stdout: stdoutTail,
+        stderr: stderrTail + `\n[spawn error] ${err.message}`,
+        exitCode: null,
+      });
+    });
+  });
+}
+
+/**
+ * Mirror of `installSkillViaNpx` for removal. Spawns
+ * `npx skills remove <ref> -g`. Same regex validation + tail capture +
+ * timeout shape. Returns `status: 'installed'` on exit code 0 (the
+ * `SkillInstallStatus` union is reused for both install + remove —
+ * `'installed'` semantically reads as "the npm op succeeded"; renderer
+ * picks the right verb for its UI).
+ */
+export async function uninstallSkillViaNpx(
+  options: UninstallSkillOptions,
+): Promise<UninstallSkillResult> {
+  if (!SKILL_REF_REGEX.test(options.ref)) {
+    throw new InvalidSkillRefError(options.ref);
+  }
+  const command = options.command ?? 'npx';
+  // No `-y` — `skills remove` typically doesn't prompt, but the flag
+  // is harmless if it does; keeping flags minimal keeps the shell
+  // command surface predictable.
+  const flags = options.flags ?? ['-g'];
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  const child = options.spawner.spawn({
+    command,
+    args: ['skills', 'remove', options.ref, ...flags],
+    cwd: options.cwd,
+  });
+
+  let stdoutTail = '';
+  let stderrTail = '';
+
+  child.stdout?.on('data', (chunk) => {
+    stdoutTail = appendTail(stdoutTail, chunk.toString('utf8'));
+  });
+  child.stderr?.on('data', (chunk) => {
+    stderrTail = appendTail(stderrTail, chunk.toString('utf8'));
+  });
+
+  return await new Promise<UninstallSkillResult>((resolve) => {
     let resolved = false;
     const timer = setTimeout(() => {
       if (resolved) return;

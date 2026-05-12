@@ -64,6 +64,7 @@ interface ApiStub {
   list: ReturnType<typeof vi.fn>;
   openPath: ReturnType<typeof vi.fn>;
   install: ReturnType<typeof vi.fn>;
+  remove: ReturnType<typeof vi.fn>;
   findStart: ReturnType<typeof vi.fn>;
   findCancel: ReturnType<typeof vi.fn>;
 }
@@ -81,6 +82,7 @@ function installApi(opts?: {
     .mockResolvedValue(opts?.listResult ?? { ok: true, data: { skills: [] } });
   const openPath = vi.fn().mockResolvedValue({ ok: true, data: null });
   const install = vi.fn().mockResolvedValue(unusedErr());
+  const remove = vi.fn().mockResolvedValue(unusedErr());
   const findStart = vi.fn().mockResolvedValue(unusedErr());
   const findCancel = vi.fn().mockResolvedValue(unusedErr());
 
@@ -166,6 +168,7 @@ function installApi(opts?: {
     skills: {
       list,
       install,
+      remove,
       findStart,
       findCancel,
       onFindOutput: vi.fn(() => () => {}),
@@ -177,7 +180,7 @@ function installApi(opts?: {
   } as IpcApi;
 
   (window as { api?: IpcApi }).api = api;
-  return { api, list, openPath, install, findStart, findCancel };
+  return { api, list, openPath, install, remove, findStart, findCancel };
 }
 
 afterEach(() => {

@@ -164,6 +164,7 @@ function installApi(opts?: {
     skills: {
       list: skillsList,
       install: vi.fn().mockResolvedValue(unusedErr()),
+      remove: vi.fn().mockResolvedValue(unusedErr()),
       findStart: vi.fn().mockResolvedValue(unusedErr()),
       findCancel: vi.fn().mockResolvedValue(unusedErr()),
       onFindOutput: vi.fn(() => () => {}),

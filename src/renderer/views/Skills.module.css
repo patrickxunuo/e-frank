@@ -59,12 +59,16 @@
 }
 
 /*
- * Refresh button icon spin while a refetch is in flight. Same pattern
- * as ProjectDetail's `.refreshSpinning` (GH-57 #5) — locks the span to a
- * 14x14 inline-flex box so the rotation pivot doesn't drift with the
- * surrounding text baseline.
+ * Refresh button icon wrapper. ALWAYS apply this — the inline-flex box
+ * with a fixed size and `vertical-align: middle` is what keeps the
+ * icon centered against the Button's text baseline (without it, the
+ * SVG defaults to inline and sits on the baseline → drops the glyph
+ * below the label). `.refreshSpinning` is layered on top for the
+ * actual rotation animation while a refetch is in flight; without
+ * the wrapper class the rotation pivot drifts because the bounding
+ * box is line-baseline-anchored.
  */
-.refreshSpinning {
+.refreshIcon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -72,6 +76,9 @@
   height: 14px;
   vertical-align: middle;
   transform-origin: center center;
+}
+
+.refreshSpinning {
   animation: skillsRspin 0.8s linear infinite;
 }
 
@@ -182,4 +189,44 @@
   align-items: center;
   gap: var(--space-2);
   justify-content: flex-end;
+}
+
+/*
+ * Remove-skill confirmation dialog. Mirrors the run-delete dialog
+ * shape from ProjectDetail — body paragraph + optional error chip +
+ * Cancel / Destructive action row.
+ */
+.removeDialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.removeDialogBody code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-primary);
+  background: var(--surface-overlay-low);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.removeDialogError {
+  font-size: 12.5px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.removeDialogActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
 }

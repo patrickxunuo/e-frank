@@ -29,27 +29,42 @@ const DEFAULT_SKILL_NAME = 'find-skills';
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * Build the prompt Claude receives. Wraps the user's `<query>` in a
- * structured-output meta-prompt that asks Claude to use `/find-skills`
- * internally and respond ONLY with a JSON array. Kept single-line so
- * cmd.exe / `shell: true` quoting doesn't get confused by embedded
+ * Build the prompt Claude receives. Asks Claude directly for skill
+ * recommendations with a strict JSON-array output format. Single-line
+ * so cmd.exe / `shell: true` quoting doesn't get confused by embedded
  * newlines inside the argv element.
  *
- * Exported so unit tests can assert against the exact prompt string
- * without having to inspect a mocked spawn call's args.
+ * Why no `/find-skills` slash-command wrapper here: in practice, the
+ * slash-command output short-circuits Claude's response — it returns
+ * the prose-formatted output from the skill verbatim and ignores the
+ * "Respond ONLY with JSON" instruction, defeating the parser. Asking
+ * Claude directly for a recommendation lets the structured-output
+ * directive actually stick. Claude's general knowledge of public
+ * Claude Code skills covers the common case; users who want a
+ * specific ref the model doesn't recall can paste it into the manual
+ * install input.
+ *
+ * Exported so unit tests can assert against the prompt string without
+ * having to inspect a mocked spawn call's args.
+ *
+ * The `skillName` param is kept for forward-compat / overrides but is
+ * no longer used in the default prompt — callers that DO want the
+ * slash-command path can pass a custom prompt builder via the
+ * SkillFinder options if it becomes useful later.
  */
-export function buildFindSkillsPrompt(skillName: string, query: string): string {
+export function buildFindSkillsPrompt(_skillName: string, query: string): string {
   const q = query.trim();
   return (
-    `Use the /${skillName} skill to find Claude Code skills matching: "${q}". ` +
-    `Respond ONLY with a JSON array, no prose before or after. ` +
+    `I need Claude Code skill recommendations for: "${q}". ` +
+    `List up to 5 relevant public Claude Code skills you know about. ` +
+    `Respond ONLY with a JSON array, no prose before or after, no markdown fences. ` +
     `Each item must be an object with these exact fields: ` +
     `"name" (string, the skill display name), ` +
     `"ref" (string, the install reference like "ef-feature" or "owner/repo"), ` +
     `"description" (string, one-line, max ~120 chars), ` +
     `"stars" (number or null, GitHub stars if known). ` +
     `Example: [{"name":"ef-feature","ref":"ef-feature","description":"Ticket-to-PR workflow","stars":42}]. ` +
-    `If no skills match, respond with [].`
+    `If you don't know any matching skills, respond with [].`
   );
 }
 

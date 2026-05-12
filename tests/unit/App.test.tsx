@@ -173,6 +173,7 @@ function makeIpcApiStub(
     skills: {
       list: vi.fn<IpcApi['skills']['list']>().mockResolvedValue(unusedErr()),
       install: vi.fn<IpcApi['skills']['install']>().mockResolvedValue(unusedErr()),
+      remove: vi.fn<IpcApi['skills']['remove']>().mockResolvedValue(unusedErr()),
       findStart: vi.fn<IpcApi['skills']['findStart']>().mockResolvedValue(unusedErr()),
       findCancel: vi.fn<IpcApi['skills']['findCancel']>().mockResolvedValue(unusedErr()),
       onFindOutput: vi.fn<IpcApi['skills']['onFindOutput']>(() => () => {}),

@@ -67,6 +67,8 @@ import {
   type SkillsListResponse,
   type SkillsInstallRequest,
   type SkillsInstallResponse,
+  type SkillsRemoveRequest,
+  type SkillsRemoveResponse,
   type SkillsFindStartRequest,
   type SkillsFindStartResponse,
   type SkillsFindCancelRequest,
@@ -388,6 +390,11 @@ const api: IpcApi = {
     install: (req: SkillsInstallRequest): Promise<IpcResult<SkillsInstallResponse>> =>
       ipcRenderer.invoke(IPC_CHANNELS.SKILLS_INSTALL, req) as Promise<
         IpcResult<SkillsInstallResponse>
+      >,
+
+    remove: (req: SkillsRemoveRequest): Promise<IpcResult<SkillsRemoveResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SKILLS_REMOVE, req) as Promise<
+        IpcResult<SkillsRemoveResponse>
       >,
 
     findStart: (req: SkillsFindStartRequest): Promise<IpcResult<SkillsFindStartResponse>> =>

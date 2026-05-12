@@ -149,7 +149,9 @@ function installApi(opts?: {
     },
     skills: {
       list: vi.fn() as unknown as IpcApi['skills']['list'],
+      
       install: vi.fn() as unknown as IpcApi['skills']['install'],
+      remove: vi.fn() as unknown as IpcApi['skills']['remove'],
       findStart: vi.fn() as unknown as IpcApi['skills']['findStart'],
       findCancel: vi.fn() as unknown as IpcApi['skills']['findCancel'],
       onFindOutput: vi.fn(() => () => {}) as unknown as IpcApi['skills']['onFindOutput'],

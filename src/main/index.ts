@@ -57,6 +57,7 @@ import {
   type SkillsListResponse,
   type SkillsInstallRequest,
   type SkillsInstallResponse,
+  type SkillsRemoveResponse,
   type SkillsFindStartResponse,
   type SkillsFindOutputEvent,
   type SkillsFindExitEvent,
@@ -100,6 +101,7 @@ import { scanInstalledSkills } from './modules/skills-scanner.js';
 import {
   installSkillViaNpx,
   InvalidSkillRefError,
+  uninstallSkillViaNpx,
 } from './modules/skill-npx-installer.js';
 import {
   SkillFinder,
@@ -1845,6 +1847,43 @@ function registerIpcHandlers(): void {
         }
         const message = err instanceof Error ? err.message : String(err);
         return { ok: false, error: { code: 'INSTALL_FAILED', message } };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.SKILLS_REMOVE,
+    async (_event, raw): Promise<IpcResult<SkillsRemoveResponse>> => {
+      // Same shape-check + regex defense as the install handler; the
+      // `uninstallSkillViaNpx` module also validates the ref but we
+      // do it here too so a malformed payload never reaches the
+      // shell:true spawn.
+      const refRaw =
+        typeof raw === 'object' && raw !== null && 'ref' in raw
+          ? (raw as { ref?: unknown }).ref
+          : undefined;
+      if (typeof refRaw !== 'string' || refRaw.trim() === '') {
+        return {
+          ok: false,
+          error: { code: 'INVALID_REQUEST', message: 'ref must be a non-empty string' },
+        };
+      }
+      try {
+        const result = await uninstallSkillViaNpx({
+          spawner: new NodeSpawner(),
+          ref: refRaw,
+          cwd: app.getPath('userData'),
+        });
+        return { ok: true, data: result };
+      } catch (err) {
+        if (err instanceof InvalidSkillRefError) {
+          return {
+            ok: false,
+            error: { code: err.code, message: err.message },
+          };
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: { code: 'REMOVE_FAILED', message } };
       }
     },
   );

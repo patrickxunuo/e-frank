@@ -3,9 +3,10 @@ import type { SkillSource, SkillSummary } from '@shared/ipc';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
+import { Dialog } from '../components/Dialog';
 import { EmptyState } from '../components/EmptyState';
 import { FindSkillDialog } from '../components/FindSkillDialog';
-import { IconRefresh, IconSkills } from '../components/icons';
+import { IconRefresh, IconSkills, IconTrash } from '../components/icons';
 import { useSkills } from '../state/skills';
 import styles from './Skills.module.css';
 
@@ -14,9 +15,17 @@ function sourceLabel(source: SkillSource): string {
 }
 
 export function Skills(): JSX.Element {
-  const { skills, loading, error, refresh } = useSkills();
+  const { skills, loading, error, refresh, remove } = useSkills();
   const [findOpen, setFindOpen] = useState<boolean>(false);
   const [findPrefill, setFindPrefill] = useState<string>('');
+  // Remove-skill confirmation state. `pending` carries the skill being
+  // confirmed so the dialog can show its name. `removing` blocks the
+  // confirm button while the IPC round-trip is in flight so a
+  // double-click can't fan out two npm removes. `error` surfaces the
+  // result inline in the dialog rather than the page-level area.
+  const [pendingRemove, setPendingRemove] = useState<SkillSummary | null>(null);
+  const [removing, setRemoving] = useState<boolean>(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   // "Refreshing" = a refetch with data already on screen. The Skills page
   // separates this from the initial load so the table stays mounted +
   // the user gets a spinning icon as feedback. (The icon-only feedback
@@ -36,6 +45,23 @@ export function Skills(): JSX.Element {
   const handleAfterInstall = useCallback((): void => {
     void refresh();
   }, [refresh]);
+
+  const handleConfirmRemove = useCallback(async (): Promise<void> => {
+    if (pendingRemove === null || removing) return;
+    setRemoving(true);
+    setRemoveError(null);
+    // The scanner uses the directory basename as `id`, which is also
+    // the install ref (`ef-feature` for `~/.claude/skills/ef-feature/`).
+    // Pass it through to the remove IPC.
+    const result = await remove(pendingRemove.id);
+    setRemoving(false);
+    if (result.ok) {
+      // useSkills.remove() already refreshed the list — just dismiss.
+      setPendingRemove(null);
+    } else {
+      setRemoveError(result.error ?? 'Failed to remove skill');
+    }
+  }, [pendingRemove, removing, remove]);
 
   const columns: DataTableColumn<SkillSummary>[] = useMemo(
     () => [
@@ -67,7 +93,7 @@ export function Skills(): JSX.Element {
         key: 'actions',
         header: '',
         align: 'right',
-        width: '120px',
+        width: '180px',
         render: (row) => (
           <div className={styles.actionsCell}>
             <Button
@@ -81,6 +107,18 @@ export function Skills(): JSX.Element {
             >
               Open
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              leadingIcon={<IconTrash size={14} />}
+              onClick={(e) => {
+                e.stopPropagation();
+                setRemoveError(null);
+                setPendingRemove(row);
+              }}
+              data-testid={`skill-row-${row.id}-remove`}
+              aria-label={`Remove ${row.name}`}
+            />
           </div>
         ),
       },
@@ -112,7 +150,9 @@ export function Skills(): JSX.Element {
             variant="ghost"
             size="sm"
             leadingIcon={
-              <span className={refreshing ? styles.refreshSpinning : undefined}>
+              <span
+                className={`${styles.refreshIcon} ${refreshing ? styles.refreshSpinning : ''}`}
+              >
                 <IconRefresh size={14} />
               </span>
             }
@@ -200,6 +240,64 @@ export function Skills(): JSX.Element {
         onClose={() => setFindOpen(false)}
         onInstalled={handleAfterInstall}
       />
+
+      <Dialog
+        open={pendingRemove !== null}
+        onClose={() => {
+          if (removing) return; // can't dismiss while npm is running
+          setPendingRemove(null);
+          setRemoveError(null);
+        }}
+        title="Remove skill?"
+        subtitle={
+          pendingRemove !== null
+            ? `${pendingRemove.name} (${pendingRemove.id})`
+            : undefined
+        }
+        data-testid="skill-remove-dialog"
+      >
+        <div className={styles.removeDialogBody}>
+          <p>
+            This runs <code>npx skills remove {pendingRemove?.id ?? ''}</code>{' '}
+            and refreshes the list. The skill folder is gone after the
+            command succeeds — undo means reinstalling from{' '}
+            <strong>Find Skill</strong>.
+          </p>
+          {removeError !== null && (
+            <div
+              className={styles.removeDialogError}
+              role="alert"
+              data-testid="skill-remove-error"
+            >
+              {removeError}
+            </div>
+          )}
+          <div className={styles.removeDialogActions}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setPendingRemove(null);
+                setRemoveError(null);
+              }}
+              disabled={removing}
+              data-testid="skill-remove-cancel"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              leadingIcon={<IconTrash size={12} />}
+              onClick={() => {
+                void handleConfirmRemove();
+              }}
+              disabled={removing}
+              data-testid="skill-remove-confirm"
+            >
+              {removing ? 'Removing…' : 'Remove skill'}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
     </div>
   );
 }

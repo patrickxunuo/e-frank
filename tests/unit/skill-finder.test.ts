@@ -37,13 +37,13 @@ describe('SkillFinder', () => {
     expect(opts?.command).toBe('claude');
     expect(opts?.args?.[0]).toBe('--dangerously-skip-permissions');
     expect(opts?.args?.[1]).toBe('-p');
-    // The prompt now wraps the query in a structured-output meta-prompt;
-    // assert the query is embedded and the JSON-output directive is
-    // present. We don't pin the exact wording so prompt iterations don't
-    // break this test for no reason.
+    // The prompt asks Claude for structured JSON recommendations
+    // directly — no `/find-skills` slash-command wrapper. Assert the
+    // query is embedded and the JSON-output directive is present.
+    // Don't pin exact wording so prompt iterations don't break this
+    // test for no reason.
     const prompt = opts?.args?.[2] ?? '';
     expect(prompt).toContain('image cropping');
-    expect(prompt).toContain('/find-skills');
     expect(prompt).toContain('JSON array');
     expect(prompt).toContain('"name"');
     expect(prompt).toContain('"ref"');

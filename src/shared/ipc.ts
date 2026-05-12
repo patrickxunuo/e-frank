@@ -136,9 +136,10 @@ export const IPC_CHANNELS = {
   CHROME_GET_STATE: 'chrome:get-state',
   /** event channel (main -> renderer) */
   CHROME_STATE_CHANGED: 'chrome:state-changed',
-  // -- Skill management (issue #GH-38) -- discover, install, list --
+  // -- Skill management (issue #GH-38) -- discover, install, list, remove --
   SKILLS_LIST: 'skills:list',
   SKILLS_INSTALL: 'skills:install',
+  SKILLS_REMOVE: 'skills:remove',
   SKILLS_FIND_START: 'skills:find-start',
   SKILLS_FIND_CANCEL: 'skills:find-cancel',
   /** event channel (main -> renderer) */
@@ -521,6 +522,22 @@ export interface SkillsInstallResponse {
   exitCode: number | null;
 }
 
+export interface SkillsRemoveRequest {
+  /** Skill reference to remove. Same regex validation as install. */
+  ref: string;
+}
+
+export interface SkillsRemoveResponse {
+  /** `'installed'` on the underlying union reads as "the npm op succeeded";
+   * the Skills page renders the right verb based on which IPC was called. */
+  status: SkillInstallStatus;
+  /** Last ~4KB of stdout. */
+  stdout: string;
+  /** Last ~4KB of stderr. */
+  stderr: string;
+  exitCode: number | null;
+}
+
 export interface SkillsFindStartRequest {
   /** User's natural-language search query. */
   query: string;
@@ -671,6 +688,7 @@ export interface IpcApi {
   skills: {
     list: () => Promise<IpcResult<SkillsListResponse>>;
     install: (req: SkillsInstallRequest) => Promise<IpcResult<SkillsInstallResponse>>;
+    remove: (req: SkillsRemoveRequest) => Promise<IpcResult<SkillsRemoveResponse>>;
     findStart: (req: SkillsFindStartRequest) => Promise<IpcResult<SkillsFindStartResponse>>;
     findCancel: (req: SkillsFindCancelRequest) => Promise<IpcResult<{ findId: string }>>;
     /** Subscribe to streaming find-skills output. Returns unsubscribe fn. */
