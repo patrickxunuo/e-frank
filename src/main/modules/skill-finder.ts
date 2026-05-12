@@ -54,27 +54,29 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
  */
 export function buildFindSkillsPrompt(_skillName: string, query: string): string {
   const q = query.trim();
-  // Framing: treat the user's text as a natural-language description
-  // of *intent*, not as a keyword to search for. Empirically Claude
-  // would otherwise latch onto the first content word — a query like
-  // "find a skill that can design my personal portfolio" came back as
-  // skills containing "find" in their name (find-bugs, find-keywords,
-  // …) instead of skills relevant to portfolio design. The "filler
-  // phrases" line tells Claude to strip the meta-language and focus
-  // on what the user actually wants to accomplish.
+  // The prompt is intentionally template-style (TASK / INTENT / RULES /
+  // FIELDS / EXAMPLE) rather than conversational. Conversational
+  // phrasing ("A user is searching for a skill that…") kept making
+  // Claude default to chat-assistant mode — it would offer to invoke
+  // a skill ("Want me to run find-skills for you?"), ask clarifying
+  // questions, or pick the first-word keyword ("find") as a literal
+  // search term. The directive shape with explicit forbidden
+  // behaviors gets Claude into data-generation mode.
   return (
-    `A user is searching for a Claude Code skill that helps with this task: "${q}". ` +
-    `Treat the quoted text as a natural-language description of what they want to accomplish, NOT a literal keyword search. ` +
-    `Strip filler phrases like "find a skill that can", "I need", "help me", "for me" — focus on the underlying intent. ` +
-    `Recommend up to 5 public Claude Code skills that would help with that intent. ` +
-    `Respond ONLY with a JSON array, no prose before or after, no markdown fences. ` +
-    `Each item must be an object with these exact fields: ` +
+    `TASK: Output a JSON array of up to 5 public Claude Code skills relevant to the user's intent below. ` +
+    `INTENT: "${q}". ` +
+    `RULES: ` +
+    `(1) Treat the intent as a natural-language description of what the user wants to accomplish, NOT a literal keyword search. ` +
+    `Strip filler phrases like "find a skill that can", "I need", "help me", "for me" — focus on the underlying task. ` +
+    `(2) Output ONLY the JSON array. No prose before or after. No markdown fences. No tables. No bullet lists. ` +
+    `(3) Do NOT offer to invoke, run, or use any skill. Do NOT ask clarifying questions. Do NOT explain your reasoning. ` +
+    `(4) If you don't know any matching skills, output []. ` +
+    `FIELDS (each item must be an object with exactly these keys): ` +
     `"name" (string, the skill display name), ` +
     `"ref" (string, prefer the full "owner/repo@skill" install reference like "vercel-labs/skills@frontend-design"), ` +
-    `"description" (string, one-line, max ~120 chars), ` +
+    `"description" (string, one line, max ~120 chars), ` +
     `"stars" (number or null, GitHub stars or install count if known). ` +
-    `Example: [{"name":"frontend-design","ref":"vercel-labs/skills@frontend-design","description":"Distinctive production-grade UI","stars":42}]. ` +
-    `If you don't know any matching skills, respond with [].`
+    `EXAMPLE OUTPUT: [{"name":"frontend-design","ref":"vercel-labs/skills@frontend-design","description":"Distinctive production-grade UI","stars":42}]`
   );
 }
 
