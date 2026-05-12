@@ -422,31 +422,55 @@ describe('<FindSkillDialog /> — DIALOG-FIND', () => {
   });
 
   // -------------------------------------------------------------------------
-  // DIALOG-FIND-010 — Closing the dialog mid-find calls findCancel
+  // DIALOG-FIND-010 — Closing the dialog mid-find is blocked
   // -------------------------------------------------------------------------
-  it('DIALOG-FIND-010: closing the dialog while a find is in flight calls findCancel', async () => {
+  // Rationale: Claude's output is the *result* of the search, so an
+  // accidental backdrop click / Esc shouldn't throw away 30s of streamed
+  // candidates. The user must click Stop explicitly; once the cancel
+  // resolves (`activeFindId` clears) backdrop / Esc close normally.
+  it('DIALOG-FIND-010: closing the dialog while a find is in flight is blocked', async () => {
     const stub = installApi();
     const onClose = vi.fn();
-    const { rerender } = render(
-      <FindSkillDialog open={true} initialQuery="ef-feature" onClose={onClose} />,
-    );
+    render(<FindSkillDialog open={true} initialQuery="ef-feature" onClose={onClose} />);
 
-    // Kick off a find so activeFindId becomes 'find-1'.
     fireEvent.click(screen.getByTestId('find-skill-submit'));
     await screen.findByTestId('find-skill-cancel');
 
-    // Simulate closing via the Dialog's Esc/backdrop path. The dialog
-    // delegates that to its `onClose` prop, which (per FindSkillDialog)
-    // invokes handleCancel() before calling the parent onClose. Press Esc
-    // to drive that path through the real Dialog event handler.
+    // Esc should be a no-op while finding — no cancel fired, parent
+    // onClose not invoked, dialog still open.
     fireEvent.keyDown(document, { key: 'Escape' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(stub.findCancel).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('find-skill-dialog')).toBeInTheDocument();
+  });
 
+  // -------------------------------------------------------------------------
+  // DIALOG-FIND-011 — After Stop completes, normal close works again
+  // -------------------------------------------------------------------------
+  it('DIALOG-FIND-011: after cancel resolves, Esc closes the dialog normally', async () => {
+    const stub = installApi();
+    const onClose = vi.fn();
+    render(<FindSkillDialog open={true} initialQuery="ef-feature" onClose={onClose} />);
+
+    fireEvent.click(screen.getByTestId('find-skill-submit'));
+    await screen.findByTestId('find-skill-cancel');
+
+    // User hits Stop → cancel resolves with a synthetic exit event,
+    // flipping isFinding back to false.
+    fireEvent.click(screen.getByTestId('find-skill-cancel'));
     await waitFor(() => {
       expect(stub.findCancel).toHaveBeenCalledTimes(1);
     });
-    expect(onClose).toHaveBeenCalled();
+    stub.emitExit({ findId: 'find-1', exitCode: null, signal: 'SIGTERM', durationMs: 5, reason: 'cancelled' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('find-skill-cancel')).not.toBeInTheDocument();
+    });
 
-    // Silence unused-var warning for rerender; helper exists for future use.
-    void rerender;
+    // Now Esc should close as usual.
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalled();
+    });
   });
 });

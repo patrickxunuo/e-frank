@@ -176,4 +176,67 @@ And maybe also \`other-skill\`.`;
     expect(result.candidates.length).toBe(1);
     expect(result.candidates[0]?.ref).toBe('json-skill');
   });
+
+  // -------------------------------------------------------------------------
+  // Markdown-table fallback — Claude's other favorite shape for "find"
+  // queries. Real example from a "find" query:
+  //   | Skill | Source | Installs | What it does |
+  //   |---|---|---|---|
+  //   | **find-skills** | `vercel-labs/skills` | 1.5M | Discover ... |
+  // The parser composes the install ref as `{source}@{name}` when the
+  // source looks like a repo path (matches the `npx skills add` syntax
+  // Claude itself recommends).
+  // -------------------------------------------------------------------------
+  it('CANDIDATE-PARSE-016: extracts candidates from markdown table (Claude "find" response)', () => {
+    const out = `Here are the top matches for "find":
+| Skill | Source | Installs | What it does |
+|---|---|---|---|
+| **find-skills** | \`vercel-labs/skills\` | 1.5M | Discover & install agent skills |
+| **recipe-find-free-time** | \`googleworkspace/cli\` | 12.8K | Find free time slots in Google Calendar |
+| **find-bugs** | \`getsentry/skills\` | 2.4K | Bug hunting via Sentry |
+The top result is the very skill that produced this list.`;
+    const result = parseSkillCandidates(out);
+    expect(result.parsed).toBe(true);
+    expect(result.candidates.length).toBe(3);
+    expect(result.candidates[0]?.name).toBe('find-skills');
+    expect(result.candidates[0]?.ref).toBe('vercel-labs/skills@find-skills');
+    expect(result.candidates[0]?.stars).toBe(1_500_000);
+    expect(result.candidates[0]?.description).toContain('Discover');
+    expect(result.candidates[1]?.ref).toBe('googleworkspace/cli@recipe-find-free-time');
+    expect(result.candidates[1]?.stars).toBe(12_800);
+    expect(result.candidates[2]?.ref).toBe('getsentry/skills@find-bugs');
+    expect(result.candidates[2]?.stars).toBe(2_400);
+  });
+
+  it('CANDIDATE-PARSE-017: parses installs counts with K/M/B suffixes', () => {
+    const out = `| Skill | Source | Installs | What it does |
+|---|---|---|---|
+| **a** | \`o/r\` | 42 | plain integer |
+| **b** | \`o/r\` | 1.5M | million |
+| **c** | \`o/r\` | 12.8K | thousand |
+| **d** | \`o/r\` | 2B | billion |
+| **e** | \`o/r\` | n/a | unparseable |`;
+    const result = parseSkillCandidates(out);
+    expect(result.parsed).toBe(true);
+    // 5 rows but the ref dedup folds them — each has same `o/r@{name}`
+    // unique ref because of unique names.
+    expect(result.candidates.length).toBe(5);
+    expect(result.candidates[0]?.stars).toBe(42);
+    expect(result.candidates[1]?.stars).toBe(1_500_000);
+    expect(result.candidates[2]?.stars).toBe(12_800);
+    expect(result.candidates[3]?.stars).toBe(2_000_000_000);
+    expect(result.candidates[4]?.stars).toBeNull();
+  });
+
+  it('CANDIDATE-PARSE-018: table takes priority over bulleted list when both present', () => {
+    const out = `| Skill | Source | What it does |
+|---|---|---|
+| **table-skill** | \`o/r\` | from table |
+
+- \`bullet-skill\` — from bullets`;
+    const result = parseSkillCandidates(out);
+    expect(result.parsed).toBe(true);
+    expect(result.candidates.length).toBe(1);
+    expect(result.candidates[0]?.name).toBe('table-skill');
+  });
 });

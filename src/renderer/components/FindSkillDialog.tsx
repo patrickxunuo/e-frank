@@ -211,9 +211,13 @@ export function FindSkillDialog({
     <Dialog
       open={open}
       onClose={() => {
-        if (isFinding) {
-          void handleCancel();
-        }
+        // Block backdrop / Esc / X-button close while a find is in
+        // flight — Claude's output is the *result* of the search, so
+        // an accidental click outside shouldn't throw away 30s of
+        // streamed candidates. The user must hit Stop explicitly to
+        // cancel; once `isFinding` flips false the dialog closes
+        // normally.
+        if (isFinding) return;
         onClose();
       }}
       size="lg"

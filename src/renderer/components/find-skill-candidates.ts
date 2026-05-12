@@ -84,6 +84,85 @@ function extractFromMarkdown(output: string): SkillCandidate[] {
   return candidates;
 }
 
+const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
+const TABLE_SEP_CELL_RE = /^:?-+:?$/;
+const INSTALL_COUNT_RE = /^(\d+(?:\.\d+)?)\s*([KkMmBb])?/;
+
+function parseRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
+function cleanCell(cell: string): string {
+  // Strip surrounding markdown bold + code-span markers.
+  return cell.replace(/\*\*/g, '').replace(/`/g, '').trim();
+}
+
+function parseInstallsCount(text: string): number | null {
+  const m = INSTALL_COUNT_RE.exec(text.trim());
+  if (m === null) return null;
+  const base = parseFloat(m[1] ?? '');
+  if (!Number.isFinite(base)) return null;
+  const suffix = (m[2] ?? '').toLowerCase();
+  const multiplier =
+    suffix === 'k' ? 1_000 : suffix === 'm' ? 1_000_000 : suffix === 'b' ? 1_000_000_000 : 1;
+  return Math.max(0, Math.floor(base * multiplier));
+}
+
+/**
+ * Claude's *other* favorite shape: a markdown table with columns like
+ * `| Skill | Source | Installs | What it does |`. Header detection
+ * maps cells to roles; rows compose `{source}@{name}` as the install
+ * ref when source looks like a repo path (contains `/`), matching the
+ * `npx skills add owner/repo@skill` convention.
+ */
+function extractFromMarkdownTable(output: string): SkillCandidate[] {
+  const tableLines = output
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => TABLE_ROW_RE.test(l));
+  if (tableLines.length < 3) return [];
+
+  const headerRow = tableLines[0];
+  const sepRow = tableLines[1];
+  if (headerRow === undefined || sepRow === undefined) return [];
+  const header = parseRow(headerRow);
+  const sep = parseRow(sepRow);
+  if (sep.length === 0 || !sep.every((c) => TABLE_SEP_CELL_RE.test(c))) return [];
+
+  const findCol = (re: RegExp): number => header.findIndex((h) => re.test(h));
+  const nameCol = findCol(/\b(skill|name)\b/i);
+  const srcCol = findCol(/\b(source|ref|repo)\b/i);
+  const descCol = findCol(/\b(what|desc|about)/i);
+  const starsCol = findCol(/\b(install|star|score)/i);
+  if (nameCol === -1 || srcCol === -1) return [];
+
+  const candidates: SkillCandidate[] = [];
+  const seen = new Set<string>();
+  for (let i = 2; i < tableLines.length; i++) {
+    const row = tableLines[i];
+    if (row === undefined) continue;
+    const cells = parseRow(row);
+    const name = cleanCell(cells[nameCol] ?? '');
+    const src = cleanCell(cells[srcCol] ?? '');
+    if (name === '' || src === '') continue;
+    // Compose installable ref. Repo-style sources (`owner/repo`) need
+    // the `@skill` suffix for `npx skills add` to know which skill to
+    // pull. Plain refs stand on their own.
+    const ref = src.includes('/') && !src.includes('@') ? `${src}@${name}` : src;
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    const description = descCol >= 0 ? cleanCell(cells[descCol] ?? '') : '';
+    const stars = starsCol >= 0 ? parseInstallsCount(cells[starsCol] ?? '') : null;
+    candidates.push({ name, ref, description, stars });
+  }
+  return candidates;
+}
+
 export function parseSkillCandidates(output: string): ParseResult {
   if (output === '') {
     return { candidates: [], parsed: false };
@@ -123,11 +202,17 @@ export function parseSkillCandidates(output: string): ParseResult {
     }
   }
 
-  // Fallback: Claude often ignores the JSON-only instruction and gives
-  // a beautifully-structured markdown response. Scan the prose for
-  // `- ` + backticked-ref + separator + description lines. This is
-  // empirically the format Claude uses for skill recommendations.
-  // Stars aren't included in prose; the UI renders "—" for them.
+  // Fallback A: Claude returned a markdown table. Common shape:
+  //   | Skill | Source | Installs | What it does |
+  //   |---|---|---|---|
+  //   | **find-skills** | `vercel-labs/skills` | 1.5M | ... |
+  const fromTable = extractFromMarkdownTable(stripped);
+  if (fromTable.length > 0) {
+    return { candidates: fromTable, parsed: true };
+  }
+
+  // Fallback B: Claude returned a bulleted list of `ref` — description
+  // lines (the portfolio-designer query format).
   const fromMarkdown = extractFromMarkdown(stripped);
   if (fromMarkdown.length > 0) {
     return { candidates: fromMarkdown, parsed: true };
