@@ -106,4 +106,74 @@ describe('parseSkillCandidates', () => {
     expect(result.parsed).toBe(false);
     expect(result.candidates).toEqual([]);
   });
+
+  // -------------------------------------------------------------------------
+  // Markdown fallback — Claude often ignores the JSON-only instruction
+  // and gives a structured prose response. The parser falls through to
+  // a markdown extractor that pulls `- \`ref\` — description` lines
+  // out of the response. Empirically validated against real Claude
+  // output from the porfolio-designer query.
+  // -------------------------------------------------------------------------
+  it('CANDIDATE-PARSE-011: extracts candidates from em-dash bullet list (Claude prose)', () => {
+    const out = `For building or improving a portfolio:
+**Core build**
+- \`frontend-design\` — distinctive, production-grade UI that avoids generic AI aesthetics.
+- \`design-dna\` — extract a design system from references.
+**Visual quality pass**
+- \`arrange\` — fix layout, spacing, visual hierarchy
+- \`polish\` — final alignment/spacing/detail sweep`;
+    const result = parseSkillCandidates(out);
+    expect(result.parsed).toBe(true);
+    expect(result.candidates.length).toBe(4);
+    expect(result.candidates.map((c) => c.ref)).toEqual([
+      'frontend-design',
+      'design-dna',
+      'arrange',
+      'polish',
+    ]);
+    expect(result.candidates[0]?.description).toContain('distinctive');
+    expect(result.candidates[0]?.stars).toBeNull();
+  });
+
+  it('CANDIDATE-PARSE-012: accepts various bullets + separators in markdown lines', () => {
+    const out = [
+      '- `a` — description-a',
+      '* `b` - description-b',
+      '• `c`: description-c',
+      '- `d` – description-d', // en-dash
+    ].join('\n');
+    const result = parseSkillCandidates(out);
+    expect(result.parsed).toBe(true);
+    expect(result.candidates.map((c) => c.ref)).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('CANDIDATE-PARSE-013: ignores code spans in prose that are not in bullet form', () => {
+    const out = `You should try the \`magic-skill\` for that.
+And maybe also \`other-skill\`.`;
+    const result = parseSkillCandidates(out);
+    // No bullet → not a candidate. The dialog falls back to raw stream.
+    expect(result.parsed).toBe(false);
+  });
+
+  it('CANDIDATE-PARSE-014: dedupes refs across markdown lines', () => {
+    const out = [
+      '- `foo` — first description',
+      '- `bar` — different',
+      '- `foo` — repeat with different text',
+    ].join('\n');
+    const result = parseSkillCandidates(out);
+    expect(result.parsed).toBe(true);
+    expect(result.candidates.length).toBe(2);
+    expect(result.candidates[0]?.description).toBe('first description');
+  });
+
+  it('CANDIDATE-PARSE-015: JSON takes priority over markdown if both present', () => {
+    const out = `Here are some skills:
+- \`prose-skill\` — found via markdown
+[{"name":"json-skill","ref":"json-skill","description":"from JSON","stars":7}]`;
+    const result = parseSkillCandidates(out);
+    expect(result.parsed).toBe(true);
+    expect(result.candidates.length).toBe(1);
+    expect(result.candidates[0]?.ref).toBe('json-skill');
+  });
 });

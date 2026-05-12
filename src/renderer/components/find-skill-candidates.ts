@@ -48,6 +48,42 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
+/**
+ * Markdown list-item pattern Claude tends to emit even when we ask for
+ * JSON. Captures lines like:
+ *   - `frontend-design` — distinctive, production-grade UI...
+ *   - `design-dna` - extract a design system from references
+ *   - `arrange`: fix layout
+ *   * `polish` — final alignment sweep
+ *
+ * Tolerates `-`, `*`, `•` bullets; backticks around the ref; `:`, `-`,
+ * or em-dash (`—` / `–`) as the separator between ref + description.
+ *
+ * The ref must look like an installable skill name (kebab-case + the
+ * `plugin:skill` form) so we don't pick up arbitrary code spans.
+ */
+const MARKDOWN_LINE_RE =
+  /^[\s]*[-*•]\s+`([a-z][a-z0-9-]*(?::[a-z][a-z0-9-]*)?)`\s*[:—–-]\s*(.+?)\s*$/i;
+
+function extractFromMarkdown(output: string): SkillCandidate[] {
+  const candidates: SkillCandidate[] = [];
+  const seen = new Set<string>();
+  for (const line of output.split('\n')) {
+    const m = MARKDOWN_LINE_RE.exec(line);
+    if (m === null) continue;
+    const ref = m[1]?.trim();
+    const description = m[2]?.trim() ?? '';
+    if (ref === undefined || ref === '' || seen.has(ref)) continue;
+    seen.add(ref);
+    // Claude's prose doesn't usually carry a separate name field —
+    // use the ref as the display name. Looks reasonable in cards
+    // (e.g. "frontend-design") and is how the skills page itself
+    // labels installed skills today.
+    candidates.push({ name: ref, ref, description, stars: null });
+  }
+  return candidates;
+}
+
 export function parseSkillCandidates(output: string): ParseResult {
   if (output === '') {
     return { candidates: [], parsed: false };
@@ -57,36 +93,45 @@ export function parseSkillCandidates(output: string): ParseResult {
   const stripped = output.replace(FENCE_OPEN, '').replace(FENCE_CLOSE, '');
   const start = stripped.indexOf('[');
   const end = stripped.lastIndexOf(']');
-  if (start === -1 || end === -1 || end <= start) {
-    return { candidates: [], parsed: false };
+  if (start !== -1 && end !== -1 && end > start) {
+    const slice = stripped.slice(start, end + 1);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(slice);
+    } catch {
+      raw = null;
+    }
+    if (Array.isArray(raw)) {
+      const candidates: SkillCandidate[] = [];
+      const seen = new Set<string>();
+      for (const item of raw) {
+        if (typeof item !== 'object' || item === null) continue;
+        const obj = item as Record<string, unknown>;
+        const name = typeof obj['name'] === 'string' ? obj['name'].trim() : '';
+        const ref = typeof obj['ref'] === 'string' ? obj['ref'].trim() : '';
+        if (name === '' || ref === '') continue;
+        if (seen.has(ref)) continue;
+        seen.add(ref);
+        const description =
+          typeof obj['description'] === 'string' ? obj['description'].trim() : '';
+        const stars = isFiniteNumber(obj['stars'])
+          ? Math.max(0, Math.floor(obj['stars']))
+          : null;
+        candidates.push({ name, ref, description, stars });
+      }
+      return { candidates, parsed: true };
+    }
   }
-  const slice = stripped.slice(start, end + 1);
 
-  let raw: unknown;
-  try {
-    raw = JSON.parse(slice);
-  } catch {
-    return { candidates: [], parsed: false };
-  }
-  if (!Array.isArray(raw)) {
-    return { candidates: [], parsed: false };
-  }
-
-  const candidates: SkillCandidate[] = [];
-  const seen = new Set<string>();
-  for (const item of raw) {
-    if (typeof item !== 'object' || item === null) continue;
-    const obj = item as Record<string, unknown>;
-    const name = typeof obj['name'] === 'string' ? obj['name'].trim() : '';
-    const ref = typeof obj['ref'] === 'string' ? obj['ref'].trim() : '';
-    if (name === '' || ref === '') continue;
-    if (seen.has(ref)) continue;
-    seen.add(ref);
-    const description =
-      typeof obj['description'] === 'string' ? obj['description'].trim() : '';
-    const stars = isFiniteNumber(obj['stars']) ? Math.max(0, Math.floor(obj['stars'])) : null;
-    candidates.push({ name, ref, description, stars });
+  // Fallback: Claude often ignores the JSON-only instruction and gives
+  // a beautifully-structured markdown response. Scan the prose for
+  // `- ` + backticked-ref + separator + description lines. This is
+  // empirically the format Claude uses for skill recommendations.
+  // Stars aren't included in prose; the UI renders "—" for them.
+  const fromMarkdown = extractFromMarkdown(stripped);
+  if (fromMarkdown.length > 0) {
+    return { candidates: fromMarkdown, parsed: true };
   }
 
-  return { candidates, parsed: true };
+  return { candidates: [], parsed: false };
 }

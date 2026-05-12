@@ -170,6 +170,19 @@ export class SkillFinder extends EventEmitter {
       args: [...this.opts.flags, prompt],
       cwd: this.opts.cwd,
     });
+    // Close stdin immediately so claude doesn't emit
+    //   "Warning: no stdin data received in 3s, proceeding without it"
+    // at the start of every find. With stdin closed, claude sees EOF
+    // right away and skips the 3-second wait. We never write to the
+    // finder's stdin — the prompt is passed as a `-p` argv positional.
+    try {
+      child.stdin?.end();
+    } catch {
+      // FakeSpawner's stdin is a no-op Writable; closing twice is
+      // harmless. Real ChildProcess.stdin.end() can throw only if the
+      // process exited synchronously between spawn and now, which is
+      // already handled by the exit listener.
+    }
     const timer = setTimeout(() => {
       this.handleTimeout();
     }, this.opts.timeoutMs);
