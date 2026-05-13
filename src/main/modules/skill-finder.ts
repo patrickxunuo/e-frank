@@ -54,29 +54,23 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
  */
 export function buildFindSkillsPrompt(_skillName: string, query: string): string {
   const q = query.trim();
-  // The prompt is intentionally template-style (TASK / INTENT / RULES /
-  // FIELDS / EXAMPLE) rather than conversational. Conversational
-  // phrasing ("A user is searching for a skill that…") kept making
-  // Claude default to chat-assistant mode — it would offer to invoke
-  // a skill ("Want me to run find-skills for you?"), ask clarifying
-  // questions, or pick the first-word keyword ("find") as a literal
-  // search term. The directive shape with explicit forbidden
-  // behaviors gets Claude into data-generation mode.
+  // Prompt strategy: tell Claude to USE the /find-skills slash command
+  // (which knows the real skill registry) rather than recall skills
+  // from training memory. A previous iteration of this prompt forbade
+  // "offering to invoke skills" in an attempt to stop chat-mode
+  // responses, but that rule also blocked Claude from using
+  // /find-skills as its own search tool — so it had no registry data
+  // to draw from and returned `[]` every time. The format ask is
+  // intentionally loose (JSON preferred, table/bullets acceptable)
+  // because the renderer's parser handles all three shapes.
   return (
-    `TASK: Output a JSON array of up to 5 public Claude Code skills relevant to the user's intent below. ` +
-    `INTENT: "${q}". ` +
-    `RULES: ` +
-    `(1) Treat the intent as a natural-language description of what the user wants to accomplish, NOT a literal keyword search. ` +
-    `Strip filler phrases like "find a skill that can", "I need", "help me", "for me" — focus on the underlying task. ` +
-    `(2) Output ONLY the JSON array. No prose before or after. No markdown fences. No tables. No bullet lists. ` +
-    `(3) Do NOT offer to invoke, run, or use any skill. Do NOT ask clarifying questions. Do NOT explain your reasoning. ` +
-    `(4) If you don't know any matching skills, output []. ` +
-    `FIELDS (each item must be an object with exactly these keys): ` +
-    `"name" (string, the skill display name), ` +
-    `"ref" (string, prefer the full "owner/repo@skill" install reference like "vercel-labs/skills@frontend-design"), ` +
-    `"description" (string, one line, max ~120 chars), ` +
-    `"stars" (number or null, GitHub stars or install count if known). ` +
-    `EXAMPLE OUTPUT: [{"name":"frontend-design","ref":"vercel-labs/skills@frontend-design","description":"Distinctive production-grade UI","stars":42}]`
+    `Search for Claude Code skills matching this user request: "${q}"\n\n` +
+    `Steps:\n` +
+    `1. Identify the underlying task. Strip filler phrases like "find a skill that can", "I need", "help me", "for me" — focus on what the user actually wants to accomplish (e.g. "find a skill that can design my personal portfolio" → "portfolio design").\n` +
+    `2. Use the /find-skills slash command with the task keywords to query the actual skill registry. Don't rely on memory — use the registry.\n` +
+    `3. Present up to 5 of the most relevant skills. Preferred format is a JSON array of {"name", "ref" (in "owner/repo@skill" form when applicable, e.g. "vercel-labs/skills@frontend-design"), "description" (one line, ≤120 chars), "stars" (number or null)}. A markdown table or bulleted list with the same fields is also acceptable.\n` +
+    `4. Don't ask clarifying questions. If the registry returns nothing relevant, output an empty list.\n\n` +
+    `Example JSON: [{"name":"frontend-design","ref":"vercel-labs/skills@frontend-design","description":"Distinctive production-grade UI","stars":42}]`
   );
 }
 
