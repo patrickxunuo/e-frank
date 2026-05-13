@@ -145,6 +145,15 @@
 }
 
 .candidatesHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  /* The label inherits the mono-uppercase eyebrow style; the Clear
+   * button on the right sits as a normal ghost-size-sm button. */
+}
+
+.candidatesLabel {
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.14em;

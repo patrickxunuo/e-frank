@@ -16,6 +16,12 @@ import { PaperplaneGlyph } from './PaperplaneGlyph';
 import { parseSkillCandidates, type SkillCandidate } from './find-skill-candidates';
 import { getSkillSourceUrl } from './skill-source-url';
 import { dispatchToast } from '../state/notifications';
+import {
+  clearFindSkillCache,
+  getFindSkillCache,
+  saveFindSkillCache,
+  type OutputLine,
+} from '../state/find-skill-cache';
 import paperplaneAnimation from '../../../design/logo/paperplane-floating.lottie.json';
 import styles from './FindSkillDialog.module.css';
 
@@ -26,12 +32,6 @@ export interface FindSkillDialogProps {
   onClose: () => void;
   /** Called after a successful install so the parent can refresh the list. */
   onInstalled?: () => void;
-}
-
-interface OutputLine {
-  id: number;
-  stream: 'stdout' | 'stderr';
-  text: string;
 }
 
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
@@ -65,26 +65,62 @@ export function FindSkillDialog({
   onClose,
   onInstalled,
 }: FindSkillDialogProps): JSX.Element {
-  const [query, setQuery] = useState<string>(initialQuery);
+  // Seed all "persistable" state from the cache so a remount picks up
+  // the previous find's result. The useEffect below handles the
+  // open-prop transition path; useState initializers cover the very
+  // first render.
+  const initialCache = getFindSkillCache();
+  const [query, setQuery] = useState<string>(
+    initialQuery !== '' ? initialQuery : initialCache.query,
+  );
   const [activeFindId, setActiveFindId] = useState<string | null>(null);
-  const [lines, setLines] = useState<OutputLine[]>([]);
-  const [findError, setFindError] = useState<string | null>(null);
+  const [lines, setLines] = useState<OutputLine[]>(() => [...initialCache.lines]);
+  const [findError, setFindError] = useState<string | null>(initialCache.findError);
   const [installingRef, setInstallingRef] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
   const [manualRef, setManualRef] = useState<string>('');
-  const lineIdRef = useRef<number>(0);
+  const lineIdRef = useRef<number>(initialCache.nextLineId);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Tracks whether the current in-flight find has streamed at least
+   * one line. We use this to defer clearing the cache until first
+   * line, so that hitting Stop before any output preserves the
+   * previously-cached candidates instead of wiping them.
+   */
+  const gotFirstLineRef = useRef<boolean>(false);
+  /**
+   * The query that was passed to the in-flight find. Captured at
+   * find-start so the cache `save` on exit can record the right
+   * query string regardless of what the input shows now (the user
+   * may have started typing a new query while the find ran).
+   */
+  const inflightQueryRef = useRef<string>('');
 
-  // Reset state when the dialog (re)opens.
+  // Hydrate state on dialog open. If `initialQuery` prop is provided
+  // AND differs from the cached query, the prop wins (e.g. the Skills
+  // EmptyState CTA passes `ef-feature` — it's an explicit intent to
+  // search for that ref, not to re-display whatever was last cached).
+  // Otherwise, restore from cache.
   useEffect(() => {
     if (!open) return;
-    setQuery(initialQuery);
-    setLines([]);
-    setFindError(null);
+    const cached = getFindSkillCache();
+    const useProp = initialQuery !== '' && initialQuery !== cached.query;
+    if (useProp) {
+      setQuery(initialQuery);
+      setLines([]);
+      setFindError(null);
+      lineIdRef.current = 0;
+    } else {
+      setQuery(cached.query);
+      setLines([...cached.lines]);
+      setFindError(cached.findError);
+      lineIdRef.current = cached.nextLineId;
+    }
+    // These are transient — always reset on open regardless of cache.
     setInstallError(null);
     setManualRef('');
     setActiveFindId(null);
-    lineIdRef.current = 0;
+    gotFirstLineRef.current = false;
   }, [open, initialQuery]);
 
   // Subscribe to streaming output + exit events when a find is in flight.
@@ -95,6 +131,17 @@ export function FindSkillDialog({
     const api = window.api;
     const offOutput = api.skills.onFindOutput((e: SkillsFindOutputEvent) => {
       if (e.findId !== activeFindId) return;
+      // First line of this find → commit to the new search. Clear the
+      // cache so a downstream Stop-without-output snapshot can't
+      // restore stale lines mid-stream, and clear the visible-from-
+      // cache lines so the new result isn't appended to the old one.
+      if (!gotFirstLineRef.current) {
+        gotFirstLineRef.current = true;
+        clearFindSkillCache();
+        setLines([]);
+        setFindError(null);
+        lineIdRef.current = 0;
+      }
       setLines((prev) => [
         ...prev,
         {
@@ -107,14 +154,41 @@ export function FindSkillDialog({
     const offExit = api.skills.onFindExit((e: SkillsFindExitEvent) => {
       if (e.findId !== activeFindId) return;
       setActiveFindId(null);
+      let nextFindError: string | null = null;
       if (e.reason === 'error') {
-        setFindError('find-skills failed to run (Claude CLI not installed?).');
+        nextFindError = 'find-skills failed to run (Claude CLI not installed?).';
       } else if (e.reason === 'completed' && e.exitCode !== null && e.exitCode !== 0) {
         // Surface non-zero exit codes so the user knows /find-skills
         // didn't finish cleanly (e.g. Claude rate-limited or the skill
         // isn't installed). The streamed stderr is already visible
         // in the output area — banner just names the failure.
-        setFindError(`find-skills exited with code ${e.exitCode}`);
+        nextFindError = `find-skills exited with code ${e.exitCode}`;
+      }
+      setFindError(nextFindError);
+
+      if (gotFirstLineRef.current) {
+        // The find produced output → commit the new result to the
+        // cache. Use functional setLines so we capture the latest
+        // queued state (avoids a stale-closure on the lines array).
+        setLines((prev) => {
+          saveFindSkillCache({
+            query: inflightQueryRef.current,
+            lines: prev,
+            findError: nextFindError,
+            nextLineId: lineIdRef.current,
+          });
+          return prev;
+        });
+      } else {
+        // Cancelled / errored before first line → previously-cached
+        // candidates (if any) are still intact. Restore them so the
+        // user gets back to what they were looking at before the
+        // aborted re-search.
+        const cached = getFindSkillCache();
+        setLines([...cached.lines]);
+        setFindError(cached.findError);
+        setQuery(cached.query);
+        lineIdRef.current = cached.nextLineId;
       }
     });
     return () => {
@@ -156,12 +230,26 @@ export function FindSkillDialog({
       if (typeof window === 'undefined' || !window.api) return;
       const trimmed = query.trim();
       if (trimmed === '') return;
+      // Local lines reset so the loading indicator shows — but the
+      // cache stays intact until the FIRST streamed line of this new
+      // find (`gotFirstLineRef` path above). That lets Stop-before-
+      // output restore the previously-cached candidates rather than
+      // wiping them silently.
       setLines([]);
       setFindError(null);
       lineIdRef.current = 0;
+      gotFirstLineRef.current = false;
+      inflightQueryRef.current = trimmed;
       const result = await window.api.skills.findStart({ query: trimmed });
       if (!result.ok) {
+        // Find-start IPC failed (validator rejected the query, or no
+        // bridge). Restore the previously-cached state so the dialog
+        // is back to its pre-search appearance. No new lines were
+        // ever produced, so the cache is still authoritative.
+        const cached = getFindSkillCache();
+        setLines([...cached.lines]);
         setFindError(result.error.message || result.error.code || 'find-skills failed');
+        lineIdRef.current = cached.nextLineId;
         return;
       }
       setActiveFindId(result.data.findId);
@@ -213,6 +301,20 @@ export function FindSkillDialog({
     const url = getSkillSourceUrl(ref);
     if (url === null) return;
     await window.api.shell.openExternal({ url });
+  }, []);
+
+  /**
+   * Wipe both the persisted cache and the dialog's local view. The
+   * dialog falls back to its pre-search empty-state hint. The user
+   * keeps any draft query they typed — only the search results are
+   * cleared, since that's what "Clear" reads as in this context.
+   */
+  const handleClear = useCallback((): void => {
+    clearFindSkillCache();
+    setLines([]);
+    setFindError(null);
+    setQuery('');
+    lineIdRef.current = 0;
   }, []);
 
   const isFinding = activeFindId !== null;
@@ -359,7 +461,18 @@ export function FindSkillDialog({
 
           {candidates.length > 0 && (
             <div className={styles.candidates} data-testid="find-skill-candidates">
-              <div className={styles.candidatesHead}>Recommended skills</div>
+              <div className={styles.candidatesHead}>
+                <span className={styles.candidatesLabel}>Recommended skills</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleClear}
+                  disabled={isFinding}
+                  data-testid="find-skill-clear"
+                >
+                  Clear
+                </Button>
+              </div>
               <div className={styles.candidateList} data-layout="row">
                 {candidates.map((c) => (
                   <SkillCandidateCard

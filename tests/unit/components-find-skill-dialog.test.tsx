@@ -20,6 +20,10 @@ import {
   __resetNotificationsForTests,
   getToasts,
 } from '../../src/renderer/state/notifications';
+import {
+  __resetFindSkillCacheForTests,
+  getFindSkillCache,
+} from '../../src/renderer/state/find-skill-cache';
 
 /**
  * DIALOG-FIND-001..010 — <FindSkillDialog /> tests.
@@ -202,6 +206,7 @@ afterEach(() => {
   cleanup();
   delete (window as { api?: IpcApi }).api;
   __resetNotificationsForTests();
+  __resetFindSkillCacheForTests();
   vi.restoreAllMocks();
 });
 
@@ -618,5 +623,180 @@ describe('<FindSkillDialog /> — DIALOG-FIND', () => {
       expect(screen.getByTestId('find-skill-install-error')).toBeInTheDocument();
     });
     expect(getToasts()).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // CACHE — Persist suggested candidates across dialog close/reopen
+  // -------------------------------------------------------------------------
+  it('DIALOG-FIND-CACHE-001: close + reopen preserves the candidate list without re-running find', async () => {
+    const stub = installApi();
+    const { rerender } = render(
+      <FindSkillDialog open={true} initialQuery="ui" onClose={noop} />,
+    );
+    await emitJsonCandidates(stub);
+    expect(
+      screen.getByTestId('find-skill-card-vercel-labs/skills@frontend-design'),
+    ).toBeInTheDocument();
+
+    // Close (Dialog renders null when open=false).
+    rerender(<FindSkillDialog open={false} initialQuery="ui" onClose={noop} />);
+    expect(screen.queryByTestId('find-skill-dialog')).not.toBeInTheDocument();
+
+    // Reopen WITHOUT an initialQuery prop — should hydrate from cache.
+    rerender(<FindSkillDialog open={true} onClose={noop} />);
+    expect(
+      screen.getByTestId('find-skill-card-vercel-labs/skills@frontend-design'),
+    ).toBeInTheDocument();
+    // findStart was only called once (during emitJsonCandidates).
+    expect(stub.findStart).toHaveBeenCalledTimes(1);
+  });
+
+  it('DIALOG-FIND-CACHE-002: new search clears cached candidates only after first line streams', async () => {
+    const stub = installApi();
+    render(<FindSkillDialog open={true} initialQuery="ui" onClose={noop} />);
+    await emitJsonCandidates(stub);
+    // Cache populated.
+    expect(getFindSkillCache().lines.length).toBeGreaterThan(0);
+
+    // Type a new query and submit.
+    const input = screen.getByTestId('find-skill-search') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'something else' } });
+    fireEvent.click(screen.getByTestId('find-skill-submit'));
+    await screen.findByTestId('find-skill-cancel');
+    // Local lines are reset (loader shows) but cache is still intact
+    // until first new line streams.
+    expect(getFindSkillCache().lines.length).toBeGreaterThan(0);
+
+    // Emit the first line of the new find → cache wipes.
+    act(() => {
+      stub.emitOutput({
+        findId: 'find-1',
+        stream: 'stdout',
+        line: '[]',
+        timestamp: 0,
+      });
+    });
+    expect(getFindSkillCache().lines.length).toBe(0);
+  });
+
+  it('DIALOG-FIND-CACHE-003: initialQuery prop overrides cached query when they differ', async () => {
+    const stub = installApi();
+    const { rerender } = render(<FindSkillDialog open={true} initialQuery="ui" onClose={noop} />);
+    await emitJsonCandidates(stub);
+    // Cache has lines + the in-flight query (the input's "ui").
+    expect(getFindSkillCache().lines.length).toBeGreaterThan(0);
+
+    // Close, then reopen with a DIFFERENT initialQuery prop.
+    rerender(<FindSkillDialog open={false} initialQuery="ui" onClose={noop} />);
+    rerender(<FindSkillDialog open={true} initialQuery="ef-feature" onClose={noop} />);
+
+    // Input reflects the new prop, not the cached query.
+    const input = screen.getByTestId('find-skill-search') as HTMLInputElement;
+    expect(input.value).toBe('ef-feature');
+    // Candidates section is gone — prop-driven open means a fresh
+    // search for that ref, not the previous result.
+    expect(screen.queryByTestId('find-skill-candidates')).not.toBeInTheDocument();
+  });
+
+  it('DIALOG-FIND-CACHE-004: Stop with no output streamed restores previously-cached candidates', async () => {
+    const stub = installApi();
+    render(<FindSkillDialog open={true} initialQuery="ui" onClose={noop} />);
+    // Populate cache via a completed search.
+    await emitJsonCandidates(stub);
+    expect(
+      screen.getByTestId('find-skill-card-vercel-labs/skills@frontend-design'),
+    ).toBeInTheDocument();
+
+    // Start a new find.
+    const input = screen.getByTestId('find-skill-search') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'something else' } });
+    fireEvent.click(screen.getByTestId('find-skill-submit'));
+    await screen.findByTestId('find-skill-cancel');
+    // During the find (before any output), the previous candidates
+    // are gone from the visible UI — the loader is showing instead.
+    expect(
+      screen.queryByTestId('find-skill-card-vercel-labs/skills@frontend-design'),
+    ).not.toBeInTheDocument();
+
+    // Click Stop without emitting any output, then emit a cancelled
+    // exit event.
+    fireEvent.click(screen.getByTestId('find-skill-cancel'));
+    await waitFor(() => {
+      expect(stub.findCancel).toHaveBeenCalled();
+    });
+    act(() => {
+      stub.emitExit({
+        findId: 'find-1',
+        exitCode: null,
+        signal: 'SIGTERM',
+        durationMs: 5,
+        reason: 'cancelled',
+      });
+    });
+
+    // Cards from the previous search are restored.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('find-skill-card-vercel-labs/skills@frontend-design'),
+      ).toBeInTheDocument();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // CLEAR — Clear button wipes cached results
+  // -------------------------------------------------------------------------
+  it('DIALOG-FIND-CLEAR-001: Clear button wipes candidates + cache + query input', async () => {
+    const stub = installApi();
+    render(<FindSkillDialog open={true} initialQuery="ui" onClose={noop} />);
+    await emitJsonCandidates(stub);
+
+    const clear = screen.getByTestId('find-skill-clear');
+    expect(clear).toBeInTheDocument();
+    expect(clear).not.toBeDisabled();
+
+    fireEvent.click(clear);
+
+    // Cards gone, cache wiped, input cleared, empty-state hint visible.
+    expect(screen.queryByTestId('find-skill-candidates')).not.toBeInTheDocument();
+    expect(getFindSkillCache().lines.length).toBe(0);
+    const input = screen.getByTestId('find-skill-search') as HTMLInputElement;
+    expect(input.value).toBe('');
+  });
+
+  it('DIALOG-FIND-CLEAR-002: Clear button is NOT in the DOM when there is nothing to clear', () => {
+    installApi();
+    render(<FindSkillDialog open={true} onClose={noop} />);
+    expect(screen.queryByTestId('find-skill-clear')).not.toBeInTheDocument();
+  });
+
+  it('DIALOG-FIND-CLEAR-003: Clear button is hidden during an in-flight find (loader replaces cards)', async () => {
+    const stub = installApi();
+    render(<FindSkillDialog open={true} initialQuery="ui" onClose={noop} />);
+    await emitJsonCandidates(stub);
+    expect(screen.getByTestId('find-skill-clear')).toBeInTheDocument();
+
+    // Start a new find — local lines reset so the candidates section
+    // (and therefore the Clear button) disappears for the duration.
+    const input = screen.getByTestId('find-skill-search') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'next' } });
+    fireEvent.click(screen.getByTestId('find-skill-submit'));
+    await screen.findByTestId('find-skill-cancel');
+    expect(screen.queryByTestId('find-skill-clear')).not.toBeInTheDocument();
+  });
+
+  it('DIALOG-FIND-CLEAR-004: after Clear, close + reopen still shows empty state (cache wiped)', async () => {
+    const stub = installApi();
+    const { rerender } = render(
+      <FindSkillDialog open={true} initialQuery="ui" onClose={noop} />,
+    );
+    await emitJsonCandidates(stub);
+    fireEvent.click(screen.getByTestId('find-skill-clear'));
+
+    rerender(<FindSkillDialog open={false} onClose={noop} />);
+    rerender(<FindSkillDialog open={true} onClose={noop} />);
+
+    // No candidate cards, no Clear button — empty state.
+    expect(screen.queryByTestId('find-skill-candidates')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('find-skill-clear')).not.toBeInTheDocument();
   });
 });
