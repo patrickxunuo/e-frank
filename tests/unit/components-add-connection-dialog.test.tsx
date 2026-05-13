@@ -159,6 +159,17 @@ function installApi(opts?: {
         .mockResolvedValue({ ok: true, data: { isMaximized: false, platform: 'win32' } }),
       onStateChanged: vi.fn(() => () => {}),
     } as unknown as IpcApi['chrome'],
+    skills: {
+      list: vi.fn().mockResolvedValue(unusedErr()),
+      install: vi.fn().mockResolvedValue(unusedErr()),
+      findStart: vi.fn().mockResolvedValue(unusedErr()),
+      findCancel: vi.fn().mockResolvedValue(unusedErr()),
+      onFindOutput: vi.fn(() => () => {}),
+      onFindExit: vi.fn(() => () => {}),
+    } as unknown as IpcApi['skills'],
+    shell: {
+      openPath: vi.fn().mockResolvedValue({ ok: true, data: null }),
+    } as unknown as IpcApi['shell'],
   } as IpcApi;
 
   (window as { api?: IpcApi }).api = api;

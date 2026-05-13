@@ -72,6 +72,17 @@ export function IconSettings({ size = 18, ...rest }: IconProps): JSX.Element {
   );
 }
 
+export function IconSkills({ size = 18, ...rest }: IconProps): JSX.Element {
+  // 4-point sparkle — a stylized "discoverable" mark that pairs with
+  // the brand paperplane glyph without competing with it.
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <path d="M12 3 13.6 9.4 20 11l-6.4 1.6L12 19l-1.6-6.4L4 11l6.4-1.6z" />
+      <path d="M19 4.5 19.6 6.4 21.5 7 19.6 7.6 19 9.5 18.4 7.6 16.5 7 18.4 6.4z" />
+    </svg>
+  );
+}
+
 export function IconGitHub({ size = 18, ...rest }: IconProps): JSX.Element {
   return (
     <svg {...baseProps(size)} {...rest} fill="currentColor" stroke="none">
@@ -284,6 +295,16 @@ export function IconClipboard({ size = 12, ...rest }: IconProps): JSX.Element {
     <svg {...baseProps(size)} {...rest}>
       <rect x="8" y="3" width="8" height="3" rx="1" />
       <path d="M8 6H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-2" />
+    </svg>
+  );
+}
+
+export function IconExternal({ size = 14, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <path d="M14 4h6v6" />
+      <path d="M20 4 12 12" />
+      <path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5" />
     </svg>
   );
 }

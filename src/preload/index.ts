@@ -64,6 +64,18 @@ import {
   type DialogSelectFolderResponse,
   type ChromeState,
   type ChromeStateChangedEvent,
+  type SkillsListResponse,
+  type SkillsInstallRequest,
+  type SkillsInstallResponse,
+  type SkillsRemoveRequest,
+  type SkillsRemoveResponse,
+  type SkillsFindStartRequest,
+  type SkillsFindStartResponse,
+  type SkillsFindCancelRequest,
+  type SkillsFindOutputEvent,
+  type SkillsFindExitEvent,
+  type ShellOpenExternalRequest,
+  type ShellOpenPathRequest,
 } from '../shared/ipc.js';
 
 const api: IpcApi = {
@@ -370,6 +382,70 @@ const api: IpcApi = {
         ipcRenderer.removeListener(IPC_CHANNELS.CHROME_STATE_CHANGED, wrapped);
       };
     },
+  },
+
+  skills: {
+    list: (): Promise<IpcResult<SkillsListResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SKILLS_LIST) as Promise<IpcResult<SkillsListResponse>>,
+
+    install: (req: SkillsInstallRequest): Promise<IpcResult<SkillsInstallResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SKILLS_INSTALL, req) as Promise<
+        IpcResult<SkillsInstallResponse>
+      >,
+
+    remove: (req: SkillsRemoveRequest): Promise<IpcResult<SkillsRemoveResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SKILLS_REMOVE, req) as Promise<
+        IpcResult<SkillsRemoveResponse>
+      >,
+
+    findStart: (req: SkillsFindStartRequest): Promise<IpcResult<SkillsFindStartResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SKILLS_FIND_START, req) as Promise<
+        IpcResult<SkillsFindStartResponse>
+      >,
+
+    findCancel: (
+      req: SkillsFindCancelRequest,
+    ): Promise<IpcResult<{ findId: string }>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SKILLS_FIND_CANCEL, req) as Promise<
+        IpcResult<{ findId: string }>
+      >,
+
+    onFindOutput: (
+      listener: (e: SkillsFindOutputEvent) => void,
+    ): (() => void) => {
+      const wrapped = (
+        _event: IpcRendererEvent,
+        payload: SkillsFindOutputEvent,
+      ): void => {
+        listener(payload);
+      };
+      ipcRenderer.on(IPC_CHANNELS.SKILLS_FIND_OUTPUT, wrapped);
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.SKILLS_FIND_OUTPUT, wrapped);
+      };
+    },
+
+    onFindExit: (
+      listener: (e: SkillsFindExitEvent) => void,
+    ): (() => void) => {
+      const wrapped = (
+        _event: IpcRendererEvent,
+        payload: SkillsFindExitEvent,
+      ): void => {
+        listener(payload);
+      };
+      ipcRenderer.on(IPC_CHANNELS.SKILLS_FIND_EXIT, wrapped);
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.SKILLS_FIND_EXIT, wrapped);
+      };
+    },
+  },
+
+  shell: {
+    openPath: (req: ShellOpenPathRequest): Promise<IpcResult<null>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_PATH, req) as Promise<IpcResult<null>>,
+    openExternal: (req: ShellOpenExternalRequest): Promise<IpcResult<null>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_EXTERNAL, req) as Promise<IpcResult<null>>,
   },
 };
 

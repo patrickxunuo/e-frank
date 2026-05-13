@@ -1224,7 +1224,9 @@ export function ProjectDetail({
               variant="ghost"
               size="sm"
               leadingIcon={
-                <span className={pages.refreshing ? styles.refreshSpinning : undefined}>
+                <span
+                  className={`${styles.refreshIcon} ${pages.refreshing ? styles.refreshSpinning : ''}`}
+                >
                   <IconRefresh size={14} />
                 </span>
               }

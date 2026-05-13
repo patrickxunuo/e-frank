@@ -176,6 +176,20 @@ function installApi(opts: {
       getState: vi.fn() as unknown as IpcApi['chrome']['getState'],
       onStateChanged: vi.fn(() => () => {}) as unknown as IpcApi['chrome']['onStateChanged'],
     },
+    skills: {
+      list: vi.fn() as unknown as IpcApi['skills']['list'],
+      
+      install: vi.fn() as unknown as IpcApi['skills']['install'],
+      remove: vi.fn() as unknown as IpcApi['skills']['remove'],
+      findStart: vi.fn() as unknown as IpcApi['skills']['findStart'],
+      findCancel: vi.fn() as unknown as IpcApi['skills']['findCancel'],
+      onFindOutput: vi.fn(() => () => {}) as unknown as IpcApi['skills']['onFindOutput'],
+      onFindExit: vi.fn(() => () => {}) as unknown as IpcApi['skills']['onFindExit'],
+    },
+    shell: {
+      openPath: vi.fn() as unknown as IpcApi['shell']['openPath'],
+      openExternal: vi.fn() as unknown as IpcApi['shell']['openExternal'],
+    },
   };
 
   (window as { api?: IpcApi }).api = api;

@@ -1,0 +1,232 @@
+/*
+ * Fixed-header + inner-scroll layout. The page fills the AppShell main
+ * area (height: 100%, min-height: 0 so flex children can shrink) and
+ * hides its own overflow — the inner `.body` wrapper claims the leftover
+ * height and the DataTable's `fillHeight` scroll container handles the
+ * actual scrolling. Without `min-height: 0` on a flex column child,
+ * Chromium expands the column to its natural content height and the
+ * table's `overflow: auto` never engages.
+ */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 1180px;
+  width: 100%;
+  margin: 0 auto;
+  height: 100%;
+  min-height: 0;
+}
+
+.head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  line-height: 1.15;
+}
+
+/*
+ * Refresh button icon wrapper. ALWAYS apply this — the inline-flex box
+ * with a fixed size and `vertical-align: middle` is what keeps the
+ * icon centered against the Button's text baseline (without it, the
+ * SVG defaults to inline and sits on the baseline → drops the glyph
+ * below the label). `.refreshSpinning` is layered on top for the
+ * actual rotation animation while a refetch is in flight; without
+ * the wrapper class the rotation pivot drifts because the bounding
+ * box is line-baseline-anchored.
+ */
+.refreshIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
+  transform-origin: center center;
+}
+
+.refreshSpinning {
+  animation: skillsRspin 0.8s linear infinite;
+}
+
+@keyframes skillsRspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .refreshSpinning {
+    animation: none;
+  }
+}
+
+.subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  max-width: 64ch;
+  line-height: 1.55;
+}
+
+.subtitle code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-primary);
+  background: var(--surface-overlay-low);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+}
+
+.headActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.errorBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.errorBanner strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.skeleton {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.skeletonRow {
+  height: 18px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--surface-overlay-low) 0%,
+    var(--surface-overlay-mid) 50%,
+    var(--surface-overlay-low) 100%
+  );
+  background-size: 200% 100%;
+  animation: skillsShimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes skillsShimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.cellPrimary {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--text-primary);
+}
+
+.cellSecondary {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.actionsCell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+/*
+ * Remove-skill confirmation dialog. Mirrors the run-delete dialog
+ * shape from ProjectDetail — body paragraph + optional error chip +
+ * Cancel / Destructive action row.
+ */
+.removeDialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.removeDialogBody code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-primary);
+  background: var(--surface-overlay-low);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.removeDialogError {
+  font-size: 12.5px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.removeDialogActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}

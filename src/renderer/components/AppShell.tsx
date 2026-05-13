@@ -8,7 +8,13 @@ import { Sidebar, type SidebarNavId, type SidebarUser } from './Sidebar';
  * for the dense `execution` route — `<ExecutionView>` has its own layout
  * and shouldn't compete with a 48px outer buffer for screen real estate.
  */
-export type AppShellRoute = 'list' | 'detail' | 'execution' | 'connections' | 'settings';
+export type AppShellRoute =
+  | 'list'
+  | 'detail'
+  | 'execution'
+  | 'connections'
+  | 'skills'
+  | 'settings';
 
 export interface AppShellProps {
   activeNav: SidebarNavId;

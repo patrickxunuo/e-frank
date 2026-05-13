@@ -136,6 +136,20 @@ export const IPC_CHANNELS = {
   CHROME_GET_STATE: 'chrome:get-state',
   /** event channel (main -> renderer) */
   CHROME_STATE_CHANGED: 'chrome:state-changed',
+  // -- Skill management (issue #GH-38) -- discover, install, list, remove --
+  SKILLS_LIST: 'skills:list',
+  SKILLS_INSTALL: 'skills:install',
+  SKILLS_REMOVE: 'skills:remove',
+  SKILLS_FIND_START: 'skills:find-start',
+  SKILLS_FIND_CANCEL: 'skills:find-cancel',
+  /** event channel (main -> renderer) */
+  SKILLS_FIND_OUTPUT: 'skills:find-output',
+  /** event channel (main -> renderer) */
+  SKILLS_FIND_EXIT: 'skills:find-exit',
+  // -- Shell open-path (issue #GH-38 companion) --
+  SHELL_OPEN_PATH: 'shell:open-path',
+  /** Open a URL in the default browser. Host allow-list enforced in main. */
+  SHELL_OPEN_EXTERNAL: 'shell:open-external',
 } as const;
 
 export type PingRequest = { message: string };
@@ -462,6 +476,118 @@ export interface ChromeStateChangedEvent {
   isMaximized: boolean;
 }
 
+// -- Skill management IPC payloads (issue #GH-38) ----------------------------
+//
+// `SkillSummary` is the renderer-facing record for one installed skill.
+// Source enum is `'user' | 'project'`: `user` = `~/.claude/skills/<id>/`,
+// `project` = `<projectRoot>/.claude/skills/<id>/`. When the same id exists
+// in both, `project` wins (scanner dedupes that way, matching Claude's own
+// resolution order — see `skill-installer.ts` module docstring).
+
+export type SkillSource = 'user' | 'project';
+
+export interface SkillSummary {
+  /** Folder slug (kebab — `ef-auto-feature`, `find-skills`, etc.). */
+  id: string;
+  /** Display name from SKILL.md frontmatter `name:` (falls back to id). */
+  name: string;
+  /** Description from SKILL.md frontmatter `description:` (may be empty). */
+  description: string;
+  source: SkillSource;
+  /** Absolute path to the skill's directory (parent of SKILL.md). */
+  dirPath: string;
+  /** Absolute path to the SKILL.md file itself. */
+  skillMdPath: string;
+}
+
+export interface SkillsListResponse {
+  skills: SkillSummary[];
+}
+
+export type SkillInstallStatus = 'installed' | 'failed';
+
+export interface SkillsInstallRequest {
+  /** Bare skill name, `<owner>/<name>`, or `@scope/<name>` reference.
+   * Validated against `^[a-zA-Z0-9@][\w./@-]+$` in the main process —
+   * anything else returns an `INVALID_REF` error without spawning. The
+   * leading `@` opens the door to scoped-npm-package refs the way `npx
+   * skills add @org/skill` expects them. */
+  ref: string;
+}
+
+export interface SkillsInstallResponse {
+  status: SkillInstallStatus;
+  /** Last ~4KB of stdout, useful for surfacing why install failed. */
+  stdout: string;
+  /** Last ~4KB of stderr. */
+  stderr: string;
+  exitCode: number | null;
+}
+
+export interface SkillsRemoveRequest {
+  /** Skill reference to remove. Same regex validation as install. */
+  ref: string;
+}
+
+export interface SkillsRemoveResponse {
+  /** `'installed'` on the underlying union reads as "the npm op succeeded";
+   * the Skills page renders the right verb based on which IPC was called. */
+  status: SkillInstallStatus;
+  /** Last ~4KB of stdout. */
+  stdout: string;
+  /** Last ~4KB of stderr. */
+  stderr: string;
+  exitCode: number | null;
+}
+
+export interface SkillsFindStartRequest {
+  /** User's natural-language search query. */
+  query: string;
+}
+
+export interface SkillsFindStartResponse {
+  /** Opaque id renderers use to correlate stream events with this find. */
+  findId: string;
+  pid: number | undefined;
+  startedAt: number;
+}
+
+export interface SkillsFindCancelRequest {
+  findId: string;
+}
+
+export interface SkillsFindOutputEvent {
+  findId: string;
+  stream: 'stdout' | 'stderr';
+  line: string;
+  timestamp: number;
+}
+
+export interface SkillsFindExitEvent {
+  findId: string;
+  exitCode: number | null;
+  signal: string | null;
+  durationMs: number;
+  reason: 'completed' | 'cancelled' | 'error';
+}
+
+// -- Shell open-path (companion to skills feature) ---------------------------
+
+export interface ShellOpenPathRequest {
+  /** Absolute path to open in the OS file manager. */
+  path: string;
+}
+
+export interface ShellOpenExternalRequest {
+  /**
+   * Fully-qualified `http://` or `https://` URL to open in the default
+   * browser. Main-process handler enforces a hostname allow-list to
+   * defend against `javascript:` / `file://` injection from a
+   * compromised renderer.
+   */
+  url: string;
+}
+
 // -- Folder picker (Electron native dialog) ----------------------------------
 
 export interface DialogSelectFolderRequest {
@@ -570,5 +696,25 @@ export interface IpcApi {
     getState: () => Promise<IpcResult<ChromeState>>;
     /** Subscribe to maximize/unmaximize events. Returns unsubscribe fn. */
     onStateChanged: (listener: (e: ChromeStateChangedEvent) => void) => () => void;
+  };
+  skills: {
+    list: () => Promise<IpcResult<SkillsListResponse>>;
+    install: (req: SkillsInstallRequest) => Promise<IpcResult<SkillsInstallResponse>>;
+    remove: (req: SkillsRemoveRequest) => Promise<IpcResult<SkillsRemoveResponse>>;
+    findStart: (req: SkillsFindStartRequest) => Promise<IpcResult<SkillsFindStartResponse>>;
+    findCancel: (req: SkillsFindCancelRequest) => Promise<IpcResult<{ findId: string }>>;
+    /** Subscribe to streaming find-skills output. Returns unsubscribe fn. */
+    onFindOutput: (listener: (e: SkillsFindOutputEvent) => void) => () => void;
+    /** Subscribe to find-skills exit events. Returns unsubscribe fn. */
+    onFindExit: (listener: (e: SkillsFindExitEvent) => void) => () => void;
+  };
+  shell: {
+    openPath: (req: ShellOpenPathRequest) => Promise<IpcResult<null>>;
+    /**
+     * Open a URL in the default browser. Renderer-facing wrapper around
+     * Electron's `shell.openExternal`. Hostname must be in the main-
+     * process allow-list; rejected URLs return `FORBIDDEN_URL`.
+     */
+    openExternal: (req: ShellOpenExternalRequest) => Promise<IpcResult<null>>;
   };
 }

@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react';
 import packageJson from '../../../package.json';
 import { useGlobalActiveRun } from '../state/global-active-run';
 import styles from './Sidebar.module.css';
-import { IconKey, IconProjects, IconSettings } from './icons';
+import { IconKey, IconProjects, IconSettings, IconSkills } from './icons';
 import { PaperplaneGlyph } from './PaperplaneGlyph';
 import { ThemeToggle } from './ThemeToggle';
 
 const APP_VERSION = `v${packageJson.version}`;
 
-export type SidebarNavId = 'projects' | 'connections' | 'settings';
+export type SidebarNavId = 'projects' | 'connections' | 'skills' | 'settings';
 
 export interface SidebarUser {
   name: string;
@@ -31,6 +31,7 @@ interface NavItemDef {
 const NAV_ITEMS: NavItemDef[] = [
   { id: 'projects', label: 'Projects', icon: <IconProjects /> },
   { id: 'connections', label: 'Connections', icon: <IconKey /> },
+  { id: 'skills', label: 'Skills', icon: <IconSkills /> },
   { id: 'settings', label: 'Settings', icon: <IconSettings /> },
 ];
 

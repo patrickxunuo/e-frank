@@ -1,6 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import {
+  dirname,
+  isAbsolute as pathIsAbsolute,
+  join,
+  normalize as pathNormalize,
+} from 'node:path';
 import {
   IPC_CHANNELS,
   type ClaudeRunRequest,
@@ -49,6 +54,14 @@ import {
   type DialogSelectFolderRequest,
   type DialogSelectFolderResponse,
   type ChromeState,
+  type SkillsListResponse,
+  type SkillsInstallRequest,
+  type SkillsInstallResponse,
+  type SkillsRemoveResponse,
+  type SkillsFindStartResponse,
+  type SkillsFindOutputEvent,
+  type SkillsFindExitEvent,
+  type ShellOpenPathRequest,
 } from '../shared/ipc.js';
 import type { Run, RunStateEvent, RunMode, RunLogEntry } from '../shared/schema/run.js';
 import type {
@@ -84,6 +97,21 @@ import { StubJiraUpdater } from './modules/jira-updater.js';
 import { WorkflowRunner } from './modules/workflow-runner.js';
 import { installEfAutoFeatureSkill } from './modules/skill-installer.js';
 import { migrateUserData } from './modules/migrate-userdata.js';
+import { scanInstalledSkills } from './modules/skills-scanner.js';
+import {
+  installSkillViaNpx,
+  InvalidSkillRefError,
+  uninstallSkillViaNpx,
+} from './modules/skill-npx-installer.js';
+import {
+  SkillFinder,
+  FinderAlreadyActiveError,
+  FinderNotActiveError,
+  type FinderOutputEvent,
+  type FinderExitEvent,
+} from './modules/skill-finder.js';
+import { isValidFindSkillsQuery } from './modules/skill-query-validator.js';
+import { validateOpenExternalUrl } from './modules/shell-external-validator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -102,6 +130,18 @@ let mainWindow: BrowserWindow | null = null;
  * ticker, etc.) so the user has SOME signal that the run is live.
  */
 const claudeManager = new ClaudeProcessManager({ spawner: new NodeSpawner() });
+
+/**
+ * Separate Claude spawn channel for the Skills `/find-skills` discovery
+ * flow (#GH-38). Lives outside ClaudeProcessManager so it never collides
+ * with the workflow runner's single-active-run guard — the user can
+ * search for skills while a workflow is in flight.
+ *
+ * `cwd` is bound at app-ready time once `app.getPath('userData')` is
+ * available. Until then `skillFinder` is null and handlers surface
+ * NOT_INITIALIZED.
+ */
+let skillFinder: SkillFinder | null = null;
 
 // These are constructed at app-ready time (before window creation) because
 // `SafeStorageBackend` requires `app.whenReady()` and `app.getPath('userData')`
@@ -882,6 +922,21 @@ async function runConnectionTest(
       message: 'Bitbucket connections are not yet supported',
     },
   };
+}
+
+/**
+ * Normalize a filesystem path for an allow-list check. `path.normalize`
+ * collapses redundant separators + `.`/`..` segments. We pass the
+ * normalized form into the `.claude/skills/` regex check — the original
+ * `req.path` is still validated separately against `..` traversal so
+ * the user-visible reason for refusal is precise.
+ */
+function normalizePathForCheck(p: string): string {
+  try {
+    return pathNormalize(p);
+  } catch {
+    return p;
+  }
 }
 
 /** Generic "manager not initialized" failure — surfaces a clear error to the renderer. */
@@ -1737,10 +1792,287 @@ function registerIpcHandlers(): void {
       data: { isMaximized: win.isMaximized(), platform: process.platform },
     };
   });
+
+  // -- Skill management (#GH-38) --------------------------------------------
+
+  ipcMain.handle(
+    IPC_CHANNELS.SKILLS_LIST,
+    async (): Promise<IpcResult<SkillsListResponse>> => {
+      try {
+        // `projectRoot` enables the project-level lane (`<cwd>/.claude/skills/`).
+        // Without it the scanner silently skips that lane entirely — and the
+        // bundled `ef-auto-feature` skill (which lives under the e-frank repo's
+        // own `.claude/skills/` directory in dev) wouldn't appear in the list.
+        // `process.cwd()` resolves to the running Electron process's working
+        // directory — the repo root in dev, the install dir in dist:win
+        // (where there's no `.claude/skills/`, so the project lane is a
+        // graceful no-op).
+        const skills = await scanInstalledSkills({
+          projectRoot: process.cwd(),
+        });
+        return { ok: true, data: { skills } };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: { code: 'SCAN_FAILED', message } };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.SKILLS_INSTALL,
+    async (_event, raw): Promise<IpcResult<SkillsInstallResponse>> => {
+      const refRaw =
+        typeof raw === 'object' && raw !== null && 'ref' in raw
+          ? (raw as { ref?: unknown }).ref
+          : undefined;
+      if (typeof refRaw !== 'string' || refRaw.trim() === '') {
+        return {
+          ok: false,
+          error: { code: 'INVALID_REQUEST', message: 'ref must be a non-empty string' },
+        };
+      }
+      const req: SkillsInstallRequest = { ref: refRaw };
+      try {
+        const result = await installSkillViaNpx({
+          spawner: new NodeSpawner(),
+          ref: req.ref,
+          cwd: app.getPath('userData'),
+        });
+        return { ok: true, data: result };
+      } catch (err) {
+        if (err instanceof InvalidSkillRefError) {
+          return {
+            ok: false,
+            error: { code: err.code, message: err.message },
+          };
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: { code: 'INSTALL_FAILED', message } };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.SKILLS_REMOVE,
+    async (_event, raw): Promise<IpcResult<SkillsRemoveResponse>> => {
+      // Same shape-check + regex defense as the install handler; the
+      // `uninstallSkillViaNpx` module also validates the ref but we
+      // do it here too so a malformed payload never reaches the
+      // shell:true spawn.
+      const refRaw =
+        typeof raw === 'object' && raw !== null && 'ref' in raw
+          ? (raw as { ref?: unknown }).ref
+          : undefined;
+      if (typeof refRaw !== 'string' || refRaw.trim() === '') {
+        return {
+          ok: false,
+          error: { code: 'INVALID_REQUEST', message: 'ref must be a non-empty string' },
+        };
+      }
+      try {
+        const result = await uninstallSkillViaNpx({
+          spawner: new NodeSpawner(),
+          ref: refRaw,
+          cwd: app.getPath('userData'),
+        });
+        return { ok: true, data: result };
+      } catch (err) {
+        if (err instanceof InvalidSkillRefError) {
+          return {
+            ok: false,
+            error: { code: err.code, message: err.message },
+          };
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: { code: 'REMOVE_FAILED', message } };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.SKILLS_FIND_START,
+    async (_event, raw): Promise<IpcResult<SkillsFindStartResponse>> => {
+      const queryRaw =
+        typeof raw === 'object' && raw !== null && 'query' in raw
+          ? (raw as { query?: unknown }).query
+          : undefined;
+      if (typeof queryRaw !== 'string' || queryRaw.trim() === '') {
+        return {
+          ok: false,
+          error: { code: 'INVALID_REQUEST', message: 'query must be a non-empty string' },
+        };
+      }
+      // Shell-injection defense. NodeSpawner defaults to `shell: true` so
+      // the query is concatenated into a `cmd.exe /c "claude ... -p
+      // /find-skills <query>"` string before the OS sees it. A malicious
+      // renderer could send `q & calc.exe` and break out. Centralized in
+      // `skill-query-validator.ts` so the policy has one home + one test.
+      if (!isValidFindSkillsQuery(queryRaw)) {
+        return {
+          ok: false,
+          error: {
+            code: 'INVALID_QUERY',
+            message:
+              'query must be plain text under 200 chars without quotes or shell metacharacters',
+          },
+        };
+      }
+      if (skillFinder === null) {
+        return notInitialized('SkillFinder');
+      }
+      try {
+        const active = skillFinder.start(queryRaw);
+        return {
+          ok: true,
+          data: { findId: active.findId, pid: active.pid, startedAt: active.startedAt },
+        };
+      } catch (err) {
+        if (err instanceof FinderAlreadyActiveError) {
+          return { ok: false, error: { code: err.code, message: err.message } };
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: { code: 'FIND_START_FAILED', message } };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.SKILLS_FIND_CANCEL,
+    async (_event, raw): Promise<IpcResult<{ findId: string }>> => {
+      const findIdRaw =
+        typeof raw === 'object' && raw !== null && 'findId' in raw
+          ? (raw as { findId?: unknown }).findId
+          : undefined;
+      if (typeof findIdRaw !== 'string' || findIdRaw === '') {
+        return {
+          ok: false,
+          error: { code: 'INVALID_REQUEST', message: 'findId must be a non-empty string' },
+        };
+      }
+      if (skillFinder === null) {
+        return notInitialized('SkillFinder');
+      }
+      try {
+        skillFinder.cancel(findIdRaw);
+        return { ok: true, data: { findId: findIdRaw } };
+      } catch (err) {
+        if (err instanceof FinderNotActiveError) {
+          return { ok: false, error: { code: err.code, message: err.message } };
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: { code: 'FIND_CANCEL_FAILED', message } };
+      }
+    },
+  );
+
+  // -- Shell open-path (companion to skills feature) ------------------------
+
+  ipcMain.handle(
+    IPC_CHANNELS.SHELL_OPEN_PATH,
+    async (_event, raw): Promise<IpcResult<null>> => {
+      const pathRaw =
+        typeof raw === 'object' && raw !== null && 'path' in raw
+          ? (raw as { path?: unknown }).path
+          : undefined;
+      if (typeof pathRaw !== 'string' || pathRaw === '') {
+        return {
+          ok: false,
+          error: { code: 'INVALID_REQUEST', message: 'path must be a non-empty string' },
+        };
+      }
+      // Defense-in-depth — a compromised renderer must NOT be able to ask
+      // Electron to shell-open arbitrary paths (which on Windows + macOS
+      // can include `.exe` / `.app` files that the OS happily launches).
+      // The only legitimate caller is the Skills page's row "Open" action,
+      // and that always passes a SkillSummary.dirPath, which by
+      // construction sits under `.claude/skills/` on some root. Require
+      // that segment + reject any `..` traversal + require absolute.
+      const req: ShellOpenPathRequest = { path: pathRaw };
+      const norm = normalizePathForCheck(req.path);
+      const isAbs = pathIsAbsolute(req.path);
+      const hasSkillsSegment = /[\\/]\.claude[\\/]skills[\\/]/.test(norm);
+      const hasTraversal = /(^|[\\/])\.\.([\\/]|$)/.test(req.path);
+      if (!isAbs || hasTraversal || !hasSkillsSegment) {
+        return {
+          ok: false,
+          error: {
+            code: 'FORBIDDEN_PATH',
+            message: 'shell:open-path only accepts absolute paths under .claude/skills/',
+          },
+        };
+      }
+      try {
+        const errMsg = await shell.openPath(req.path);
+        if (errMsg !== '') {
+          return { ok: false, error: { code: 'OPEN_FAILED', message: errMsg } };
+        }
+        return { ok: true, data: null };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: { code: 'OPEN_FAILED', message } };
+      }
+    },
+  );
+
+  // -- Shell open-external (companion to skills find-dialog "View" button)
+  ipcMain.handle(
+    IPC_CHANNELS.SHELL_OPEN_EXTERNAL,
+    async (_event, raw): Promise<IpcResult<null>> => {
+      const urlRaw =
+        typeof raw === 'object' && raw !== null && 'url' in raw
+          ? (raw as { url?: unknown }).url
+          : undefined;
+      const validated = validateOpenExternalUrl(urlRaw);
+      if (!validated.ok) {
+        const code =
+          validated.reason === 'FORBIDDEN_HOST'
+            ? 'FORBIDDEN_URL'
+            : validated.reason === 'BAD_PROTOCOL'
+              ? 'FORBIDDEN_URL'
+              : 'INVALID_REQUEST';
+        return {
+          ok: false,
+          error: {
+            code,
+            message:
+              code === 'FORBIDDEN_URL'
+                ? 'shell:open-external rejected: URL host or protocol not allow-listed'
+                : 'url must be a parseable absolute URL',
+          },
+        };
+      }
+      try {
+        await shell.openExternal(validated.url);
+        return { ok: true, data: null };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: { code: 'OPEN_FAILED', message } };
+      }
+    },
+  );
 }
 
 function toIpcCurrentChangedEvent(e: { run: Run | null }): RunsCurrentChangedEvent {
   return { run: e.run };
+}
+
+function toIpcFindOutputEvent(e: FinderOutputEvent): SkillsFindOutputEvent {
+  return {
+    findId: e.findId,
+    stream: e.stream,
+    line: e.line,
+    timestamp: e.timestamp,
+  };
+}
+
+function toIpcFindExitEvent(e: FinderExitEvent): SkillsFindExitEvent {
+  return {
+    findId: e.findId,
+    exitCode: e.exitCode,
+    signal: e.signal,
+    durationMs: e.durationMs,
+    reason: e.reason,
+  };
 }
 
 function toIpcTicketsChangedEvent(e: TicketsChangedEvent): JiraTicketsChangedEvent {
@@ -1996,6 +2328,23 @@ async function initStores(): Promise<void> {
         }
       });
     });
+
+    // -- Skill discovery (#GH-38) --
+    // Constructed late only because it needs `userData` (defined at the top
+    // of this try). Doesn't depend on any other store; failure here just
+    // means SkillFinder stays null and the find-skills handler surfaces
+    // NOT_INITIALIZED to the renderer.
+    const finder = new SkillFinder({
+      spawner: new NodeSpawner(),
+      cwd: userData,
+    });
+    finder.on('output', (e: FinderOutputEvent) => {
+      broadcastToWindows(IPC_CHANNELS.SKILLS_FIND_OUTPUT, toIpcFindOutputEvent(e));
+    });
+    finder.on('exit', (e: FinderExitEvent) => {
+      broadcastToWindows(IPC_CHANNELS.SKILLS_FIND_EXIT, toIpcFindExitEvent(e));
+    });
+    skillFinder = finder;
   } catch (err) {
 
     console.error('[main] store initialization threw:', err);

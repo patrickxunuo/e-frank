@@ -138,14 +138,16 @@
 }
 
 /*
- * GH-57 #5: rotate-in-place wrapper for the Refresh button's IconRefresh.
- * The plain `<span>` wrapper defaulted to `display: inline`, whose
- * bounding box drifts with the surrounding text baseline — so each
- * rotation frame computed a slightly different pivot and the glyph
- * traced a small ellipse. Locking the span to a 14×14 inline-flex box
- * with an explicit transform-origin gives the animation a stable pivot.
+ * GH-57 #5: wrapper for the Refresh button's IconRefresh.
+ * `.refreshIcon` is ALWAYS applied — the inline-flex box with fixed
+ * size + `vertical-align: middle` is what keeps the icon centered
+ * against the Button's text baseline (without it, the SVG defaults to
+ * inline and sits on the baseline → the glyph drops below the label).
+ * `.refreshSpinning` is layered on top WHEN refreshing for the rotation
+ * animation only. Splitting the rules means the icon is well-aligned
+ * in both states; previously it was only aligned while spinning.
  */
-.refreshSpinning {
+.refreshIcon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -153,6 +155,9 @@
   height: 14px;
   vertical-align: middle;
   transform-origin: center center;
+}
+
+.refreshSpinning {
   animation: rspin 0.8s linear infinite;
 }
 
