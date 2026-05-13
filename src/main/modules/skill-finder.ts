@@ -71,12 +71,25 @@ const STRIP_RULES: ReadonlyArray<RegExp> = [
 ];
 
 /**
- * Build the prompt Claude receives. Asks Claude for skill
- * recommendations with a JSON-preferred output format, but accepts
- * markdown tables and bullets (the renderer's parser handles all
- * three). The query is run through `stripQueryFiller` first so
- * Claude sees the underlying task ("create jira issue"), not the
- * verbose wrapper ("find a skill that can…").
+ * Build the prompt Claude receives. The cleaned query is positioned
+ * as a task description, not a search term — earlier "Search for
+ * skills matching ..." shapes caused Claude to latch onto literal
+ * words and surface skills whose *names* contained the query
+ * keywords (e.g. find-bugs, find-keywords for any query starting
+ * with "find"). Reframing as "the user wants to do this task"
+ * pushes Claude toward intent matching even on edge cases
+ * stripQueryFiller missed.
+ *
+ * Shell-safety constraint: the prompt MUST be a single line with NO
+ * embedded double-quote characters. NodeSpawner runs with shell:true
+ * on Windows; cmd.exe wraps args containing spaces in outer "..." and
+ * an embedded " inside the prompt closes the outer wrap prematurely,
+ * splitting the prompt into fragments — at which point claude
+ * receives only a stub and responds "I'm ready to help. What would
+ * you like me to work on?". Embedded \n triggers a cmd.exe command-
+ * line break with similar fragmentation. We sidestep both by joining
+ * clauses with ". " (period + space) and using single quotes (or no
+ * quotes) around query boundaries inside the prompt.
  *
  * The `skillName` param is preserved for forward-compat / overrides
  * but isn't embedded in the default prompt body.
@@ -84,13 +97,15 @@ const STRIP_RULES: ReadonlyArray<RegExp> = [
 export function buildFindSkillsPrompt(_skillName: string, query: string): string {
   const cleaned = stripQueryFiller(query);
   return (
-    `Search for Claude Code skills matching this user request: "${cleaned}"\n\n` +
-    `Steps:\n` +
-    `1. Treat the request as a task description — recommend skills that help with the underlying task, not skills whose names literally contain the words in the request.\n` +
-    `2. Use the /find-skills slash command with the task keywords to query the actual skill registry. Don't rely on memory — use the registry.\n` +
-    `3. Present up to 5 of the most relevant skills. Preferred format is a JSON array of {"name", "ref" (in "owner/repo@skill" form when applicable, e.g. "vercel-labs/skills@frontend-design"), "description" (one line, ≤120 chars), "stars" (number or null)}. A markdown table or bulleted list with the same fields is also acceptable.\n` +
-    `4. Don't ask clarifying questions. If the registry returns nothing relevant, output an empty list.\n\n` +
-    `Example JSON: [{"name":"frontend-design","ref":"vercel-labs/skills@frontend-design","description":"Distinctive production-grade UI","stars":42}]`
+    `The user wants help with this task: '${cleaned}'. ` +
+    `Recommend up to 5 Claude Code skills that would help DO this task. ` +
+    `Treat the quoted text as a description of intent, NOT as a literal keyword search — do not match on filler words like 'find', 'skill', or 'tool', match on what the user actually wants to accomplish. ` +
+    `Use the /find-skills slash command with the key task terms (the verbs and nouns from the request, e.g. 'create jira ticket', 'deploy to fly.io') to query the registry. ` +
+    `Rank by relevance to the underlying task; a skill whose name matches a filler word is not a hit unless it actually does the task. ` +
+    `Output a JSON array of objects with these fields: name (string), ref (string, prefer owner/repo@skill form like vercel-labs/skills@frontend-design), description (one line max 120 chars), stars (number or null). ` +
+    `A markdown table or bulleted list with the same fields is also accepted. ` +
+    `Do not ask clarifying questions. If nothing in the registry fits, return an empty list. ` +
+    `Example: [{name: frontend-design, ref: vercel-labs/skills@frontend-design, description: Distinctive production-grade UI, stars: 42}]`
   );
 }
 
