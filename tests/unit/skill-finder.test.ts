@@ -33,22 +33,24 @@ describe('SkillFinder', () => {
     finder = new SkillFinder({ spawner, cwd: CWD });
   });
 
-  it('FIND-001: spawns claude with the structured-output prompt and the dangerous flag', () => {
+  it('FIND-001: spawns claude with a shell-safe single-line prompt', () => {
     finder.start('image cropping');
     const opts = spawner.lastOptions;
     expect(opts?.command).toBe('claude');
     expect(opts?.args?.[0]).toBe('--dangerously-skip-permissions');
     expect(opts?.args?.[1]).toBe('-p');
-    // The prompt asks Claude for structured JSON recommendations
-    // directly — no `/find-skills` slash-command wrapper. Assert the
-    // query is embedded and the JSON-output directive is present.
-    // Don't pin exact wording so prompt iterations don't break this
-    // test for no reason.
     const prompt = opts?.args?.[2] ?? '';
     expect(prompt).toContain('image cropping');
     expect(prompt).toContain('JSON array');
-    expect(prompt).toContain('"name"');
-    expect(prompt).toContain('"ref"');
+    // Field names appear in the prompt as bare identifiers (no embedded
+    // double quotes) — see the shell-safety comment in
+    // `buildFindSkillsPrompt`. Embedded `"` would close cmd.exe's outer
+    // wrap on Windows and split the prompt into fragments, and embedded
+    // `\n` would break the command line.
+    expect(prompt).toContain('name');
+    expect(prompt).toContain('ref');
+    expect(prompt).not.toContain('\n');
+    expect(prompt).not.toMatch(/"[^']*"/);
     expect(opts?.cwd).toBe(CWD);
   });
 
@@ -247,18 +249,35 @@ describe('buildFindSkillsPrompt', () => {
     expect(prompt).not.toMatch(/search\s+for\s+claude\s+code\s+skills\s+matching/i);
   });
 
-  it('FIND-PROMPT-004: explicitly forbids matching on the literal word "find" and other meta-words', () => {
+  it("FIND-PROMPT-004: explicitly forbids matching on the literal word 'find' and other meta-words", () => {
     // For the verbose-query repro path: even if some filler leaks
     // past stripQueryFiller, the prompt itself tells Claude not to
-    // treat "find" / "skill" / "tool" as keywords. Asserts the
+    // treat 'find' / 'skill' / 'tool' as keywords. Asserts the
     // forbid is present (without locking in exact wording).
+    // Note: the prompt uses single quotes around meta-words, NOT
+    // double quotes — embedded `"` would close cmd.exe's outer wrap
+    // on Windows (see the shell-safety comment in `buildFindSkillsPrompt`).
     const prompt = buildFindSkillsPrompt(
       'find-skills',
       'find a skill that can create structual jira ticket and github issue',
     );
     // Cleaned query is embedded.
     expect(prompt).toContain('create structual jira ticket and github issue');
-    // Meta-word forbid is explicit somewhere in the body.
-    expect(prompt.toLowerCase()).toMatch(/(?:not|don't|do not).*(?:match|search|use).*"find"/);
+    // Meta-word forbid is explicit somewhere in the body — the word
+    // 'find' appears (single-quoted) inside a "do not match on filler
+    // words" clause.
+    expect(prompt.toLowerCase()).toMatch(/(?:not|don't|do not).*(?:match|search|use|treat).*'find'/);
+  });
+
+  it('FIND-PROMPT-005: prompt is shell-safe — single line, no embedded double quotes', () => {
+    // Regression guard. Multi-line prompts with embedded `"` were
+    // shell-mangled on Windows (cmd.exe split the prompt into
+    // fragments at the inner quote), causing claude to receive a stub
+    // and respond "I'm ready to help. What would you like me to work
+    // on?". See the shell-safety comment in `buildFindSkillsPrompt`.
+    const prompt = buildFindSkillsPrompt('find-skills', 'create jira issue');
+    expect(prompt).not.toContain('\n');
+    // No `"…"` (double-quoted substring) anywhere in the prompt.
+    expect(prompt).not.toMatch(/"[^"]*"/);
   });
 });
