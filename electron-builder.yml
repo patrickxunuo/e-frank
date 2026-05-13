@@ -6,13 +6,17 @@ directories:
 files:
   - out/**/*
   - package.json
+  - build/icon.png
 asar: true
+icon: build/icon.png
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch:
         - x64
 mac:
+  icon: build/icon.icns
   target:
     - target: dmg
       arch:

@@ -162,6 +162,12 @@ function createWindow(): void {
   // left so its lockup doesn't sit under them); on Windows/Linux the
   // renderer paints its own min/max/close glyphs.
   const isMac = process.platform === 'darwin';
+  // BrowserWindow `icon` drives the in-app taskbar/title icon on Win/Linux
+  // (macOS Dock uses the .app bundle's .icns instead). `app.getAppPath()`
+  // resolves to the asar root in packaged mode and the project root in dev,
+  // so the same path works in both — provided `build/icon.png` is included
+  // in electron-builder's `files` array.
+  const iconPath = join(app.getAppPath(), 'build/icon.png');
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -171,6 +177,7 @@ function createWindow(): void {
     autoHideMenuBar: true,
     backgroundColor: '#0a1224',
     title: 'PaperPlane',
+    icon: iconPath,
     ...(isMac
       ? {
           titleBarStyle: 'hiddenInset' as const,
