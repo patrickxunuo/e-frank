@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -14,8 +15,14 @@ import type {
   IpcApi,
   IpcResult,
   SkillSummary,
+  SkillsFindExitEvent,
+  SkillsFindOutputEvent,
   SkillsListResponse,
 } from '../../src/shared/ipc';
+import {
+  __resetFindSkillCacheForTests,
+  getFindSkillCache,
+} from '../../src/renderer/state/find-skill-cache';
 
 /**
  * VIEW-SKILLS-001..007 — <Skills /> view tests.
@@ -67,6 +74,8 @@ interface ApiStub {
   remove: ReturnType<typeof vi.fn>;
   findStart: ReturnType<typeof vi.fn>;
   findCancel: ReturnType<typeof vi.fn>;
+  emitFindOutput: (e: SkillsFindOutputEvent) => void;
+  emitFindExit: (e: SkillsFindExitEvent) => void;
 }
 
 function installApi(opts?: {
@@ -83,8 +92,17 @@ function installApi(opts?: {
   const openPath = vi.fn().mockResolvedValue({ ok: true, data: null });
   const install = vi.fn().mockResolvedValue(unusedErr());
   const remove = vi.fn().mockResolvedValue(unusedErr());
-  const findStart = vi.fn().mockResolvedValue(unusedErr());
-  const findCancel = vi.fn().mockResolvedValue(unusedErr());
+  // Default findStart succeeds so the cache-flow tests can simulate
+  // a completed search. Individual tests still pass — older tests
+  // never invoked findStart, so the result shape doesn't matter to
+  // them.
+  const findStart = vi
+    .fn()
+    .mockResolvedValue({ ok: true, data: { findId: 'find-1', pid: undefined, startedAt: 0 } });
+  const findCancel = vi.fn().mockResolvedValue({ ok: true, data: { findId: 'find-1' } });
+
+  let capturedOutputListener: ((e: SkillsFindOutputEvent) => void) | null = null;
+  let capturedExitListener: ((e: SkillsFindExitEvent) => void) | null = null;
 
   const api: IpcApi = {
     ping: vi.fn<IpcApi['ping']>().mockResolvedValue({ reply: 'pong', receivedAt: 0 }),
@@ -171,8 +189,18 @@ function installApi(opts?: {
       remove,
       findStart,
       findCancel,
-      onFindOutput: vi.fn(() => () => {}),
-      onFindExit: vi.fn(() => () => {}),
+      onFindOutput: vi.fn((listener: (e: SkillsFindOutputEvent) => void) => {
+        capturedOutputListener = listener;
+        return () => {
+          capturedOutputListener = null;
+        };
+      }),
+      onFindExit: vi.fn((listener: (e: SkillsFindExitEvent) => void) => {
+        capturedExitListener = listener;
+        return () => {
+          capturedExitListener = null;
+        };
+      }),
     } as unknown as IpcApi['skills'],
     shell: {
       openPath,
@@ -180,12 +208,31 @@ function installApi(opts?: {
   } as IpcApi;
 
   (window as { api?: IpcApi }).api = api;
-  return { api, list, openPath, install, remove, findStart, findCancel };
+
+  const emitFindOutput = (e: SkillsFindOutputEvent): void => {
+    if (capturedOutputListener) capturedOutputListener(e);
+  };
+  const emitFindExit = (e: SkillsFindExitEvent): void => {
+    if (capturedExitListener) capturedExitListener(e);
+  };
+
+  return {
+    api,
+    list,
+    openPath,
+    install,
+    remove,
+    findStart,
+    findCancel,
+    emitFindOutput,
+    emitFindExit,
+  };
 }
 
 afterEach(() => {
   cleanup();
   delete (window as { api?: IpcApi }).api;
+  __resetFindSkillCacheForTests();
   vi.restoreAllMocks();
 });
 
@@ -317,5 +364,129 @@ describe('<Skills /> — VIEW-SKILLS', () => {
     const banner = await screen.findByTestId('skills-error');
     expect(banner).toBeInTheDocument();
     expect(banner).toHaveTextContent(/permission denied|SCAN_FAILED/);
+  });
+
+  // -------------------------------------------------------------------------
+  // VIEW-SKILLS-CACHE-001 — Dialog close + reopen within Skills page preserves results
+  //
+  // Bug 2 regression coverage from GH-63. The component-level test
+  // (DIALOG-FIND-CACHE-001) covers the FindSkillDialog in isolation;
+  // this one drives the cache flow through the actual Skills.tsx
+  // parent so the close + reopen path matches what users actually do.
+  // -------------------------------------------------------------------------
+  async function runFindThroughSkillsParent(stub: ApiStub): Promise<void> {
+    const findButton = await screen.findByTestId('skills-find-button');
+    fireEvent.click(findButton);
+    const input = await screen.findByTestId('find-skill-search');
+    fireEvent.change(input, { target: { value: 'create jira ticket' } });
+    fireEvent.click(screen.getByTestId('find-skill-submit'));
+    await waitFor(() => {
+      expect(stub.findStart).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect((window.api as IpcApi).skills.onFindOutput).toHaveBeenCalled();
+    });
+    act(() => {
+      stub.emitFindOutput({
+        findId: 'find-1',
+        stream: 'stdout',
+        line: JSON.stringify([
+          {
+            name: 'jira-ticket-creator',
+            ref: 'someone/skills@jira-ticket-creator',
+            description: 'Create structured Jira tickets',
+            stars: 12,
+          },
+        ]),
+        timestamp: 1,
+      });
+      stub.emitFindExit({
+        findId: 'find-1',
+        exitCode: 0,
+        signal: null,
+        durationMs: 1,
+        reason: 'completed',
+      });
+    });
+    // Cards should render in the parent.
+    await screen.findByTestId('find-skill-card-someone/skills@jira-ticket-creator');
+  }
+
+  it('VIEW-SKILLS-CACHE-001: dialog close + reopen via Find Skill button preserves cached results', async () => {
+    const stub = installApi({
+      listResult: { ok: true, data: { skills: [userSkill] } },
+    });
+    render(<Skills />);
+    await runFindThroughSkillsParent(stub);
+
+    // Close via Esc — Dialog handles Esc by calling onClose.
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('find-skill-dialog')).not.toBeInTheDocument();
+    });
+
+    // Reopen via the Find Skill button. Same trigger path users use.
+    fireEvent.click(screen.getByTestId('skills-find-button'));
+    await screen.findByTestId('find-skill-dialog');
+
+    // The cached card MUST still be there. No new findStart was
+    // invoked — only one (the original).
+    expect(
+      screen.getByTestId('find-skill-card-someone/skills@jira-ticket-creator'),
+    ).toBeInTheDocument();
+    expect(stub.findStart).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // VIEW-SKILLS-CACHE-002 — Unmounting the Skills page clears the cache
+  //
+  // Bug 3 from GH-63. The user explicitly clarified that the cache
+  // should be erased when leaving the Skills page (e.g. navigating to
+  // a different view), so that returning later shows the empty hint
+  // instead of stale results from an earlier visit.
+  // -------------------------------------------------------------------------
+  it('VIEW-SKILLS-CACHE-002: unmounting the Skills page wipes the find-skill cache', async () => {
+    const stub = installApi({
+      listResult: { ok: true, data: { skills: [userSkill] } },
+    });
+    const { unmount } = render(<Skills />);
+    await runFindThroughSkillsParent(stub);
+
+    // Cache populated.
+    expect(getFindSkillCache().lines.length).toBeGreaterThan(0);
+
+    // Navigation away simulated by unmounting the view.
+    unmount();
+
+    // Cache is wiped — re-mounting the page would show an empty
+    // dialog. We don't re-mount here (cleanup at afterEach handles
+    // it); we just assert the state directly.
+    expect(getFindSkillCache().lines.length).toBe(0);
+    expect(getFindSkillCache().query).toBe('');
+  });
+
+  // -------------------------------------------------------------------------
+  // VIEW-SKILLS-CACHE-003 — Re-mounting the Skills page after unmount
+  // shows an empty find dialog (no stale cards from the previous visit).
+  // -------------------------------------------------------------------------
+  it('VIEW-SKILLS-CACHE-003: after Skills unmount + re-mount, opening Find dialog shows empty state', async () => {
+    const stub = installApi({
+      listResult: { ok: true, data: { skills: [userSkill] } },
+    });
+    const { unmount } = render(<Skills />);
+    await runFindThroughSkillsParent(stub);
+
+    unmount();
+
+    // Re-render (simulates navigating back to the Skills page).
+    render(<Skills />);
+    fireEvent.click(await screen.findByTestId('skills-find-button'));
+    await screen.findByTestId('find-skill-dialog');
+
+    // No cards — the cache was wiped on unmount. The empty-state
+    // hint is what should show now per the GH-63 acceptance criterion
+    // ("navigating back shows the empty hint, not stale results").
+    expect(screen.queryByTestId('find-skill-candidates')).not.toBeInTheDocument();
+    expect(screen.getByText(/Search asks Claude/)).toBeInTheDocument();
   });
 });

@@ -71,12 +71,20 @@ const STRIP_RULES: ReadonlyArray<RegExp> = [
 ];
 
 /**
- * Build the prompt Claude receives. Asks Claude for skill
- * recommendations with a JSON-preferred output format, but accepts
- * markdown tables and bullets (the renderer's parser handles all
- * three). The query is run through `stripQueryFiller` first so
- * Claude sees the underlying task ("create jira issue"), not the
- * verbose wrapper ("find a skill that can…").
+ * Build the prompt Claude receives. The cleaned query is positioned
+ * as a **task description**, not a search term — earlier prompt
+ * shapes ("Search for skills matching ...") caused Claude to latch
+ * onto literal words and surface skills whose *names* contained the
+ * query keywords (e.g. "find-bugs", "find-keywords" for any query
+ * starting with "find"). Reframing as "the user wants to do this
+ * task" pushes Claude toward intent matching even on edge cases
+ * stripQueryFiller missed.
+ *
+ * The query is still run through `stripQueryFiller` first so the
+ * obvious wrapper phrases are dropped before Claude sees it — but
+ * the prompt no longer relies on the strip being complete. If a few
+ * filler words leak through, the "task description" framing keeps
+ * Claude from treating them as search keywords.
  *
  * The `skillName` param is preserved for forward-compat / overrides
  * but isn't embedded in the default prompt body.
@@ -84,13 +92,16 @@ const STRIP_RULES: ReadonlyArray<RegExp> = [
 export function buildFindSkillsPrompt(_skillName: string, query: string): string {
   const cleaned = stripQueryFiller(query);
   return (
-    `Search for Claude Code skills matching this user request: "${cleaned}"\n\n` +
+    `The user wants help with this task:\n\n` +
+    `    ${cleaned}\n\n` +
+    `Recommend up to 5 Claude Code skills that would help DO this task. Treat the text above as a description of the user's intent — NOT as a literal keyword search. In particular, do NOT match on the word "find" or other meta-words about searching for skills; match on what the user actually wants to accomplish.\n\n` +
     `Steps:\n` +
-    `1. Treat the request as a task description — recommend skills that help with the underlying task, not skills whose names literally contain the words in the request.\n` +
-    `2. Use the /find-skills slash command with the task keywords to query the actual skill registry. Don't rely on memory — use the registry.\n` +
-    `3. Present up to 5 of the most relevant skills. Preferred format is a JSON array of {"name", "ref" (in "owner/repo@skill" form when applicable, e.g. "vercel-labs/skills@frontend-design"), "description" (one line, ≤120 chars), "stars" (number or null)}. A markdown table or bulleted list with the same fields is also acceptable.\n` +
-    `4. Don't ask clarifying questions. If the registry returns nothing relevant, output an empty list.\n\n` +
-    `Example JSON: [{"name":"frontend-design","ref":"vercel-labs/skills@frontend-design","description":"Distinctive production-grade UI","stars":42}]`
+    `1. Identify the underlying task. Extract the key verbs and nouns (e.g. "create jira ticket", "deploy to fly.io", "design portfolio"). Ignore filler like "skill", "tool", "help me", etc.\n` +
+    `2. Use the /find-skills slash command with those key task terms to query the skill registry. Do NOT pass the meta-words ("find", "skill", "tool") as search terms.\n` +
+    `3. Rank by relevance to the underlying task. A skill whose name matches a filler word is NOT a hit — only count it if it actually does the task.\n` +
+    `4. Output a JSON array of {"name", "ref" (in "owner/repo@skill" form when applicable, e.g. "vercel-labs/skills@frontend-design"), "description" (one line, ≤120 chars), "stars" (number or null)}. A markdown table or bulleted list with the same fields is also accepted by the renderer.\n` +
+    `5. Don't ask clarifying questions. If nothing in the registry fits, output [].\n\n` +
+    `Example: [{"name":"frontend-design","ref":"vercel-labs/skills@frontend-design","description":"Distinctive production-grade UI","stars":42}]`
   );
 }
 

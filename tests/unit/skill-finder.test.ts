@@ -217,20 +217,48 @@ describe('stripQueryFiller', () => {
 });
 
 /**
- * FIND-PROMPT-001..002 — `buildFindSkillsPrompt` integrates the
- * filler stripping. Asserts the cleaned query (not the verbose
- * original) ends up embedded in the prompt body.
+ * FIND-PROMPT-001..004 — `buildFindSkillsPrompt` integrates the
+ * filler stripping AND frames the cleaned query as a task
+ * description (not a search keyword) so Claude stops latching onto
+ * meta-words like "find" when the strip leaves some leakage.
  */
 describe('buildFindSkillsPrompt', () => {
   it('FIND-PROMPT-001: embeds the filler-stripped query, not the verbose original', () => {
     const prompt = buildFindSkillsPrompt('find-skills', 'find a skill that can create jira issue');
-    expect(prompt).toContain('"create jira issue"');
+    expect(prompt).toContain('create jira issue');
     // Verbose original should NOT appear in the prompt body.
     expect(prompt).not.toContain('find a skill that can create jira issue');
   });
 
   it('FIND-PROMPT-002: passes simple queries through untouched', () => {
     const prompt = buildFindSkillsPrompt('find-skills', 'image cropping');
-    expect(prompt).toContain('"image cropping"');
+    expect(prompt).toContain('image cropping');
+  });
+
+  it('FIND-PROMPT-003: frames the query as a task description, not a search keyword', () => {
+    // The prompt should position the cleaned query as something the
+    // user wants to DO, not a keyword to match. This pushes Claude
+    // toward intent matching instead of literal name matching, which
+    // is the regression GH-63 (#1) flagged.
+    const prompt = buildFindSkillsPrompt('find-skills', 'create jira issue');
+    expect(prompt.toLowerCase()).toContain('task');
+    // No "Search for ... matching" framing — that's what caused the
+    // earlier latch-onto-"find" regression.
+    expect(prompt).not.toMatch(/search\s+for\s+claude\s+code\s+skills\s+matching/i);
+  });
+
+  it('FIND-PROMPT-004: explicitly forbids matching on the literal word "find" and other meta-words', () => {
+    // For the verbose-query repro path: even if some filler leaks
+    // past stripQueryFiller, the prompt itself tells Claude not to
+    // treat "find" / "skill" / "tool" as keywords. Asserts the
+    // forbid is present (without locking in exact wording).
+    const prompt = buildFindSkillsPrompt(
+      'find-skills',
+      'find a skill that can create structual jira ticket and github issue',
+    );
+    // Cleaned query is embedded.
+    expect(prompt).toContain('create structual jira ticket and github issue');
+    // Meta-word forbid is explicit somewhere in the body.
+    expect(prompt.toLowerCase()).toMatch(/(?:not|don't|do not).*(?:match|search|use).*"find"/);
   });
 });
