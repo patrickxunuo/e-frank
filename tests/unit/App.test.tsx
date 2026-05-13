@@ -181,6 +181,9 @@ function makeIpcApiStub(
     },
     shell: {
       openPath: vi.fn<IpcApi['shell']['openPath']>().mockResolvedValue({ ok: true, data: null }),
+      openExternal: vi
+        .fn<IpcApi['shell']['openExternal']>()
+        .mockResolvedValue({ ok: true, data: null }),
     },
   };
 }

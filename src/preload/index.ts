@@ -74,6 +74,7 @@ import {
   type SkillsFindCancelRequest,
   type SkillsFindOutputEvent,
   type SkillsFindExitEvent,
+  type ShellOpenExternalRequest,
   type ShellOpenPathRequest,
 } from '../shared/ipc.js';
 
@@ -443,6 +444,8 @@ const api: IpcApi = {
   shell: {
     openPath: (req: ShellOpenPathRequest): Promise<IpcResult<null>> =>
       ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_PATH, req) as Promise<IpcResult<null>>,
+    openExternal: (req: ShellOpenExternalRequest): Promise<IpcResult<null>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_EXTERNAL, req) as Promise<IpcResult<null>>,
   },
 };
 

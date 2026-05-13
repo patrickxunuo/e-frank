@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SkillSummary } from '@shared/ipc';
+import { dispatchToast } from './notifications';
 
 export interface RemoveSkillResult {
   ok: boolean;
@@ -15,9 +16,15 @@ export interface UseSkillsResult {
    * Removes a skill via `npx skills remove <ref>` and refreshes the list
    * on success. Returns `{ ok: false, error }` on any failure path
    * (IPC unavailable, invalid ref, npm error) so the UI can surface it.
+   * On success, dispatches a `Removed <name>` toast. Install isn't on
+   * this hook because the install button lives in FindSkillDialog,
+   * which has its own per-card installing state — dispatch happens
+   * there.
    */
-  remove: (ref: string) => Promise<RemoveSkillResult>;
+  remove: (ref: string, displayName?: string) => Promise<RemoveSkillResult>;
 }
+
+const TOAST_TTL_MS = 4_000;
 
 const BRIDGE_UNAVAILABLE = 'IPC bridge unavailable';
 
@@ -73,7 +80,7 @@ export function useSkills(): UseSkillsResult {
   }, []);
 
   const remove = useCallback(
-    async (ref: string): Promise<RemoveSkillResult> => {
+    async (ref: string, displayName?: string): Promise<RemoveSkillResult> => {
       if (typeof window === 'undefined' || !window.api) {
         return { ok: false, error: BRIDGE_UNAVAILABLE };
       }
@@ -91,6 +98,12 @@ export function useSkills(): UseSkillsResult {
         }
         // Success — refresh the list so the row disappears.
         await refresh();
+        dispatchToast({
+          type: 'success',
+          title: `Removed ${displayName ?? ref}`,
+          ttlMs: TOAST_TTL_MS,
+          dedupeKey: `skill-remove-${ref}`,
+        });
         return { ok: true };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

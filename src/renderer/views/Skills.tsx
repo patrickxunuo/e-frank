@@ -50,16 +50,23 @@ export function Skills(): JSX.Element {
     if (pendingRemove === null || removing) return;
     setRemoving(true);
     setRemoveError(null);
-    // The scanner uses the directory basename as `id`, which is also
-    // the install ref (`ef-feature` for `~/.claude/skills/ef-feature/`).
-    // Pass it through to the remove IPC.
-    const result = await remove(pendingRemove.id);
-    setRemoving(false);
-    if (result.ok) {
-      // useSkills.remove() already refreshed the list — just dismiss.
-      setPendingRemove(null);
-    } else {
-      setRemoveError(result.error ?? 'Failed to remove skill');
+    try {
+      // The scanner uses the directory basename as `id`, which is also
+      // the install ref (`ef-feature` for `~/.claude/skills/ef-feature/`).
+      // Pass it through to the remove IPC. `name` is the human label
+      // for the success toast.
+      const result = await remove(pendingRemove.id, pendingRemove.name);
+      if (result.ok) {
+        // useSkills.remove() already refreshed the list — just dismiss.
+        setPendingRemove(null);
+      } else {
+        setRemoveError(result.error ?? 'Failed to remove skill');
+      }
+    } finally {
+      // Always clear the in-flight flag — protects against `remove()`
+      // throwing or the IPC bridge crashing. Without this, the dialog
+      // could be stuck on "Removing…" with no way out.
+      setRemoving(false);
     }
   }, [pendingRemove, removing, remove]);
 

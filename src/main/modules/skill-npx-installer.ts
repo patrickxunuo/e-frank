@@ -73,7 +73,7 @@ export interface UninstallSkillOptions {
   cwd: string;
   /** Override the binary. Defaults to `npx`. */
   command?: string;
-  /** Override the remove flags. Defaults to `-g`. */
+  /** Override the remove flags. Defaults to `-g -y`. */
   flags?: ReadonlyArray<string>;
   /** Hard timeout in ms. Defaults to 5 minutes. */
   timeoutMs?: number;
@@ -172,10 +172,12 @@ export async function uninstallSkillViaNpx(
     throw new InvalidSkillRefError(options.ref);
   }
   const command = options.command ?? 'npx';
-  // No `-y` — `skills remove` typically doesn't prompt, but the flag
-  // is harmless if it does; keeping flags minimal keeps the shell
-  // command surface predictable.
-  const flags = options.flags ?? ['-g'];
+  // `-y` is REQUIRED: without it, `npx skills remove` waits on an
+  // interactive "Are you sure?" prompt. We don't write to the child's
+  // stdin, so without `-y` the child hangs until the 5-minute timeout
+  // fires and the UI appears to "remove forever". Parity with the
+  // install flags, which always carry `-y` for the same reason.
+  const flags = options.flags ?? ['-g', '-y'];
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   const child = options.spawner.spawn({

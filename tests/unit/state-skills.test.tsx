@@ -2,13 +2,18 @@
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { useEffect } from 'react';
-import { useSkills } from '../../src/renderer/state/skills';
+import { useSkills, type RemoveSkillResult } from '../../src/renderer/state/skills';
 import type {
   IpcApi,
   IpcResult,
   SkillSummary,
   SkillsListResponse,
+  SkillsRemoveResponse,
 } from '../../src/shared/ipc';
+import {
+  __resetNotificationsForTests,
+  getToasts,
+} from '../../src/renderer/state/notifications';
 
 /**
  * HOOK-SKILLS-001..005 — `useSkills` hook tests.
@@ -33,6 +38,7 @@ interface UseSkillsResult {
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
+  remove: (ref: string, displayName?: string) => Promise<RemoveSkillResult>;
 }
 
 interface CapturedHook {
@@ -56,6 +62,7 @@ function HookConsumer({
 interface ApiStub {
   api: IpcApi;
   skillsList: Mock;
+  skillsRemove: Mock;
 }
 
 const userSkill: SkillSummary = {
@@ -78,6 +85,7 @@ const projectSkill: SkillSummary = {
 
 function installApi(opts?: {
   listResult?: IpcResult<SkillsListResponse>;
+  removeResult?: IpcResult<SkillsRemoveResponse>;
 }): ApiStub {
   const unusedErr = (): IpcResult<never> => ({
     ok: false,
@@ -86,6 +94,12 @@ function installApi(opts?: {
   const skillsList = vi
     .fn()
     .mockResolvedValue(opts?.listResult ?? { ok: true, data: { skills: [] } });
+  const skillsRemove = vi.fn().mockResolvedValue(
+    opts?.removeResult ?? {
+      ok: true,
+      data: { status: 'installed', stdout: '', stderr: '', exitCode: 0 },
+    },
+  );
 
   // Build a minimal IpcApi where only `skills` is used. Other namespaces are
   // filled with throw-style stubs so accidental access surfaces as a typed
@@ -164,7 +178,7 @@ function installApi(opts?: {
     skills: {
       list: skillsList,
       install: vi.fn().mockResolvedValue(unusedErr()),
-      remove: vi.fn().mockResolvedValue(unusedErr()),
+      remove: skillsRemove,
       findStart: vi.fn().mockResolvedValue(unusedErr()),
       findCancel: vi.fn().mockResolvedValue(unusedErr()),
       onFindOutput: vi.fn(() => () => {}),
@@ -172,16 +186,18 @@ function installApi(opts?: {
     } as unknown as IpcApi['skills'],
     shell: {
       openPath: vi.fn().mockResolvedValue({ ok: true, data: null }),
+      openExternal: vi.fn().mockResolvedValue({ ok: true, data: null }),
     } as unknown as IpcApi['shell'],
   } as IpcApi;
 
   (window as { api?: IpcApi }).api = api;
-  return { api, skillsList };
+  return { api, skillsList, skillsRemove };
 }
 
 afterEach(() => {
   cleanup();
   delete (window as { api?: IpcApi }).api;
+  __resetNotificationsForTests();
   vi.restoreAllMocks();
 });
 
@@ -298,5 +314,71 @@ describe('useSkills — HOOK-SKILLS', () => {
     });
     expect(cap.latest?.error).toBe('IPC bridge unavailable');
     expect(cap.latest?.skills).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // HOOK-SKILLS-REMOVE-TOAST — Successful remove dispatches a success toast
+  // -------------------------------------------------------------------------
+  it('HOOK-SKILLS-REMOVE-TOAST-001: successful remove dispatches `Removed <name>` toast', async () => {
+    const stub = installApi();
+    const cap: CapturedHook = { latest: null, history: [] };
+    render(<HookConsumer capture={cap} />);
+    await waitFor(() => {
+      expect(cap.latest?.loading).toBe(false);
+    });
+    expect(getToasts()).toEqual([]);
+
+    const resultBox: { current: RemoveSkillResult | null } = { current: null };
+    await act(async () => {
+      resultBox.current = (await cap.latest?.remove('ef-feature', 'ef-feature')) ?? null;
+    });
+    expect(resultBox.current?.ok).toBe(true);
+    const toasts = getToasts();
+    expect(toasts.length).toBe(1);
+    expect(toasts[0]?.type).toBe('success');
+    expect(toasts[0]?.title).toBe('Removed ef-feature');
+    expect(stub.skillsRemove).toHaveBeenCalledTimes(1);
+  });
+
+  it('HOOK-SKILLS-REMOVE-TOAST-002: IPC-error remove does NOT dispatch a toast', async () => {
+    installApi({
+      removeResult: {
+        ok: false,
+        error: { code: 'NPM_FAILED', message: 'package not found' },
+      },
+    });
+    const cap: CapturedHook = { latest: null, history: [] };
+    render(<HookConsumer capture={cap} />);
+    await waitFor(() => {
+      expect(cap.latest?.loading).toBe(false);
+    });
+
+    const resultBox: { current: RemoveSkillResult | null } = { current: null };
+    await act(async () => {
+      resultBox.current = (await cap.latest?.remove('nope', 'nope')) ?? null;
+    });
+    expect(resultBox.current?.ok).toBe(false);
+    expect(getToasts()).toEqual([]);
+  });
+
+  it('HOOK-SKILLS-REMOVE-TOAST-003: status:failed remove does NOT dispatch a toast', async () => {
+    installApi({
+      removeResult: {
+        ok: true,
+        data: { status: 'failed', stdout: '', stderr: 'ENOENT', exitCode: 1 },
+      },
+    });
+    const cap: CapturedHook = { latest: null, history: [] };
+    render(<HookConsumer capture={cap} />);
+    await waitFor(() => {
+      expect(cap.latest?.loading).toBe(false);
+    });
+
+    const resultBox: { current: RemoveSkillResult | null } = { current: null };
+    await act(async () => {
+      resultBox.current = (await cap.latest?.remove('ef-feature')) ?? null;
+    });
+    expect(resultBox.current?.ok).toBe(false);
+    expect(getToasts()).toEqual([]);
   });
 });

@@ -151,6 +151,7 @@ function installApi(): ApiStub {
     },
     shell: {
       openPath: vi.fn() as unknown as IpcApi['shell']['openPath'],
+      openExternal: vi.fn() as unknown as IpcApi['shell']['openExternal'],
     },
   };
 

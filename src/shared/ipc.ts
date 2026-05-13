@@ -148,6 +148,8 @@ export const IPC_CHANNELS = {
   SKILLS_FIND_EXIT: 'skills:find-exit',
   // -- Shell open-path (issue #GH-38 companion) --
   SHELL_OPEN_PATH: 'shell:open-path',
+  /** Open a URL in the default browser. Host allow-list enforced in main. */
+  SHELL_OPEN_EXTERNAL: 'shell:open-external',
 } as const;
 
 export type PingRequest = { message: string };
@@ -576,6 +578,16 @@ export interface ShellOpenPathRequest {
   path: string;
 }
 
+export interface ShellOpenExternalRequest {
+  /**
+   * Fully-qualified `http://` or `https://` URL to open in the default
+   * browser. Main-process handler enforces a hostname allow-list to
+   * defend against `javascript:` / `file://` injection from a
+   * compromised renderer.
+   */
+  url: string;
+}
+
 // -- Folder picker (Electron native dialog) ----------------------------------
 
 export interface DialogSelectFolderRequest {
@@ -698,5 +710,11 @@ export interface IpcApi {
   };
   shell: {
     openPath: (req: ShellOpenPathRequest) => Promise<IpcResult<null>>;
+    /**
+     * Open a URL in the default browser. Renderer-facing wrapper around
+     * Electron's `shell.openExternal`. Hostname must be in the main-
+     * process allow-list; rejected URLs return `FORBIDDEN_URL`.
+     */
+    openExternal: (req: ShellOpenExternalRequest) => Promise<IpcResult<null>>;
   };
 }

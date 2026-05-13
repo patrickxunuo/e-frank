@@ -195,6 +195,7 @@ function installApi(opts?: {
     },
     shell: {
       openPath: vi.fn() as unknown as IpcApi['shell']['openPath'],
+      openExternal: vi.fn() as unknown as IpcApi['shell']['openExternal'],
     },
   };
 
@@ -543,6 +544,7 @@ function installBranchesApi(opts?: {
     },
     shell: {
       openPath: vi.fn() as unknown as IpcApi['shell']['openPath'],
+      openExternal: vi.fn() as unknown as IpcApi['shell']['openExternal'],
     },
   };
 

@@ -16,6 +16,10 @@ import type {
   SkillsFindExitEvent,
   SkillsFindOutputEvent,
 } from '../../src/shared/ipc';
+import {
+  __resetNotificationsForTests,
+  getToasts,
+} from '../../src/renderer/state/notifications';
 
 /**
  * DIALOG-FIND-001..010 — <FindSkillDialog /> tests.
@@ -176,6 +180,7 @@ function installApi(opts?: {
     } as unknown as IpcApi['skills'],
     shell: {
       openPath: vi.fn().mockResolvedValue({ ok: true, data: null }),
+      openExternal: vi.fn().mockResolvedValue({ ok: true, data: null }),
     } as unknown as IpcApi['shell'],
   } as IpcApi;
 
@@ -196,6 +201,7 @@ const noop = (): void => {};
 afterEach(() => {
   cleanup();
   delete (window as { api?: IpcApi }).api;
+  __resetNotificationsForTests();
   vi.restoreAllMocks();
 });
 
@@ -472,5 +478,145 @@ describe('<FindSkillDialog /> — DIALOG-FIND', () => {
     await waitFor(() => {
       expect(onClose).toHaveBeenCalled();
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // LAYOUT — sticky search top / scrollable middle / sticky footer
+  // -------------------------------------------------------------------------
+  it('DIALOG-FIND-LAYOUT-001: body renders sticky-header + scroll + sticky-footer slots', () => {
+    installApi();
+    render(<FindSkillDialog open={true} onClose={noop} />);
+
+    expect(screen.getByTestId('find-skill-body')).toBeInTheDocument();
+    expect(screen.getByTestId('find-skill-body-header')).toBeInTheDocument();
+    expect(screen.getByTestId('find-skill-body-scroll')).toBeInTheDocument();
+    expect(screen.getByTestId('find-skill-body-footer')).toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // CARDS — View source button + one-per-row layout
+  // -------------------------------------------------------------------------
+  async function emitJsonCandidates(stub: ApiStub): Promise<void> {
+    // Surface 3 candidates via a JSON stdout line — the parser picks
+    // them up + the dialog renders cards. Must wait for the dialog's
+    // onFindOutput subscription before emitting, otherwise the event
+    // lands before the listener attaches and the candidates never
+    // appear (the parent test hangs at findByTestId).
+    fireEvent.click(screen.getByTestId('find-skill-submit'));
+    await waitFor(() => {
+      expect(stub.findStart).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      const skills = (window.api as IpcApi).skills;
+      expect(skills.onFindOutput).toHaveBeenCalled();
+    });
+    act(() => {
+      stub.emitOutput({
+        findId: 'find-1',
+        stream: 'stdout',
+        line: JSON.stringify([
+          {
+            name: 'frontend-design',
+            ref: 'vercel-labs/skills@frontend-design',
+            description: 'Distinctive production-grade UI',
+            stars: 42,
+          },
+          { name: 'find-bugs', ref: 'getsentry/skills@find-bugs', description: 'Bug hunting', stars: 7 },
+          { name: 'bare-skill', ref: 'bare-skill', description: 'No web source', stars: null },
+        ]),
+        timestamp: 0,
+      });
+      stub.emitExit({ findId: 'find-1', exitCode: 0, signal: null, durationMs: 1, reason: 'completed' });
+    });
+  }
+
+  it('DIALOG-FIND-CARD-LAYOUT-001: candidates rendered as a single-column list with data-layout="row"', async () => {
+    const stub = installApi();
+    render(<FindSkillDialog open={true} initialQuery="ui" onClose={noop} />);
+    await emitJsonCandidates(stub);
+
+    const list = await screen.findByTestId('find-skill-candidates');
+    const inner = list.querySelector('[data-layout="row"]');
+    expect(inner).not.toBeNull();
+    expect(inner?.children.length).toBe(3);
+  });
+
+  it('DIALOG-FIND-CARD-VIEW-001: View button renders for owner/repo@skill refs', async () => {
+    const stub = installApi();
+    render(<FindSkillDialog open={true} initialQuery="ui" onClose={noop} />);
+    await emitJsonCandidates(stub);
+
+    expect(
+      await screen.findByTestId('find-skill-view-vercel-labs/skills@frontend-design'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId('find-skill-view-getsentry/skills@find-bugs'),
+    ).toBeInTheDocument();
+  });
+
+  it('DIALOG-FIND-CARD-VIEW-002: View button hidden for bare-name refs', async () => {
+    const stub = installApi();
+    render(<FindSkillDialog open={true} initialQuery="ui" onClose={noop} />);
+    await emitJsonCandidates(stub);
+
+    // The bare-name card exists, but it has no View button.
+    expect(await screen.findByTestId('find-skill-card-bare-skill')).toBeInTheDocument();
+    expect(screen.queryByTestId('find-skill-view-bare-skill')).not.toBeInTheDocument();
+  });
+
+  it('DIALOG-FIND-CARD-VIEW-003: clicking View invokes shell.openExternal with derived URL', async () => {
+    const stub = installApi();
+    render(<FindSkillDialog open={true} initialQuery="ui" onClose={noop} />);
+    await emitJsonCandidates(stub);
+
+    const view = await screen.findByTestId(
+      'find-skill-view-vercel-labs/skills@frontend-design',
+    );
+    fireEvent.click(view);
+
+    await waitFor(() => {
+      expect(stub.api.shell.openExternal).toHaveBeenCalledTimes(1);
+    });
+    const call = (stub.api.shell.openExternal as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      url?: string;
+    };
+    expect(call?.url).toBe('https://github.com/vercel-labs/skills');
+  });
+
+  // -------------------------------------------------------------------------
+  // TOAST — install success dispatches toast via notifications store
+  // -------------------------------------------------------------------------
+  it('DIALOG-FIND-TOAST-001: successful install dispatches a success toast titled "Installed <name>"', async () => {
+    const stub = installApi();
+    render(<FindSkillDialog open={true} initialQuery="ui" onClose={noop} />);
+    await emitJsonCandidates(stub);
+
+    fireEvent.click(await screen.findByTestId('find-skill-install-vercel-labs/skills@frontend-design'));
+    await waitFor(() => {
+      expect(stub.install).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      const toasts = getToasts();
+      expect(toasts.length).toBe(1);
+      expect(toasts[0]?.type).toBe('success');
+      expect(toasts[0]?.title).toBe('Installed frontend-design');
+    });
+  });
+
+  it('DIALOG-FIND-TOAST-002: failed install does NOT dispatch a toast (banner only)', async () => {
+    const stub = installApi({
+      installResult: {
+        ok: true,
+        data: { status: 'failed', stdout: '', stderr: 'E404', exitCode: 1 },
+      },
+    });
+    render(<FindSkillDialog open={true} initialQuery="ui" onClose={noop} />);
+    await emitJsonCandidates(stub);
+
+    fireEvent.click(await screen.findByTestId('find-skill-install-vercel-labs/skills@frontend-design'));
+    await waitFor(() => {
+      expect(screen.getByTestId('find-skill-install-error')).toBeInTheDocument();
+    });
+    expect(getToasts()).toEqual([]);
   });
 });

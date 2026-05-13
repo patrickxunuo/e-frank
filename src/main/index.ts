@@ -111,6 +111,7 @@ import {
   type FinderExitEvent,
 } from './modules/skill-finder.js';
 import { isValidFindSkillsQuery } from './modules/skill-query-validator.js';
+import { validateOpenExternalUrl } from './modules/shell-external-validator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -2005,6 +2006,43 @@ function registerIpcHandlers(): void {
         if (errMsg !== '') {
           return { ok: false, error: { code: 'OPEN_FAILED', message: errMsg } };
         }
+        return { ok: true, data: null };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: { code: 'OPEN_FAILED', message } };
+      }
+    },
+  );
+
+  // -- Shell open-external (companion to skills find-dialog "View" button)
+  ipcMain.handle(
+    IPC_CHANNELS.SHELL_OPEN_EXTERNAL,
+    async (_event, raw): Promise<IpcResult<null>> => {
+      const urlRaw =
+        typeof raw === 'object' && raw !== null && 'url' in raw
+          ? (raw as { url?: unknown }).url
+          : undefined;
+      const validated = validateOpenExternalUrl(urlRaw);
+      if (!validated.ok) {
+        const code =
+          validated.reason === 'FORBIDDEN_HOST'
+            ? 'FORBIDDEN_URL'
+            : validated.reason === 'BAD_PROTOCOL'
+              ? 'FORBIDDEN_URL'
+              : 'INVALID_REQUEST';
+        return {
+          ok: false,
+          error: {
+            code,
+            message:
+              code === 'FORBIDDEN_URL'
+                ? 'shell:open-external rejected: URL host or protocol not allow-listed'
+                : 'url must be a parseable absolute URL',
+          },
+        };
+      }
+      try {
+        await shell.openExternal(validated.url);
         return { ok: true, data: null };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

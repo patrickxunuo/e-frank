@@ -299,6 +299,16 @@ export function IconClipboard({ size = 12, ...rest }: IconProps): JSX.Element {
   );
 }
 
+export function IconExternal({ size = 14, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <path d="M14 4h6v6" />
+      <path d="M20 4 12 12" />
+      <path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5" />
+    </svg>
+  );
+}
+
 export function IconWindowMin({ size = 12, ...rest }: IconProps): JSX.Element {
   return (
     <svg {...baseProps(size)} {...rest} viewBox="0 0 12 12">

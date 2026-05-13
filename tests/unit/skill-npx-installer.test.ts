@@ -119,7 +119,11 @@ describe('SkillNpxInstaller', () => {
   });
 
   describe('NPX-UNINSTALL-001..005 remove path', () => {
-    it('NPX-UNINSTALL-001: spawns `npx skills remove <ref> -g` by default', async () => {
+    it('NPX-UNINSTALL-001: spawns `npx skills remove <ref> -g -y` by default', async () => {
+      // `-y` is critical: without it, npx waits on an interactive
+      // "Are you sure?" prompt and the child hangs until the 5min
+      // timeout — the user perceives this as "Remove runs forever".
+      // Regression guard against accidentally dropping the flag.
       const spawner = new FakeSpawner();
       const promise = uninstallSkillViaNpx({
         spawner,
@@ -127,7 +131,7 @@ describe('SkillNpxInstaller', () => {
         cwd: VALID_CWD,
       });
       expect(spawner.lastOptions?.command).toBe('npx');
-      expect(spawner.lastOptions?.args).toEqual(['skills', 'remove', 'ef-feature', '-g']);
+      expect(spawner.lastOptions?.args).toEqual(['skills', 'remove', 'ef-feature', '-g', '-y']);
       expect(spawner.lastOptions?.cwd).toBe(VALID_CWD);
       spawner.lastSpawned?.emitExit(0, null);
       const result = await promise;

@@ -11,9 +11,11 @@ import type { SkillsFindExitEvent, SkillsFindOutputEvent } from '@shared/ipc';
 import { Button } from './Button';
 import { Dialog } from './Dialog';
 import { Input } from './Input';
-import { IconSkills } from './icons';
+import { IconExternal, IconSkills } from './icons';
 import { PaperplaneGlyph } from './PaperplaneGlyph';
 import { parseSkillCandidates, type SkillCandidate } from './find-skill-candidates';
+import { getSkillSourceUrl } from './skill-source-url';
+import { dispatchToast } from '../state/notifications';
 import paperplaneAnimation from '../../../design/logo/paperplane-floating.lottie.json';
 import styles from './FindSkillDialog.module.css';
 
@@ -173,7 +175,7 @@ export function FindSkillDialog({
   }, [activeFindId]);
 
   const handleInstall = useCallback(
-    async (ref: string): Promise<void> => {
+    async (ref: string, displayName?: string): Promise<void> => {
       if (typeof window === 'undefined' || !window.api) return;
       const trimmed = ref.trim();
       if (trimmed === '') return;
@@ -193,12 +195,25 @@ export function FindSkillDialog({
         // Success — refresh the parent list and clear the manual input.
         setManualRef('');
         onInstalled?.();
+        dispatchToast({
+          type: 'success',
+          title: `Installed ${displayName ?? trimmed}`,
+          ttlMs: 4_000,
+          dedupeKey: `skill-install-${trimmed}`,
+        });
       } finally {
         setInstallingRef(null);
       }
     },
     [onInstalled],
   );
+
+  const handleOpenSource = useCallback(async (ref: string): Promise<void> => {
+    if (typeof window === 'undefined' || !window.api) return;
+    const url = getSkillSourceUrl(ref);
+    if (url === null) return;
+    await window.api.shell.openExternal({ url });
+  }, []);
 
   const isFinding = activeFindId !== null;
   const prefersReducedMotion = usePrefersReducedMotion();
@@ -225,8 +240,18 @@ export function FindSkillDialog({
       subtitle="Ask Claude what skill best fits your stack or workflow."
       data-testid="find-skill-dialog"
     >
-      <div className={styles.body}>
-        <form className={styles.searchRow} onSubmit={(e) => void handleStartFind(e)}>
+      <div className={styles.body} data-testid="find-skill-body">
+        {/*
+         * Three-row grid: sticky search top, scrollable middle region
+         * (loader + raw-stream + candidates list), sticky manual-install
+         * bottom. Long candidate lists no longer push the search input
+         * or the manual-install fallback off-screen.
+         */}
+        <form
+          className={`${styles.searchRow} ${styles.bodyHeader}`}
+          onSubmit={(e) => void handleStartFind(e)}
+          data-testid="find-skill-body-header"
+        >
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -256,127 +281,132 @@ export function FindSkillDialog({
           )}
         </form>
 
-        {findError && (
-          <div className={styles.errorBanner} role="alert" data-testid="find-skill-error">
-            <strong>Couldn't run find-skills.</strong> {findError}
-          </div>
-        )}
+        <div className={styles.bodyScroll} data-testid="find-skill-body-scroll">
+          {findError && (
+            <div className={styles.errorBanner} role="alert" data-testid="find-skill-error">
+              <strong>Couldn't run find-skills.</strong> {findError}
+            </div>
+          )}
 
-        {/*
-         * Paperplane Lottie loader — shown while a find is in flight and
-         * no output has streamed yet. Once Claude starts producing
-         * lines, the loader collapses and the stream / cards take over.
-         * `prefers-reduced-motion: reduce` falls back to the static
-         * paperplane glyph (same affordance, no animation).
-         */}
-        {isFinding && lines.length === 0 && (
-          <div className={styles.loadingFigure} data-testid="find-skill-loading-figure">
-            {prefersReducedMotion ? (
-              <svg
-                width={80}
-                height={80}
-                viewBox="0 0 32 32"
-                className={styles.loadingFigureStatic}
-                aria-hidden="true"
-              >
-                <PaperplaneGlyph />
-              </svg>
-            ) : (
-              <div className={styles.loadingFigureLottie} aria-hidden="true">
-                <Lottie animationData={paperplaneAnimation} loop autoplay />
-              </div>
-            )}
-            <span className={styles.loadingFigureCaption}>Searching skills…</span>
-          </div>
-        )}
+          {/*
+           * Paperplane Lottie loader — shown while a find is in flight and
+           * no output has streamed yet. Once Claude starts producing
+           * lines, the loader collapses and the stream / cards take over.
+           * `prefers-reduced-motion: reduce` falls back to the static
+           * paperplane glyph (same affordance, no animation).
+           */}
+          {isFinding && lines.length === 0 && (
+            <div className={styles.loadingFigure} data-testid="find-skill-loading-figure">
+              {prefersReducedMotion ? (
+                <svg
+                  width={80}
+                  height={80}
+                  viewBox="0 0 32 32"
+                  className={styles.loadingFigureStatic}
+                  aria-hidden="true"
+                >
+                  <PaperplaneGlyph />
+                </svg>
+              ) : (
+                <div className={styles.loadingFigureLottie} aria-hidden="true">
+                  <Lottie animationData={paperplaneAnimation} loop autoplay />
+                </div>
+              )}
+              <span className={styles.loadingFigureCaption}>Searching skills…</span>
+            </div>
+          )}
 
-        {/*
-         * Raw stream fallback. Shown when:
-         *   - the find is mid-flight (so the user sees something happening
-         *     even before Claude emits valid JSON), OR
-         *   - the find has completed but no JSON array was detectable
-         *     (Claude rambled instead of complying with the format).
-         * Hidden once `parseSkillCandidates` succeeds.
-         */}
-        {showRawStream && lines.length > 0 && (
-          <div className={styles.stream} ref={scrollRef} data-testid="find-skill-stream">
-            {lines.map((line) => (
-              <div
-                key={line.id}
-                className={styles.streamLine}
-                data-stream={line.stream}
-              >
-                {line.text}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/*
-         * Empty-state hint before any search has been kicked off.
-         */}
-        {showRawStream && lines.length === 0 && !isFinding && (
-          <div className={styles.streamHint}>
-            Search asks Claude to find Claude Code skills matching your query
-            and returns them as structured cards with an inline Install
-            button for each.
-          </div>
-        )}
-
-        {hasStructuredCandidates && candidates.length === 0 && !isFinding && (
-          <div className={styles.streamHint} data-testid="find-skill-empty-result">
-            Claude didn't recommend any skills for that query. Try a
-            different keyword, or paste a skill ref below if you know
-            the name.
-          </div>
-        )}
-
-        {candidates.length > 0 && (
-          <div className={styles.candidates} data-testid="find-skill-candidates">
-            <div className={styles.candidatesHead}>Recommended skills</div>
-            <div className={styles.candidateGrid}>
-              {candidates.map((c) => (
-                <SkillCandidateCard
-                  key={c.ref}
-                  candidate={c}
-                  installing={installingRef === c.ref}
-                  disabled={installingRef !== null && installingRef !== c.ref}
-                  onInstall={() => void handleInstall(c.ref)}
-                />
+          {/*
+           * Raw stream fallback. Shown when:
+           *   - the find is mid-flight (so the user sees something happening
+           *     even before Claude emits valid JSON), OR
+           *   - the find has completed but no JSON array was detectable
+           *     (Claude rambled instead of complying with the format).
+           * Hidden once `parseSkillCandidates` succeeds.
+           */}
+          {showRawStream && lines.length > 0 && (
+            <div className={styles.stream} ref={scrollRef} data-testid="find-skill-stream">
+              {lines.map((line) => (
+                <div
+                  key={line.id}
+                  className={styles.streamLine}
+                  data-stream={line.stream}
+                >
+                  {line.text}
+                </div>
               ))}
             </div>
-          </div>
-        )}
+          )}
 
-        <div className={styles.manualBlock}>
-          <div className={styles.manualHead}>Install by name</div>
-          <p className={styles.manualHint}>
-            If the recommendation you want isn't detected, paste the skill ref
-            here (e.g. <code>ef-feature</code> or <code>owner/repo</code>).
-          </p>
-          <div className={styles.manualRow}>
-            <Input
-              value={manualRef}
-              onChange={(e) => setManualRef(e.target.value)}
-              placeholder="skill-ref"
-              data-testid="find-skill-install-input"
-            />
-            <Button
-              variant="primary"
-              onClick={() => void handleInstall(manualRef)}
-              disabled={manualRef.trim() === '' || installingRef !== null}
-              data-testid="find-skill-install-manual"
-            >
-              {installingRef === manualRef.trim() ? 'Installing…' : 'Install'}
-            </Button>
-          </div>
+          {/*
+           * Empty-state hint before any search has been kicked off.
+           */}
+          {showRawStream && lines.length === 0 && !isFinding && (
+            <div className={styles.streamHint}>
+              Search asks Claude to find Claude Code skills matching your query
+              and returns them as structured cards with an inline Install
+              button for each.
+            </div>
+          )}
+
+          {hasStructuredCandidates && candidates.length === 0 && !isFinding && (
+            <div className={styles.streamHint} data-testid="find-skill-empty-result">
+              Claude didn't recommend any skills for that query. Try a
+              different keyword, or paste a skill ref below if you know
+              the name.
+            </div>
+          )}
+
+          {candidates.length > 0 && (
+            <div className={styles.candidates} data-testid="find-skill-candidates">
+              <div className={styles.candidatesHead}>Recommended skills</div>
+              <div className={styles.candidateList} data-layout="row">
+                {candidates.map((c) => (
+                  <SkillCandidateCard
+                    key={c.ref}
+                    candidate={c}
+                    installing={installingRef === c.ref}
+                    disabled={installingRef !== null && installingRef !== c.ref}
+                    onInstall={() => void handleInstall(c.ref, c.name)}
+                    onOpenSource={() => void handleOpenSource(c.ref)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
-        {installError && (
-          <div className={styles.errorBanner} role="alert" data-testid="find-skill-install-error">
-            <strong>Install failed.</strong> {installError}
+        <div className={styles.bodyFooter} data-testid="find-skill-body-footer">
+          <div className={styles.manualBlock}>
+            <div className={styles.manualHead}>Install by name</div>
+            <p className={styles.manualHint}>
+              If the recommendation you want isn't detected, paste the skill ref
+              here (e.g. <code>ef-feature</code> or <code>owner/repo</code>).
+            </p>
+            <div className={styles.manualRow}>
+              <Input
+                value={manualRef}
+                onChange={(e) => setManualRef(e.target.value)}
+                placeholder="skill-ref"
+                data-testid="find-skill-install-input"
+              />
+              <Button
+                variant="primary"
+                onClick={() => void handleInstall(manualRef)}
+                disabled={manualRef.trim() === '' || installingRef !== null}
+                data-testid="find-skill-install-manual"
+              >
+                {installingRef === manualRef.trim() ? 'Installing…' : 'Install'}
+              </Button>
+            </div>
           </div>
-        )}
+
+          {installError && (
+            <div className={styles.errorBanner} role="alert" data-testid="find-skill-install-error">
+              <strong>Install failed.</strong> {installError}
+            </div>
+          )}
+        </div>
       </div>
     </Dialog>
   );
@@ -388,39 +418,61 @@ interface SkillCandidateCardProps {
   /** Another candidate is being installed — block this card's Install. */
   disabled: boolean;
   onInstall: () => void;
+  onOpenSource: () => void;
 }
 
 /**
- * One card per recommended skill. Top row carries the display name + a
- * stars badge; middle is the mono `ref` pill; description clamps to two
- * lines (full text in `title=` for hover). Install button at the foot.
+ * One row per recommended skill. Left column: name + stars + ref pill +
+ * description. Right column: action cluster (View source + Install).
+ * Single-column list — wider rows make space for the description
+ * without truncating it on the first line.
+ *
+ * The View button is omitted entirely (not just disabled) when the
+ * ref doesn't resolve to a known web source — `find-skills` style
+ * bare-name refs have no URL we trust enough to open.
  */
 function SkillCandidateCard({
   candidate,
   installing,
   disabled,
   onInstall,
+  onOpenSource,
 }: SkillCandidateCardProps): JSX.Element {
+  const sourceUrl = getSkillSourceUrl(candidate.ref);
   return (
     <article className={styles.card} data-testid={`find-skill-card-${candidate.ref}`}>
-      <header className={styles.cardHead}>
-        <span className={styles.cardName} title={candidate.name}>
-          {candidate.name}
-        </span>
-        <span className={styles.cardStars} aria-label="GitHub stars">
-          <span aria-hidden="true">★</span>
-          {candidate.stars !== null ? candidate.stars.toLocaleString() : '—'}
-        </span>
-      </header>
-      <span className={styles.cardRef} title={candidate.ref}>
-        {candidate.ref}
-      </span>
-      {candidate.description && (
-        <p className={styles.cardDescription} title={candidate.description}>
-          {candidate.description}
-        </p>
-      )}
+      <div className={styles.cardBody}>
+        <header className={styles.cardHead}>
+          <span className={styles.cardName} title={candidate.name}>
+            {candidate.name}
+          </span>
+          <span className={styles.cardStars} aria-label="GitHub stars">
+            <span aria-hidden="true">★</span>
+            {candidate.stars !== null ? candidate.stars.toLocaleString() : '—'}
+          </span>
+          <span className={styles.cardRef} title={candidate.ref}>
+            {candidate.ref}
+          </span>
+        </header>
+        {candidate.description && (
+          <p className={styles.cardDescription} title={candidate.description}>
+            {candidate.description}
+          </p>
+        )}
+      </div>
       <div className={styles.cardActions}>
+        {sourceUrl !== null && (
+          <Button
+            variant="ghost"
+            size="sm"
+            leadingIcon={<IconExternal size={12} />}
+            onClick={onOpenSource}
+            data-testid={`find-skill-view-${candidate.ref}`}
+            aria-label={`View source for ${candidate.name}`}
+          >
+            View
+          </Button>
+        )}
         <Button
           variant="primary"
           size="sm"
