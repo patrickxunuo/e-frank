@@ -272,6 +272,44 @@ The top result is the very skill that produced this list.`;
   // accepts headers it has been hard-coded for will keep breaking on
   // every fresh Claude variation. Cell-shape detection is required.
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // CANDIDATE-PARSE-019b — Bullet list with bold-wrapped refs.
+  // Empirically Claude flips between `\`ref\`` and `**ref**` between
+  // queries; both shapes must extract. Real example from a query
+  // for "image" that returned a chat-style list of locally-loaded
+  // skills.
+  // -------------------------------------------------------------------------
+  it('CANDIDATE-PARSE-019b: extracts candidates from bold-wrapped bullet list', () => {
+    const out = `Skills matching "image":
+- **gpt-image-2** — Generate images with GPT Image 2 (ChatGPT Images 2.0)
+- **svg-logo-designer** — creates SVG logos/icons/marks
+- **figma:figma-generate-design** — work with Figma designs`;
+    const result = parseSkillCandidates(out);
+    expect(result.parsed).toBe(true);
+    expect(result.candidates.length).toBe(3);
+    expect(result.candidates.map((c) => c.ref)).toEqual([
+      'gpt-image-2',
+      'svg-logo-designer',
+      'figma:figma-generate-design',
+    ]);
+    expect(result.candidates[0]?.description).toContain('Generate images');
+  });
+
+  it('CANDIDATE-PARSE-019c: accepts mixed bold + backtick delimiters across rows', () => {
+    const out = [
+      '- **bold-ref** — bold description',
+      '- `code-ref` — code-span description',
+      '* **another-bold**: separator-colon',
+    ].join('\n');
+    const result = parseSkillCandidates(out);
+    expect(result.parsed).toBe(true);
+    expect(result.candidates.map((c) => c.ref)).toEqual([
+      'bold-ref',
+      'code-ref',
+      'another-bold',
+    ]);
+  });
+
   it('CANDIDATE-PARSE-020: extracts candidates regardless of header words (data-driven)', () => {
     // Headers "Title / Origin / Count / Vibe" — none of these are in
     // any hard-coded vocabulary list; detection must rely on the

@@ -52,18 +52,22 @@ function isFiniteNumber(v: unknown): v is number {
  * Markdown list-item pattern Claude tends to emit even when we ask for
  * JSON. Captures lines like:
  *   - `frontend-design` — distinctive, production-grade UI...
+ *   - **gpt-image-2** — Generate images with GPT Image 2
  *   - `design-dna` - extract a design system from references
  *   - `arrange`: fix layout
- *   * `polish` — final alignment sweep
+ *   * **polish** — final alignment sweep
  *
- * Tolerates `-`, `*`, `•` bullets; backticks around the ref; `:`, `-`,
- * or em-dash (`—` / `–`) as the separator between ref + description.
+ * Tolerates `-`, `*`, `•` bullets; backticks OR double-asterisks
+ * (bold) around the ref — Claude flips between the two stylistically
+ * within the same response; `:`, `-`, or em-dash (`—` / `–`) as the
+ * separator between ref + description.
  *
  * The ref must look like an installable skill name (kebab-case + the
- * `plugin:skill` form) so we don't pick up arbitrary code spans.
+ * `plugin:skill` form) so we don't pick up arbitrary code spans or
+ * bolded English words.
  */
 const MARKDOWN_LINE_RE =
-  /^[\s]*[-*•]\s+`([a-z][a-z0-9-]*(?::[a-z][a-z0-9-]*)?)`\s*[:—–-]\s*(.+?)\s*$/i;
+  /^[\s]*[-*•]\s+(?:`|\*\*)([a-z][a-z0-9-]*(?::[a-z][a-z0-9-]*)?)(?:`|\*\*)\s*[:—–-]\s*(.+?)\s*$/i;
 
 function extractFromMarkdown(output: string): SkillCandidate[] {
   const candidates: SkillCandidate[] = [];
