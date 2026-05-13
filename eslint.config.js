@@ -48,4 +48,17 @@ export default [
       '@typescript-eslint/no-explicit-any': 'off',
     },
   },
+  {
+    // Build-time Node ESM scripts (e.g. scripts/build-icons.mjs). These run
+    // outside the app at the developer's discretion (e.g. before `dist:*`)
+    // and need the standard Node globals (Buffer, console, process).
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
 ];
