@@ -3,6 +3,8 @@ import {
   SkillFinder,
   FinderAlreadyActiveError,
   FinderNotActiveError,
+  buildFindSkillsPrompt,
+  stripQueryFiller,
   type FinderOutputEvent,
   type FinderExitEvent,
 } from '../../src/main/modules/skill-finder';
@@ -156,5 +158,79 @@ describe('SkillFinder', () => {
     expect(
       captured.output.filter((e) => e.stream === 'stderr').map((e) => e.line),
     ).toEqual(['warn: x']);
+  });
+});
+
+/**
+ * FIND-FILLER-001..010 — `stripQueryFiller` deterministically removes
+ * the verbose "find a skill that can…" wrapper from user queries
+ * before they reach Claude. Telling Claude in the prompt to do the
+ * same was unreliable (Claude would treat "find" as the keyword and
+ * surface unrelated skills whose names contain it).
+ */
+describe('stripQueryFiller', () => {
+  it('FIND-FILLER-001: strips "find a skill that can …"', () => {
+    expect(stripQueryFiller('find a skill that can create jira issue')).toBe('create jira issue');
+  });
+
+  it('FIND-FILLER-002: strips "find me a skill to …"', () => {
+    expect(stripQueryFiller('find me a skill to design portfolio')).toBe('design portfolio');
+  });
+
+  it('FIND-FILLER-003: strips "I need a skill that can …"', () => {
+    expect(stripQueryFiller('I need a skill that can edit images')).toBe('edit images');
+  });
+
+  it('FIND-FILLER-004: strips "help me find a skill for …"', () => {
+    expect(stripQueryFiller('help me find a skill for testing')).toBe('testing');
+  });
+
+  it('FIND-FILLER-005: strips trailing "for me"', () => {
+    expect(stripQueryFiller('design portfolio for me')).toBe('design portfolio');
+  });
+
+  it('FIND-FILLER-006: strips both leading wrapper + trailing "for me"', () => {
+    expect(stripQueryFiller('find a skill that can design portfolio for me')).toBe(
+      'design portfolio',
+    );
+  });
+
+  it('FIND-FILLER-007: passes through queries that already look like keywords', () => {
+    expect(stripQueryFiller('image cropping')).toBe('image cropping');
+    expect(stripQueryFiller('deploy to fly.io')).toBe('deploy to fly.io');
+  });
+
+  it('FIND-FILLER-008: trims surrounding whitespace', () => {
+    expect(stripQueryFiller('   testing   ')).toBe('testing');
+  });
+
+  it('FIND-FILLER-009: falls back to original when stripping would empty', () => {
+    // "find a skill" with nothing after — stripping would leave "",
+    // which is useless to Claude. Defensive fallback to the original.
+    expect(stripQueryFiller('find a skill')).toBe('find a skill');
+  });
+
+  it('FIND-FILLER-010: handles plural / "skills" variants', () => {
+    expect(stripQueryFiller('find skills that can deploy code')).toBe('deploy code');
+    expect(stripQueryFiller('suggest me skills for code review')).toBe('code review');
+  });
+});
+
+/**
+ * FIND-PROMPT-001..002 — `buildFindSkillsPrompt` integrates the
+ * filler stripping. Asserts the cleaned query (not the verbose
+ * original) ends up embedded in the prompt body.
+ */
+describe('buildFindSkillsPrompt', () => {
+  it('FIND-PROMPT-001: embeds the filler-stripped query, not the verbose original', () => {
+    const prompt = buildFindSkillsPrompt('find-skills', 'find a skill that can create jira issue');
+    expect(prompt).toContain('"create jira issue"');
+    // Verbose original should NOT appear in the prompt body.
+    expect(prompt).not.toContain('find a skill that can create jira issue');
+  });
+
+  it('FIND-PROMPT-002: passes simple queries through untouched', () => {
+    const prompt = buildFindSkillsPrompt('find-skills', 'image cropping');
+    expect(prompt).toContain('"image cropping"');
   });
 });

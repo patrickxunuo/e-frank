@@ -29,44 +29,64 @@ const DEFAULT_SKILL_NAME = 'find-skills';
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * Build the prompt Claude receives. Asks Claude directly for skill
- * recommendations with a strict JSON-array output format. Single-line
- * so cmd.exe / `shell: true` quoting doesn't get confused by embedded
- * newlines inside the argv element.
+ * Conservative renderer/main-side filler stripper. Telling Claude in
+ * the prompt to "strip filler phrases" was unreliable — for verbose
+ * queries like "find a skill that can create jira issue", Claude
+ * would latch onto "find" as the literal search keyword and surface
+ * skills whose *names* contain "find" (find-bugs, find-keywords, …)
+ * instead of skills relevant to the actual task. By stripping the
+ * filler deterministically here, Claude never sees the verbose
+ * meta-language and matches on the real intent ("create jira issue").
  *
- * Why no `/find-skills` slash-command wrapper here: in practice, the
- * slash-command output short-circuits Claude's response — it returns
- * the prose-formatted output from the skill verbatim and ignores the
- * "Respond ONLY with JSON" instruction, defeating the parser. Asking
- * Claude directly for a recommendation lets the structured-output
- * directive actually stick. Claude's general knowledge of public
- * Claude Code skills covers the common case; users who want a
- * specific ref the model doesn't recall can paste it into the manual
- * install input.
+ * Rules are conservative — patterns only strip well-formed leading
+ * "find a skill that…" / "I need a skill to…" wrappers and trailing
+ * "for me" / "please". Anything that doesn't match a rule passes
+ * through untouched. If stripping would leave an empty string, the
+ * original query is returned (defensive — never send "" to Claude).
  *
- * Exported so unit tests can assert against the prompt string without
- * having to inspect a mocked spawn call's args.
+ * Exported for unit testing.
+ */
+export function stripQueryFiller(q: string): string {
+  const trimmed = q.trim();
+  let result = trimmed;
+  for (const re of STRIP_RULES) {
+    result = result.replace(re, '');
+  }
+  result = result.trim();
+  return result === '' ? trimmed : result;
+}
+
+const STRIP_RULES: ReadonlyArray<RegExp> = [
+  // Leading: "find [me] [a/an/the] skill[s] [that/which/to/for] [can/will]"
+  /^find\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?skills?(?:\s+(?:that|which|to|for))?(?:\s+(?:can|will))?\s+/i,
+  // Leading: "I [need/want/am looking for] [a/an/the] skill[s] [that/which/to/for] [can/will]"
+  /^i('?m)?\s+(?:need|want|am\s+looking\s+for)\s+(?:a\s+|an\s+|the\s+)?skills?(?:\s+(?:that|which|to|for))?(?:\s+(?:can|will))?\s+/i,
+  // Leading: "help me [find] [a/an/the] skill[s] [that/to/for] [can/will]"
+  /^help\s+me\s+(?:find\s+)?(?:a\s+|an\s+|the\s+)?skills?(?:\s+(?:that|which|to|for))?(?:\s+(?:can|will))?\s+/i,
+  // Leading: "show/give/suggest/recommend me [a/an/the] skill[s] [that/to/for] [can/will]"
+  /^(?:show|give|suggest|recommend)\s+me\s+(?:a\s+|an\s+|the\s+)?skills?(?:\s+(?:that|which|to|for))?(?:\s+(?:can|will))?\s+/i,
+  // Trailing "for me" / "please"
+  /\s+for\s+me\s*$/i,
+  /\s+please\s*$/i,
+];
+
+/**
+ * Build the prompt Claude receives. Asks Claude for skill
+ * recommendations with a JSON-preferred output format, but accepts
+ * markdown tables and bullets (the renderer's parser handles all
+ * three). The query is run through `stripQueryFiller` first so
+ * Claude sees the underlying task ("create jira issue"), not the
+ * verbose wrapper ("find a skill that can…").
  *
- * The `skillName` param is kept for forward-compat / overrides but is
- * no longer used in the default prompt — callers that DO want the
- * slash-command path can pass a custom prompt builder via the
- * SkillFinder options if it becomes useful later.
+ * The `skillName` param is preserved for forward-compat / overrides
+ * but isn't embedded in the default prompt body.
  */
 export function buildFindSkillsPrompt(_skillName: string, query: string): string {
-  const q = query.trim();
-  // Prompt strategy: tell Claude to USE the /find-skills slash command
-  // (which knows the real skill registry) rather than recall skills
-  // from training memory. A previous iteration of this prompt forbade
-  // "offering to invoke skills" in an attempt to stop chat-mode
-  // responses, but that rule also blocked Claude from using
-  // /find-skills as its own search tool — so it had no registry data
-  // to draw from and returned `[]` every time. The format ask is
-  // intentionally loose (JSON preferred, table/bullets acceptable)
-  // because the renderer's parser handles all three shapes.
+  const cleaned = stripQueryFiller(query);
   return (
-    `Search for Claude Code skills matching this user request: "${q}"\n\n` +
+    `Search for Claude Code skills matching this user request: "${cleaned}"\n\n` +
     `Steps:\n` +
-    `1. Identify the underlying task. Strip filler phrases like "find a skill that can", "I need", "help me", "for me" — focus on what the user actually wants to accomplish (e.g. "find a skill that can design my personal portfolio" → "portfolio design").\n` +
+    `1. Treat the request as a task description — recommend skills that help with the underlying task, not skills whose names literally contain the words in the request.\n` +
     `2. Use the /find-skills slash command with the task keywords to query the actual skill registry. Don't rely on memory — use the registry.\n` +
     `3. Present up to 5 of the most relevant skills. Preferred format is a JSON array of {"name", "ref" (in "owner/repo@skill" form when applicable, e.g. "vercel-labs/skills@frontend-design"), "description" (one line, ≤120 chars), "stars" (number or null)}. A markdown table or bulleted list with the same fields is also acceptable.\n` +
     `4. Don't ask clarifying questions. If the registry returns nothing relevant, output an empty list.\n\n` +
