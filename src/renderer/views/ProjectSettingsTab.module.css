@@ -11,14 +11,10 @@
   overflow-y: auto;
   /* Hide scrollbar by default; fade in when the user's cursor enters the
    * scrollable area. Matches the DataTable `.fillHeight` treatment so all
-   * four ProjectDetail tabs feel consistent. */
+   * four ProjectDetail tabs feel consistent. Border-radius + width are
+   * inherited from the global `reset.css` ::-webkit-scrollbar rules so
+   * the visible-on-hover thumb matches the rest of the app. */
   scrollbar-gutter: stable;
-  scrollbar-color: transparent transparent;
-  transition: scrollbar-color var(--duration-fast) var(--ease-out);
-}
-
-.tab:hover {
-  scrollbar-color: var(--surface-overlay-mid) transparent;
 }
 
 .tab::-webkit-scrollbar-thumb {
