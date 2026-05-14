@@ -118,6 +118,7 @@ function installApi(): ApiStub {
       reject: reject as unknown as IpcApi['runs']['reject'],
       modify: vi.fn() as unknown as IpcApi['runs']['modify'],
       current: vi.fn() as unknown as IpcApi['runs']['current'],
+      listActive: vi.fn() as unknown as IpcApi['runs']['listActive'],
       listHistory: vi.fn() as unknown as IpcApi['runs']['listHistory'],
       delete: vi.fn() as unknown as IpcApi['runs']['delete'],
       readLog: vi.fn() as unknown as IpcApi['runs']['readLog'],
@@ -127,6 +128,7 @@ function installApi(): ApiStub {
           listener = null;
         };
       }) as unknown as IpcApi['runs']['onCurrentChanged'],
+      onListChanged: vi.fn(() => () => {}) as unknown as IpcApi['runs']['onListChanged'],
       onStateChanged: vi.fn(() => () => {}) as unknown as IpcApi['runs']['onStateChanged'],
     },
     tickets: {

@@ -1,15 +1,18 @@
 /**
- * `useActiveRun` — subscribes to the workflow runner's current-changed
- * stream, scoped to a specific projectId.
+ * Two hooks subscribing to the workflow runner's run-state stream,
+ * filtered to a specific projectId.
  *
- *   - On mount: seed via `runs.current()`, accept iff `projectId` matches
- *   - Subscribe to `onCurrentChanged`; update only for matching projectId
- *   - Returns `null` for non-matching project, idle runner, or
- *     missing `window.api`
- *   - Unsubscribes on unmount
+ *   - `useActiveRun(projectId)` — legacy singular shape. Returns the
+ *     most-recently-changed run that targets `projectId` (or null).
+ *     Kept for back-compat with the existing single-active-run UI.
+ *   - `useActiveRuns(projectId)` — plural counterpart (#GH-79). Returns
+ *     every in-flight run targeting `projectId` as a Run[].
  *
- * The hook returns the full `Run` snapshot (per #7's runner) — the
- * Active Execution panel adapts the fields it actually renders.
+ * Both hooks seed via the corresponding singular/plural IPC on mount
+ * and subscribe to the matching event stream for updates. The plural
+ * hook also picks up per-state transitions via `onListChanged` — the
+ * runner emits a fresh list snapshot on every state transition AND on
+ * start/terminal (see WorkflowRunner.emitStateChanged + emitRunsChanged).
  */
 
 import { useEffect, useState } from 'react';
@@ -19,9 +22,6 @@ export function useActiveRun(projectId: string): Run | null {
   const [run, setRun] = useState<Run | null>(null);
 
   useEffect(() => {
-    // Per-effect cancellation flag (matches `useTickets`). When projectId
-    // changes, this effect's cleanup flips `cancelled = true` and the next
-    // effect starts with its own fresh flag.
     let cancelled = false;
     if (typeof window === 'undefined' || !window.api) {
       setRun(null);
@@ -64,4 +64,49 @@ export function useActiveRun(projectId: string): Run | null {
   }, [projectId]);
 
   return run;
+}
+
+/**
+ * Plural counterpart to `useActiveRun` (#GH-79). Returns every in-flight
+ * run targeting `projectId`. Empty array (not null) so callers can safely
+ * `.map(...)` / `.length` without null guards.
+ */
+export function useActiveRuns(projectId: string): Run[] {
+  const [runs, setRuns] = useState<Run[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (typeof window === 'undefined' || !window.api) {
+      setRuns([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+    const api = window.api;
+
+    void (async () => {
+      try {
+        const result = await api.runs.listActive();
+        if (cancelled) return;
+        if (result.ok) {
+          setRuns(result.data.runs.filter((r) => r.projectId === projectId));
+        }
+      } catch {
+        if (cancelled) return;
+        setRuns([]);
+      }
+    })();
+
+    const off = api.runs.onListChanged((event) => {
+      if (cancelled) return;
+      setRuns(event.runs.filter((r) => r.projectId === projectId));
+    });
+
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [projectId]);
+
+  return runs;
 }

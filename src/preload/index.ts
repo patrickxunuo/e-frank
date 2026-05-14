@@ -37,6 +37,7 @@ import {
   type RunsRejectRequest,
   type RunsModifyRequest,
   type RunsCurrentResponse,
+  type RunsListActiveResponse,
   type RunsListHistoryRequest,
   type RunsListHistoryResponse,
   type RunsDeleteRequest,
@@ -48,6 +49,7 @@ import {
   type PullsListRequest,
   type PullsListResponse,
   type RunsCurrentChangedEvent,
+  type RunsListChangedEvent,
   type RunStateEvent,
   type Connection,
   type ConnectionsGetRequest,
@@ -303,6 +305,11 @@ const api: IpcApi = {
         IpcResult<RunsCurrentResponse>
       >,
 
+    listActive: (): Promise<IpcResult<RunsListActiveResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.RUNS_LIST_ACTIVE) as Promise<
+        IpcResult<RunsListActiveResponse>
+      >,
+
     listHistory: (
       req: RunsListHistoryRequest,
     ): Promise<IpcResult<RunsListHistoryResponse>> =>
@@ -336,6 +343,21 @@ const api: IpcApi = {
       ipcRenderer.on(IPC_CHANNELS.RUNS_CURRENT_CHANGED, wrapped);
       return () => {
         ipcRenderer.removeListener(IPC_CHANNELS.RUNS_CURRENT_CHANGED, wrapped);
+      };
+    },
+
+    onListChanged: (
+      listener: (e: RunsListChangedEvent) => void,
+    ): (() => void) => {
+      const wrapped = (
+        _event: IpcRendererEvent,
+        payload: RunsListChangedEvent,
+      ): void => {
+        listener(payload);
+      };
+      ipcRenderer.on(IPC_CHANNELS.RUNS_LIST_CHANGED, wrapped);
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.RUNS_LIST_CHANGED, wrapped);
       };
     },
 

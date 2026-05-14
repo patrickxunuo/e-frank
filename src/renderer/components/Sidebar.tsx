@@ -44,8 +44,10 @@ function initialsOf(name: string): string {
 
 /**
  * Resolves a project's display name for the sidebar pill. We do this
- * per-projectId rather than caching globally because the user only ever
- * has one active run at a time — the lookup is rare and cheap.
+ * per-projectId rather than caching globally because the lookup is
+ * rare and cheap. #GH-79 lifted the single-active-run constraint, but
+ * the sidebar pill still uses the legacy singular `useGlobalActiveRun`
+ * for now — multi-row pill rendering is the PR-D follow-up.
  */
 function useProjectName(projectId: string | null): string | null {
   const [name, setName] = useState<string | null>(null);

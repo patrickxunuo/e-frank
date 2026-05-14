@@ -120,6 +120,11 @@ export const IPC_CHANNELS = {
   RUNS_REJECT: 'runs:reject',
   RUNS_MODIFY: 'runs:modify',
   RUNS_CURRENT: 'runs:current',
+  /** Plural counterpart to RUNS_CURRENT (#GH-79). Returns `Run[]` for all
+   *  in-flight runs. Renderer hooks `useGlobalActiveRuns` / `useActiveRuns`
+   *  use this; legacy singular hooks still rely on RUNS_CURRENT for
+   *  back-compat (returns first-of-many). */
+  RUNS_LIST_ACTIVE: 'runs:list-active',
   RUNS_LIST_HISTORY: 'runs:list-history',
   RUNS_DELETE: 'runs:delete',
   RUNS_READ_LOG: 'runs:read-log',
@@ -129,6 +134,9 @@ export const IPC_CHANNELS = {
   PULLS_LIST: 'pulls:list',
   /** event channel (main -> renderer) */
   RUNS_CURRENT_CHANGED: 'runs:current-changed',
+  /** event channel (main -> renderer) — plural counterpart (#GH-79).
+   *  Fires whenever the runner's active-map mutates (start, terminal). */
+  RUNS_LIST_CHANGED: 'runs:list-changed',
   /** event channel (main -> renderer) */
   RUNS_STATE_CHANGED: 'runs:state-changed',
   // -- Window chrome (issue #50) -- frameless titlebar controls --
@@ -408,6 +416,14 @@ export interface RunsCurrentResponse {
   run: Run | null;
 }
 
+/**
+ * Plural counterpart to `RunsCurrentResponse` (#GH-79). Returns every
+ * in-flight run; an empty array means the runner is idle.
+ */
+export interface RunsListActiveResponse {
+  runs: Run[];
+}
+
 export interface RunsListHistoryRequest {
   projectId: string;
   /** Defaults to 50 in the runner; renderer may pass a smaller cap. */
@@ -438,6 +454,15 @@ export interface RunsReadLogResponse {
 export interface RunsCurrentChangedEvent {
   /** `null` indicates the runner has gone idle. */
   run: Run | null;
+}
+
+/**
+ * Event payload broadcast on `RUNS_LIST_CHANGED` (#GH-79). Fires whenever
+ * the active-runs set mutates (a start, or a terminal). Empty array means
+ * the runner is fully idle.
+ */
+export interface RunsListChangedEvent {
+  runs: Run[];
 }
 
 // -- Connections IPC payloads -------------------------------------------------
@@ -725,6 +750,12 @@ export interface IpcApi {
     reject: (req: RunsRejectRequest) => Promise<IpcResult<{ runId: string }>>;
     modify: (req: RunsModifyRequest) => Promise<IpcResult<{ runId: string }>>;
     current: () => Promise<IpcResult<RunsCurrentResponse>>;
+    /**
+     * Plural counterpart to `current()` (#GH-79). Returns every in-flight
+     * run. Used by `useGlobalActiveRuns` / `useActiveRuns(projectId)`.
+     * Legacy `current()` still works for callers that only need one.
+     */
+    listActive: () => Promise<IpcResult<RunsListActiveResponse>>;
     listHistory: (
       req: RunsListHistoryRequest,
     ) => Promise<IpcResult<RunsListHistoryResponse>>;
@@ -732,6 +763,8 @@ export interface IpcApi {
     readLog: (req: RunsReadLogRequest) => Promise<IpcResult<RunsReadLogResponse>>;
     /** Subscribe to current-changed events (run starts / advances / completes). Returns unsubscribe fn. */
     onCurrentChanged: (listener: (e: RunsCurrentChangedEvent) => void) => () => void;
+    /** Plural counterpart to `onCurrentChanged` (#GH-79). Fires whenever the active-set mutates. */
+    onListChanged: (listener: (e: RunsListChangedEvent) => void) => () => void;
     /** Subscribe to fine-grained state-changed events (every state entry/exit). Returns unsubscribe fn. */
     onStateChanged: (listener: (e: RunStateEvent) => void) => () => void;
   };

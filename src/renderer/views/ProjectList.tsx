@@ -36,12 +36,16 @@ interface ProjectStatus {
 /**
  * Live status for a project row. Driven by the global active run from the
  * runner (`useGlobalActiveRun`). Three states:
- *   - the active run targets this project AND is awaiting approval → "Awaiting"
- *   - the active run targets this project (any other state) → "Running"
+ *   - the most-recent active run targets this project AND is awaiting approval → "Awaiting"
+ *   - the most-recent active run targets this project (any other state) → "Running"
  *   - otherwise → "Idle"
  *
- * The runner enforces a single active run at a time, so at most one row in
- * the table can ever read as Running / Awaiting.
+ * #GH-79 dropped the runner's app-wide single-active lock — multiple
+ * concurrent runs can coexist. This column still uses the legacy
+ * `useGlobalActiveRun` (singular) so it only ever surfaces the
+ * most-recent run; a future PR-D follow-up will switch to the plural
+ * hook to show "Running (N)" counts when more than one run targets the
+ * same project.
  */
 function statusFor(
   project: ProjectInstanceDto,
