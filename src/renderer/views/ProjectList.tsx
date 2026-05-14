@@ -15,7 +15,7 @@ import {
   IconRefresh,
 } from '../components/icons';
 import { useAutoMode } from '../state/auto-mode';
-import { useGlobalActiveRun } from '../state/global-active-run';
+import { useGlobalActiveRuns } from '../state/global-active-run';
 import styles from './ProjectList.module.css';
 
 export interface ProjectListProps {
@@ -34,30 +34,37 @@ interface ProjectStatus {
 }
 
 /**
- * Live status for a project row. Driven by the global active run from the
- * runner (`useGlobalActiveRun`). Three states:
- *   - the most-recent active run targets this project AND is awaiting approval → "Awaiting"
- *   - the most-recent active run targets this project (any other state) → "Running"
- *   - otherwise → "Idle"
- *
- * #GH-79 dropped the runner's app-wide single-active lock — multiple
- * concurrent runs can coexist. This column still uses the legacy
- * `useGlobalActiveRun` (singular) so it only ever surfaces the
- * most-recent run; a future PR-D follow-up will switch to the plural
- * hook to show "Running (N)" counts when more than one run targets the
- * same project.
+ * Live status for a project row. Driven by all in-flight runs from the
+ * runner via `useGlobalActiveRuns` (#GH-81 lifted this from singular).
+ * Cases:
+ *   - zero runs target this project → "Idle"
+ *   - one run, awaiting approval → "Awaiting"
+ *   - one run, any other state → "Running"
+ *   - N>1 runs, ANY awaiting → "Awaiting (N)" (awaiting takes precedence
+ *     so the user sees the actionable state count, not generic "Running")
+ *   - N>1 runs, none awaiting → "Running (N)"
  */
 function statusFor(
   project: ProjectInstanceDto,
-  activeRun: Run | null,
+  activeRuns: ReadonlyArray<Run>,
 ): ProjectStatus {
-  if (activeRun !== null && activeRun.projectId === project.id) {
-    if (activeRun.state === 'awaitingApproval') {
-      return { variant: 'running', label: 'Awaiting', pulse: true };
-    }
-    return { variant: 'running', label: 'Running', pulse: true };
+  const mine = activeRuns.filter((r) => r.projectId === project.id);
+  if (mine.length === 0) {
+    return { variant: 'idle', label: 'Idle' };
   }
-  return { variant: 'idle', label: 'Idle' };
+  const hasAwaiting = mine.some((r) => r.state === 'awaitingApproval');
+  if (mine.length === 1) {
+    return {
+      variant: 'running',
+      label: hasAwaiting ? 'Awaiting' : 'Running',
+      pulse: true,
+    };
+  }
+  return {
+    variant: 'running',
+    label: hasAwaiting ? `Awaiting (${mine.length})` : `Running (${mine.length})`,
+    pulse: true,
+  };
 }
 
 function repoIconFor(type: ProjectInstanceDto['repo']['type']): JSX.Element {
@@ -158,7 +165,7 @@ export function ProjectList({
   onOpen,
 }: ProjectListProps): JSX.Element {
   const [autoMode, setAutoMode] = useAutoMode();
-  const activeRun = useGlobalActiveRun();
+  const activeRuns = useGlobalActiveRuns();
 
   const columns: DataTableColumn<ProjectInstanceDto>[] = [
     {
@@ -219,7 +226,7 @@ export function ProjectList({
       key: 'status',
       header: 'Status',
       render: (row) => {
-        const status = statusFor(row, activeRun);
+        const status = statusFor(row, activeRuns);
         return (
           <Badge
             variant={status.variant}

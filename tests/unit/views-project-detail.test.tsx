@@ -11,7 +11,7 @@ import {
 } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { ProjectDetail } from '../../src/renderer/views/ProjectDetail';
-import { useActiveRun } from '../../src/renderer/state/active-run';
+import { useActiveRuns } from '../../src/renderer/state/active-run';
 import type {
   IpcApi,
   IpcResult,
@@ -26,12 +26,12 @@ import type {
  * full `IpcApi` stub and pokes it onto window.api. Per-test we override
  * specific handlers via the returned `ApiStub` aliases.
  *
- * `useActiveRun` is module-mocked so we can flip between null (default for
+ * `useActiveRuns` is module-mocked so we can flip between null (default for
  * this PR) and a stub run (for the panel-shown case).
  */
 
 vi.mock('../../src/renderer/state/active-run', () => ({
-  useActiveRun: vi.fn(),
+  useActiveRuns: vi.fn(),
 }));
 
 declare global {
@@ -260,7 +260,7 @@ const noop = (): void => {};
 
 beforeEach(() => {
   // Default: no active run — most tests assume the panel is hidden.
-  (useActiveRun as unknown as Mock).mockReturnValue(null);
+  (useActiveRuns as unknown as Mock).mockReturnValue([]);
 });
 
 afterEach(() => {
@@ -268,8 +268,8 @@ afterEach(() => {
   delete (window as { api?: IpcApi }).api;
   localStorage.clear();
   vi.restoreAllMocks();
-  // Re-mock useActiveRun (restoreAllMocks would clear it).
-  (useActiveRun as unknown as Mock).mockReset();
+  // Re-mock useActiveRuns (restoreAllMocks would clear it).
+  (useActiveRuns as unknown as Mock).mockReset();
   // Defensive: restore real timers in case a test set fake ones and
   // didn't reach its own teardown (e.g. timed out). Fake timers leaking
   // from one test into the next breaks debounced renders elsewhere.
@@ -578,8 +578,8 @@ describe('<ProjectDetail /> — DET', () => {
   });
 
   describe('DET-011 active execution panel hidden', () => {
-    it('DET-011: useActiveRun() returns null → panel is hidden', async () => {
-      (useActiveRun as unknown as Mock).mockReturnValue(null);
+    it('DET-011: useActiveRuns() returns null → panel is hidden', async () => {
+      (useActiveRuns as unknown as Mock).mockReturnValue([]);
       installApi({ tickets: [makeTicket('ABC-1')] });
 
       render(
@@ -603,10 +603,10 @@ describe('<ProjectDetail /> — DET', () => {
   describe('DET-012 active execution panel shown', () => {
     it('DET-012: live run → Cancel + Open Details buttons visible (Open Details restored in #8)', async () => {
       // The Active Execution panel now consumes the real `Run` shape from
-      // #7's schema. We stub useActiveRun to return a minimal ready-state
+      // #7's schema. We stub useActiveRuns to return a minimal ready-state
       // run snapshot. Open Details was removed during #7 review and
       // restored in #8 alongside the ExecutionView route.
-      (useActiveRun as unknown as Mock).mockReturnValue({
+      (useActiveRuns as unknown as Mock).mockReturnValue([{
         id: 'run-1',
         projectId: 'p-1',
         ticketKey: 'ABC-7',
@@ -617,7 +617,7 @@ describe('<ProjectDetail /> — DET', () => {
         steps: [],
         pendingApproval: null,
         startedAt: 0,
-      });
+      }]);
       installApi({ tickets: [makeTicket('ABC-7', { summary: 'A live ticket' })] });
       installRunsStub();
 
@@ -644,7 +644,7 @@ describe('<ProjectDetail /> — DET', () => {
   // ---------------------------------------------------------------------
   describe('DET-COPY-001 branch name rendered on active execution panel', () => {
     it('DET-COPY-001: panel shows the active run\'s branch name', async () => {
-      (useActiveRun as unknown as Mock).mockReturnValue({
+      (useActiveRuns as unknown as Mock).mockReturnValue([{
         id: 'run-1',
         projectId: 'p-1',
         ticketKey: 'ABC-7',
@@ -655,7 +655,7 @@ describe('<ProjectDetail /> — DET', () => {
         steps: [],
         pendingApproval: null,
         startedAt: 0,
-      });
+      }]);
       installApi({ tickets: [makeTicket('ABC-7')] });
       installRunsStub();
 
@@ -674,7 +674,7 @@ describe('<ProjectDetail /> — DET', () => {
         value: { writeText },
       });
 
-      (useActiveRun as unknown as Mock).mockReturnValue({
+      (useActiveRuns as unknown as Mock).mockReturnValue([{
         id: 'run-1',
         projectId: 'p-1',
         ticketKey: 'ABC-7',
@@ -685,7 +685,7 @@ describe('<ProjectDetail /> — DET', () => {
         steps: [],
         pendingApproval: null,
         startedAt: 0,
-      });
+      }]);
       installApi({ tickets: [makeTicket('ABC-7')] });
       installRunsStub();
 
@@ -732,7 +732,7 @@ describe('<ProjectDetail /> — DET', () => {
         value: { writeText },
       });
 
-      (useActiveRun as unknown as Mock).mockReturnValue({
+      (useActiveRuns as unknown as Mock).mockReturnValue([{
         id: 'run-1',
         projectId: 'p-1',
         ticketKey: 'ABC-7',
@@ -743,7 +743,7 @@ describe('<ProjectDetail /> — DET', () => {
         steps: [],
         pendingApproval: null,
         startedAt: 0,
-      });
+      }]);
       installApi({ tickets: [makeTicket('ABC-7')] });
       installRunsStub();
 
@@ -770,7 +770,7 @@ describe('<ProjectDetail /> — DET', () => {
         value: undefined,
       });
 
-      (useActiveRun as unknown as Mock).mockReturnValue({
+      (useActiveRuns as unknown as Mock).mockReturnValue([{
         id: 'run-1',
         projectId: 'p-1',
         ticketKey: 'ABC-7',
@@ -781,7 +781,7 @@ describe('<ProjectDetail /> — DET', () => {
         steps: [],
         pendingApproval: null,
         startedAt: 0,
-      });
+      }]);
       installApi({ tickets: [makeTicket('ABC-7')] });
       installRunsStub();
 
@@ -808,7 +808,7 @@ describe('<ProjectDetail /> — DET', () => {
 
   describe('NAV-001 Open Details button restored on Active Execution panel', () => {
     it('NAV-001: panel rendered → active-execution-open-details testid exists', async () => {
-      (useActiveRun as unknown as Mock).mockReturnValue({
+      (useActiveRuns as unknown as Mock).mockReturnValue([{
         id: 'run-1',
         projectId: 'p-1',
         ticketKey: 'ABC-7',
@@ -819,7 +819,7 @@ describe('<ProjectDetail /> — DET', () => {
         steps: [],
         pendingApproval: null,
         startedAt: 0,
-      });
+      }]);
       installApi({ tickets: [makeTicket('ABC-7')] });
       installRunsStub();
 
@@ -838,7 +838,7 @@ describe('<ProjectDetail /> — DET', () => {
 
   describe('NAV-002 Open Details click invokes onOpenExecution(runId)', () => {
     it('NAV-002: click → onOpenExecution called with the active run id', async () => {
-      (useActiveRun as unknown as Mock).mockReturnValue({
+      (useActiveRuns as unknown as Mock).mockReturnValue([{
         id: 'run-42',
         projectId: 'p-1',
         ticketKey: 'ABC-7',
@@ -849,7 +849,7 @@ describe('<ProjectDetail /> — DET', () => {
         steps: [],
         pendingApproval: null,
         startedAt: 0,
-      });
+      }]);
       installApi({ tickets: [makeTicket('ABC-7')] });
       installRunsStub();
 
@@ -1086,7 +1086,7 @@ describe('<ProjectDetail /> — DET', () => {
   // ---------------------------------------------------------------------
   describe('DET-WIDGET-BREATH non-terminal run breathes the progress bar', () => {
     it('DET-WIDGET-BREATH: ProgressBar.fill carries data-running="true" while running', async () => {
-      (useActiveRun as unknown as Mock).mockReturnValue({
+      (useActiveRuns as unknown as Mock).mockReturnValue([{
         id: 'run-1',
         projectId: 'p-1',
         ticketKey: 'ABC-7',
@@ -1097,7 +1097,7 @@ describe('<ProjectDetail /> — DET', () => {
         steps: [],
         pendingApproval: null,
         startedAt: 0,
-      });
+      }]);
       installApi({ tickets: [makeTicket('ABC-7')] });
       installRunsStub();
 
@@ -1116,7 +1116,7 @@ describe('<ProjectDetail /> — DET', () => {
     });
 
     it('DET-WIDGET-NO-BREATH: terminal status sets data-running="false"', async () => {
-      (useActiveRun as unknown as Mock).mockReturnValue({
+      (useActiveRuns as unknown as Mock).mockReturnValue([{
         id: 'run-1',
         projectId: 'p-1',
         ticketKey: 'ABC-7',
@@ -1127,7 +1127,7 @@ describe('<ProjectDetail /> — DET', () => {
         steps: [],
         pendingApproval: null,
         startedAt: 0,
-      });
+      }]);
       installApi({ tickets: [makeTicket('ABC-7')] });
       installRunsStub();
 
@@ -1147,7 +1147,7 @@ describe('<ProjectDetail /> — DET', () => {
 
   describe('DET-WIDGET-APPROVE inline approve/reject when awaitingApproval', () => {
     it('DET-WIDGET-APPROVE: pendingApproval !== null → Approve + Reject buttons visible', async () => {
-      (useActiveRun as unknown as Mock).mockReturnValue({
+      (useActiveRuns as unknown as Mock).mockReturnValue([{
         id: 'run-1',
         projectId: 'p-1',
         ticketKey: 'ABC-7',
@@ -1158,7 +1158,7 @@ describe('<ProjectDetail /> — DET', () => {
         steps: [],
         pendingApproval: { plan: 'check', raw: { plan: 'check' } },
         startedAt: 0,
-      });
+      }]);
       installApi({ tickets: [makeTicket('ABC-7')] });
       installRunsStub();
 
@@ -1179,7 +1179,7 @@ describe('<ProjectDetail /> — DET', () => {
     });
 
     it('DET-WIDGET-APPROVE-CLICK: clicking Approve dispatches runs.approve({ runId })', async () => {
-      (useActiveRun as unknown as Mock).mockReturnValue({
+      (useActiveRuns as unknown as Mock).mockReturnValue([{
         id: 'run-42',
         projectId: 'p-1',
         ticketKey: 'ABC-7',
@@ -1190,7 +1190,7 @@ describe('<ProjectDetail /> — DET', () => {
         steps: [],
         pendingApproval: { plan: 'check', raw: { plan: 'check' } },
         startedAt: 0,
-      });
+      }]);
       installApi({ tickets: [makeTicket('ABC-7')] });
       const stub = installRunsStub();
       const api = (window as { api?: IpcApi }).api!;

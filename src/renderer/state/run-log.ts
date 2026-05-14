@@ -11,7 +11,7 @@
  *     `runs.readLog` to load the persisted NDJSON, distribute lines into
  *     steps using each entry's `state` tag.
  *
- * Per-effect `cancelled` flag pattern (matches `useTickets` / `useActiveRun`).
+ * Per-effect `cancelled` flag pattern (matches `useTickets` / `useActiveRuns`).
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -235,7 +235,7 @@ export function useRunLog(run: Run | null): UseRunLogResult {
 
     if (typeof window === 'undefined' || !window.api) {
       // No IPC bridge — leave `steps` seeded from the run snapshot. Don't
-      // crash; matches the graceful-degradation pattern in `useActiveRun`.
+      // crash; matches the graceful-degradation pattern in `useActiveRuns`.
       return () => {
         cancelled = true;
       };

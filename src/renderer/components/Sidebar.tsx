@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import packageJson from '../../../package.json';
-import { useGlobalActiveRun } from '../state/global-active-run';
+import type { Run } from '@shared/ipc';
+import { useGlobalActiveRuns } from '../state/global-active-run';
 import styles from './Sidebar.module.css';
 import { IconKey, IconProjects, IconSettings, IconSkills } from './icons';
 import { PaperplaneGlyph } from './PaperplaneGlyph';
@@ -43,11 +44,53 @@ function initialsOf(name: string): string {
 }
 
 /**
- * Resolves a project's display name for the sidebar pill. We do this
- * per-projectId rather than caching globally because the lookup is
- * rare and cheap. #GH-79 lifted the single-active-run constraint, but
- * the sidebar pill still uses the legacy singular `useGlobalActiveRun`
- * for now — multi-row pill rendering is the PR-D follow-up.
+ * Resolves project display names for the sidebar pill (#GH-81 lifted
+ * from single-id to N-id). Returns a `{ projectId → name }` record.
+ * Re-runs whenever the set of ids changes; entries that have resolved
+ * before are kept until evicted (rare — only on project deletion).
+ *
+ * Implementation: one `projects.get(id)` per unique projectId. Bounded
+ * by the number of distinct projects with active runs (~1-3 in
+ * practice). No batching — the IPC has no plural-get endpoint and the
+ * cost is negligible for typical N.
+ */
+function useProjectNames(projectIds: ReadonlyArray<string>): Record<string, string | null> {
+  const [names, setNames] = useState<Record<string, string | null>>({});
+  // Stable key so React only re-runs when the set actually changes.
+  const key = projectIds.slice().sort().join('|');
+  useEffect(() => {
+    let cancelled = false;
+    if (projectIds.length === 0 || typeof window === 'undefined' || !window.api) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    const api = window.api;
+    const unique = Array.from(new Set(projectIds));
+    void (async () => {
+      for (const id of unique) {
+        try {
+          const result = await api.projects.get({ id });
+          if (cancelled) return;
+          if (result.ok) {
+            setNames((prev) => ({ ...prev, [id]: result.data.name }));
+          }
+        } catch {
+          if (cancelled) return;
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return names;
+}
+
+/**
+ * Single-id wrapper. Kept compatible with the previous `useProjectName(id)`
+ * call shape for the case where Sidebar renders just one active run.
  */
 function useProjectName(projectId: string | null): string | null {
   const [name, setName] = useState<string | null>(null);
@@ -78,9 +121,47 @@ function useProjectName(projectId: string | null): string | null {
   return name;
 }
 
+/**
+ * The single-run pill — extracted (#GH-81) so it can be re-used by the
+ * N=1 back-compat branch in `Sidebar` without duplicating markup.
+ */
+function renderSoloActiveRun(activeRun: Run, projectName: string | null): JSX.Element {
+  return (
+    <div
+      className={styles.activeContext}
+      data-testid="sidebar-active-context"
+    >
+      <div className={styles.activeRow}>
+        <span className={styles.activeLabel}>Active Project</span>
+        <span className={styles.activeValue} title={projectName ?? activeRun.projectId}>
+          {projectName ?? activeRun.projectId}
+        </span>
+      </div>
+      <div className={styles.activeRow}>
+        <span className={styles.activeLabel}>Active Ticket</span>
+        <span className={styles.activeValueMono}>{activeRun.ticketKey}</span>
+      </div>
+    </div>
+  );
+}
+
+/** Max active-run rows shown before collapsing the remainder behind "+N more". */
+const SIDEBAR_MAX_VISIBLE_RUNS = 3;
+
 export function Sidebar({ activeNav, user, onNavigate }: SidebarProps): JSX.Element {
-  const activeRun = useGlobalActiveRun();
-  const activeProjectName = useProjectName(activeRun?.projectId ?? null);
+  const activeRuns = useGlobalActiveRuns();
+  // Resolve project names for every distinct projectId present in the runs.
+  // The plural hook is rendered unconditionally; when activeRuns is empty,
+  // it returns {}. Cost is bounded by distinct projects with concurrent runs.
+  const projectIdSet = activeRuns.map((r) => r.projectId);
+  const projectNames = useProjectNames(projectIdSet);
+  // Singular wrapper still used by the legacy single-run path below — gives
+  // exactly the same behavior the pre-#GH-81 sidebar pill had when N=1.
+  const soloProjectName = useProjectName(
+    activeRuns.length === 1 ? (activeRuns[0]?.projectId ?? null) : null,
+  );
+  const visibleRuns = activeRuns.slice(0, SIDEBAR_MAX_VISIBLE_RUNS);
+  const overflow = activeRuns.length - visibleRuns.length;
   return (
     <aside className={styles.sidebar} data-testid="sidebar">
       <div className={styles.brand}>
@@ -110,23 +191,48 @@ export function Sidebar({ activeNav, user, onNavigate }: SidebarProps): JSX.Elem
 
       <div className={styles.spacer} />
 
-      {activeRun && (
+      {activeRuns.length === 1 ? (
+        // N=1: existing single-pill layout (back-compat).
+        renderSoloActiveRun(activeRuns[0] as Run, soloProjectName)
+      ) : activeRuns.length > 1 ? (
+        // N>1: stacked rows with header + "+N more" overflow indicator.
         <div
           className={styles.activeContext}
           data-testid="sidebar-active-context"
+          data-multi="true"
         >
-          <div className={styles.activeRow}>
-            <span className={styles.activeLabel}>Active Project</span>
-            <span className={styles.activeValue} title={activeProjectName ?? activeRun.projectId}>
-              {activeProjectName ?? activeRun.projectId}
-            </span>
+          <div
+            className={styles.activeHeader}
+            data-testid="sidebar-active-header"
+          >
+            <span className={styles.activeHeaderLabel}>Active runs</span>
+            <span className={styles.activeHeaderCount}>{activeRuns.length}</span>
           </div>
-          <div className={styles.activeRow}>
-            <span className={styles.activeLabel}>Active Ticket</span>
-            <span className={styles.activeValueMono}>{activeRun.ticketKey}</span>
-          </div>
+          {visibleRuns.map((run) => (
+            <div
+              key={run.id}
+              className={styles.activeMultiRow}
+              data-testid={`sidebar-active-row-${run.id}`}
+            >
+              <span
+                className={styles.activeMultiProject}
+                title={projectNames[run.projectId] ?? run.projectId}
+              >
+                {projectNames[run.projectId] ?? run.projectId}
+              </span>
+              <span className={styles.activeValueMono}>{run.ticketKey}</span>
+            </div>
+          ))}
+          {overflow > 0 && (
+            <div
+              className={styles.activeOverflow}
+              data-testid="sidebar-active-overflow"
+            >
+              +{overflow} more
+            </div>
+          )}
         </div>
-      )}
+      ) : null}
 
       <ThemeToggle />
 

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { ProjectDetail } from '../../src/renderer/views/ProjectDetail';
-import { useActiveRun } from '../../src/renderer/state/active-run';
+import { useActiveRuns } from '../../src/renderer/state/active-run';
 import type {
   IpcApi,
   IpcResult,
@@ -21,7 +21,7 @@ import type {
  */
 
 vi.mock('../../src/renderer/state/active-run', () => ({
-  useActiveRun: vi.fn(),
+  useActiveRuns: vi.fn(),
 }));
 
 declare global {
@@ -211,14 +211,14 @@ async function renderAndOpenPrsTab(stub: ApiStub): Promise<void> {
 }
 
 beforeEach(() => {
-  (useActiveRun as unknown as Mock).mockReturnValue(null);
+  (useActiveRuns as unknown as Mock).mockReturnValue([]);
 });
 
 afterEach(() => {
   cleanup();
   delete (window as { api?: IpcApi }).api;
   vi.restoreAllMocks();
-  (useActiveRun as unknown as Mock).mockReset();
+  (useActiveRuns as unknown as Mock).mockReset();
 });
 
 describe('<ProjectDetail> PRs tab — #GH-67', () => {

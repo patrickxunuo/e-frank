@@ -152,6 +152,70 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * Multi-run variant (#GH-81). When N>1 runs are in flight, the pill
+ * block flips to a stacked layout: header strip (with N count) + up to
+ * SIDEBAR_MAX_VISIBLE_RUNS rows + optional "+N more" overflow indicator.
+ * Tighter row gap than the singular variant since each row carries less
+ * label chrome.
+ */
+.activeContext[data-multi='true'] {
+  gap: 6px;
+}
+
+.activeHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--accent-border);
+}
+
+.activeHeaderLabel {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.activeHeaderCount {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.activeMultiRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.activeMultiProject {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.activeOverflow {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  text-align: center;
+  padding-top: 2px;
+}
+
 .user {
   display: flex;
   align-items: center;
