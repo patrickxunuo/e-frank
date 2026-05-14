@@ -80,6 +80,9 @@ import {
   type SkillsFindExitEvent,
   type ShellOpenExternalRequest,
   type ShellOpenPathRequest,
+  type AppConfigGetResponse,
+  type AppConfigSetRequest,
+  type AppConfigSetResponse,
 } from '../shared/ipc.js';
 
 const api: IpcApi = {
@@ -477,6 +480,17 @@ const api: IpcApi = {
       ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_PATH, req) as Promise<IpcResult<null>>,
     openExternal: (req: ShellOpenExternalRequest): Promise<IpcResult<null>> =>
       ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_EXTERNAL, req) as Promise<IpcResult<null>>,
+  },
+
+  appConfig: {
+    get: (): Promise<IpcResult<AppConfigGetResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.APP_CONFIG_GET) as Promise<
+        IpcResult<AppConfigGetResponse>
+      >,
+    set: (req: AppConfigSetRequest): Promise<IpcResult<AppConfigSetResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.APP_CONFIG_SET, req) as Promise<
+        IpcResult<AppConfigSetResponse>
+      >,
   },
 };
 
