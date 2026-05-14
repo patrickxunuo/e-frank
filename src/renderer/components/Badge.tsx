@@ -1,7 +1,14 @@
 import type { ReactNode } from 'react';
 import styles from './Badge.module.css';
 
-export type BadgeVariant = 'idle' | 'running' | 'success' | 'warning' | 'danger' | 'neutral';
+export type BadgeVariant =
+  | 'idle'
+  | 'running'
+  | 'info'
+  | 'success'
+  | 'warning'
+  | 'danger'
+  | 'neutral';
 
 /**
  * `pulse` controls the dot's animation cadence.

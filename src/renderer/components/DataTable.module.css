@@ -33,6 +33,36 @@
    * ancestor; default 0 means no reservation. The padding is part of the
    * scroll content so the last row scrolls clear of the overlay. */
   padding-bottom: var(--active-clearance, 0);
+  /* Reserve scrollbar gutter permanently so the table contents don't shift
+   * horizontally as the scrollbar fades in / out on hover. */
+  scrollbar-gutter: stable;
+  /* Firefox — hidden by default, fade in on hover-of-container. */
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color var(--duration-fast) var(--ease-out);
+}
+
+.fillHeight:hover {
+  scrollbar-color: var(--surface-overlay-mid) transparent;
+}
+
+/* Chromium — override the global `reset.css` thumb so it's transparent by
+ * default and only paints when the user's cursor is inside the scroll area.
+ * Border transitions alongside background so the inset edge disappears too. */
+.fillHeight::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-color: transparent;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.fillHeight:hover::-webkit-scrollbar-thumb {
+  background: var(--surface-overlay-mid);
+  border-color: var(--bg-app);
+}
+
+.fillHeight:hover::-webkit-scrollbar-thumb:hover {
+  background: var(--surface-overlay-strong);
 }
 
 .table {

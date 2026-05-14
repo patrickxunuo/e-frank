@@ -9,6 +9,33 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* Hide scrollbar by default; fade in when the user's cursor enters the
+   * scrollable area. Matches the DataTable `.fillHeight` treatment so all
+   * four ProjectDetail tabs feel consistent. */
+  scrollbar-gutter: stable;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color var(--duration-fast) var(--ease-out);
+}
+
+.tab:hover {
+  scrollbar-color: var(--surface-overlay-mid) transparent;
+}
+
+.tab::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-color: transparent;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.tab:hover::-webkit-scrollbar-thumb {
+  background: var(--surface-overlay-mid);
+  border-color: var(--bg-app);
+}
+
+.tab:hover::-webkit-scrollbar-thumb:hover {
+  background: var(--surface-overlay-strong);
 }
 
 .formWrap {

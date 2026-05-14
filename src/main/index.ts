@@ -40,6 +40,11 @@ import {
   type RunsReadLogResponse,
   type TicketsListRequest,
   type TicketsListResponse,
+  type PullsListRequest,
+  type PullsListResponse,
+  type PullDto,
+  type PullState,
+  type PullReviewDecision,
   type RunsCurrentChangedEvent,
   type ConnectionsCreateRequest,
   type ConnectionsUpdateRequest,
@@ -554,6 +559,16 @@ function validateTicketsListRequest(raw: unknown): IpcResult<TicketsListRequest>
   return { ok: true, data: req };
 }
 
+function validatePullsListRequest(raw: unknown): IpcResult<PullsListRequest> {
+  if (!isPlainObject(raw) || typeof raw['projectId'] !== 'string' || raw['projectId'] === '') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'projectId must be a non-empty string' },
+    };
+  }
+  return { ok: true, data: { projectId: raw['projectId'] } };
+}
+
 function validateJiraTestConnectionRequest(raw: unknown): IpcResult<JiraTestConnectionRequest> {
   if (
     !isPlainObject(raw) ||
@@ -951,6 +966,41 @@ function notInitialized<T>(name: string): IpcResult<T> {
   return {
     ok: false,
     error: { code: 'NOT_INITIALIZED', message: `${name} failed to initialize at startup` },
+  };
+}
+
+/**
+ * Map a `GithubPullSummary` (from GraphQL) to the renderer-facing `PullDto`.
+ * State derivation:
+ *   - `MERGED`           → 'merged'
+ *   - `CLOSED`           → 'closed' (closed without merging — `mergedAt` is null)
+ *   - `OPEN` + isDraft   → 'draft'
+ *   - `OPEN`             → 'open'
+ * Review-decision is lowercased and underscored to match the IPC enum.
+ */
+function toPullDto(p: import('./modules/github-client.js').GithubPullSummary): PullDto {
+  let state: PullState;
+  if (p.state === 'MERGED') {
+    state = 'merged';
+  } else if (p.state === 'CLOSED') {
+    state = 'closed';
+  } else if (p.isDraft) {
+    state = 'draft';
+  } else {
+    state = 'open';
+  }
+  let reviewDecision: PullReviewDecision = null;
+  if (p.reviewDecision === 'APPROVED') reviewDecision = 'approved';
+  else if (p.reviewDecision === 'CHANGES_REQUESTED') reviewDecision = 'changes_requested';
+  else if (p.reviewDecision === 'REVIEW_REQUIRED') reviewDecision = 'review_required';
+  return {
+    number: p.number,
+    title: p.title,
+    authorLogin: p.authorLogin,
+    state,
+    reviewDecision,
+    updatedAt: p.updatedAt,
+    url: p.url,
   };
 }
 
@@ -1743,6 +1793,63 @@ function registerIpcHandlers(): void {
         out.nextCursor = res.data.nextCursor;
       }
       return { ok: true, data: out };
+    },
+  );
+
+  // -- Project Pull Requests (issue #GH-67) ----------------------------------
+  //
+  // Reads the project's bound GitHub Connection (creds via SecretsManager),
+  // pulls the 50 most-recently-updated PRs in one GraphQL request, and maps
+  // them to PullDto[]. The mapping (state badge enum, review-state casing)
+  // lives here rather than in the renderer so the UI doesn't have to know
+  // GraphQL conventions.
+  ipcMain.handle(
+    IPC_CHANNELS.PULLS_LIST,
+    async (_event, raw): Promise<IpcResult<PullsListResponse>> => {
+      const validated = validatePullsListRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (projectStore === null || connectionStore === null || secretsManager === null) {
+        return notInitialized('ProjectStore');
+      }
+      const projectRes = await projectStore.get(validated.data.projectId);
+      if (!projectRes.ok) {
+        return { ok: false, error: { code: projectRes.error.code, message: projectRes.error.message } };
+      }
+      const project = projectRes.data;
+      if (project.repo.type !== 'github') {
+        return {
+          ok: false,
+          error: { code: 'INVALID_PROVIDER', message: 'project repo is not a GitHub repo' },
+        };
+      }
+      const got = await connectionStore.get(project.repo.connectionId);
+      if (!got.ok) {
+        return { ok: false, error: { code: got.error.code, message: got.error.message } };
+      }
+      const conn = got.data;
+      if (conn.provider !== 'github') {
+        return {
+          ok: false,
+          error: { code: 'INVALID_PROVIDER', message: 'connection provider mismatch' },
+        };
+      }
+      const secret = await secretsManager.get(conn.secretRef);
+      if (!secret.ok) {
+        return { ok: false, error: { code: secret.error.code, message: secret.error.message } };
+      }
+      const client = new GithubClient({
+        httpClient: new FetchHttpClient(),
+        host: conn.host,
+        auth: { token: secret.data.plaintext },
+      });
+      const res = await client.listPullRequests(project.repo.slug);
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      const rows: PullDto[] = res.data.map(toPullDto);
+      return { ok: true, data: { rows } };
     },
   );
 

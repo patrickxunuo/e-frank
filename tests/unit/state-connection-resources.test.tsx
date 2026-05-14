@@ -176,6 +176,9 @@ function installApi(opts?: {
     tickets: {
       list: vi.fn() as unknown as IpcApi['tickets']['list'],
     },
+    pulls: {
+      list: vi.fn() as unknown as IpcApi['pulls']['list'],
+    },
     chrome: {
       minimize: vi.fn() as unknown as IpcApi['chrome']['minimize'],
       maximize: vi.fn() as unknown as IpcApi['chrome']['maximize'],
@@ -524,6 +527,9 @@ function installBranchesApi(opts?: {
     },
     tickets: {
       list: vi.fn() as unknown as IpcApi['tickets']['list'],
+    },
+    pulls: {
+      list: vi.fn() as unknown as IpcApi['pulls']['list'],
     },
     chrome: {
       minimize: vi.fn() as unknown as IpcApi['chrome']['minimize'],

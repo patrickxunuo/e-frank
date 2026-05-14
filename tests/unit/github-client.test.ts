@@ -512,4 +512,243 @@ describe('GithubClient', () => {
       expect(JSON.stringify(r)).not.toContain(TOKEN);
     });
   });
+
+  // ===========================================================================
+  // GH-CLIENT-PULL-001..006 — listPullRequests via GraphQL (issue #GH-67)
+  // ===========================================================================
+  //
+  // listPullRequests posts a single GraphQL query to `${host}/graphql` and
+  // returns mapped GithubPullSummary[]. Same security invariant as the REST
+  // methods: the token must NEVER appear in any error.
+
+  describe('listPullRequests (GraphQL) — #GH-67', () => {
+    const SLUG = 'gazhang/repo-a';
+    const GRAPHQL_URL = `${HOST}/graphql`;
+
+    function gqlOk(nodes: unknown[], status = 200, headers: Record<string, string> = {}) {
+      return jsonResp({ data: { repository: { pullRequests: { nodes } } } }, status, headers);
+    }
+
+    it('GH-CLIENT-PULL-001: POSTs to /graphql with Bearer auth + JSON body', async () => {
+      http.expect('POST', GRAPHQL_URL, gqlOk([]));
+      const r = await client.listPullRequests(SLUG);
+      expect(r.ok).toBe(true);
+      expect(http.calls).toHaveLength(1);
+      const call = http.calls[0]!;
+      expect(call.method).toBe('POST');
+      expect(call.url).toBe(GRAPHQL_URL);
+      // Auth + content-type
+      const headers = call.headers ?? {};
+      const authH = Object.entries(headers).find(([k]) => k.toLowerCase() === 'authorization');
+      expect(authH?.[1]).toBe(`Bearer ${TOKEN}`);
+      const ctH = Object.entries(headers).find(([k]) => k.toLowerCase() === 'content-type');
+      expect(ctH?.[1]).toBe('application/json');
+      // Body shape — query string + variables
+      const body = JSON.parse(call.body ?? '{}');
+      expect(typeof body.query).toBe('string');
+      expect(body.query).toContain('pullRequests(first: 50');
+      expect(body.variables).toEqual({ owner: 'gazhang', name: 'repo-a' });
+    });
+
+    it('GH-CLIENT-PULL-002: maps nodes to GithubPullSummary[]', async () => {
+      const nodes = [
+        {
+          number: 42,
+          title: 'Add PRs tab',
+          author: { login: 'gazhang' },
+          state: 'OPEN',
+          isDraft: false,
+          reviewDecision: 'APPROVED',
+          mergedAt: null,
+          closedAt: null,
+          updatedAt: '2026-05-12T10:00:00Z',
+          url: 'https://github.com/gazhang/repo-a/pull/42',
+        },
+        {
+          number: 41,
+          title: 'WIP: refactor',
+          author: { login: 'gazhang' },
+          state: 'OPEN',
+          isDraft: true,
+          reviewDecision: null,
+          mergedAt: null,
+          closedAt: null,
+          updatedAt: '2026-05-11T10:00:00Z',
+          url: 'https://github.com/gazhang/repo-a/pull/41',
+        },
+        {
+          number: 40,
+          title: 'Old merged thing',
+          author: { login: 'dependabot' },
+          state: 'MERGED',
+          isDraft: false,
+          reviewDecision: 'APPROVED',
+          mergedAt: '2026-05-09T10:00:00Z',
+          closedAt: '2026-05-09T10:00:00Z',
+          updatedAt: '2026-05-09T10:00:00Z',
+          url: 'https://github.com/gazhang/repo-a/pull/40',
+        },
+      ];
+      http.expect('POST', GRAPHQL_URL, gqlOk(nodes));
+      const r = await client.listPullRequests(SLUG);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data).toHaveLength(3);
+      expect(r.data[0]).toEqual({
+        number: 42,
+        title: 'Add PRs tab',
+        authorLogin: 'gazhang',
+        state: 'OPEN',
+        isDraft: false,
+        reviewDecision: 'APPROVED',
+        mergedAt: null,
+        closedAt: null,
+        updatedAt: '2026-05-12T10:00:00Z',
+        url: 'https://github.com/gazhang/repo-a/pull/42',
+      });
+      expect(r.data[1]?.isDraft).toBe(true);
+      expect(r.data[1]?.reviewDecision).toBeNull();
+      expect(r.data[2]?.state).toBe('MERGED');
+    });
+
+    it('GH-CLIENT-PULL-003: tolerates null author (deleted account)', async () => {
+      const nodes = [
+        {
+          number: 7,
+          title: 'Ghost PR',
+          author: null,
+          state: 'OPEN',
+          isDraft: false,
+          reviewDecision: null,
+          mergedAt: null,
+          closedAt: null,
+          updatedAt: '2026-05-10T10:00:00Z',
+          url: 'https://github.com/gazhang/repo-a/pull/7',
+        },
+      ];
+      http.expect('POST', GRAPHQL_URL, gqlOk(nodes));
+      const r = await client.listPullRequests(SLUG);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data[0]?.authorLogin).toBeNull();
+    });
+
+    it('GH-CLIENT-PULL-004: 401 → AUTH', async () => {
+      http.expect('POST', GRAPHQL_URL, jsonResp({ message: 'Bad credentials' }, 401));
+      const r = await client.listPullRequests(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('AUTH');
+    });
+
+    it('GH-CLIENT-PULL-005a: REST-style 403 with X-RateLimit-Remaining: 0 → RATE_LIMITED with reset time', async () => {
+      const resetSeconds = Math.floor(Date.now() / 1000) + 600;
+      http.expect(
+        'POST',
+        GRAPHQL_URL,
+        jsonResp({}, 403, {
+          'x-ratelimit-remaining': '0',
+          'x-ratelimit-reset': String(resetSeconds),
+        }),
+      );
+      const r = await client.listPullRequests(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('RATE_LIMITED');
+      // Reset time is folded into the message as ISO so the renderer can show it.
+      expect(r.error.message).toMatch(/Resets at \d{4}-\d{2}-\d{2}T/);
+    });
+
+    it('GH-CLIENT-PULL-005a2: secondary rate limit (403 + Retry-After header, no X-RateLimit-Remaining) → RATE_LIMITED', async () => {
+      http.expect(
+        'POST',
+        GRAPHQL_URL,
+        jsonResp({}, 403, { 'retry-after': '60' }),
+      );
+      const r = await client.listPullRequests(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      // Must NOT be classified as AUTH — that would surface the wrong banner.
+      expect(r.error.code).toBe('RATE_LIMITED');
+      expect(r.error.message).toMatch(/secondary rate limit/i);
+      expect(r.error.message).toMatch(/60s/);
+    });
+
+    it('GH-CLIENT-PULL-005b: GraphQL errors[].type === RATE_LIMITED → RATE_LIMITED', async () => {
+      http.expect(
+        'POST',
+        GRAPHQL_URL,
+        jsonResp(
+          {
+            data: null,
+            errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded' }],
+          },
+          200,
+          { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '9999999999' },
+        ),
+      );
+      const r = await client.listPullRequests(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('RATE_LIMITED');
+    });
+
+    it('GH-CLIENT-PULL-005c: non-rate-limit GraphQL errors → INVALID_RESPONSE', async () => {
+      http.expect(
+        'POST',
+        GRAPHQL_URL,
+        jsonResp({ errors: [{ type: 'NOT_FOUND', message: "Could not resolve to a Repository" }] }),
+      );
+      const r = await client.listPullRequests(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('INVALID_RESPONSE');
+    });
+
+    it('GH-CLIENT-PULL-005d: repository: null in GraphQL data → NOT_FOUND', async () => {
+      http.expect('POST', GRAPHQL_URL, jsonResp({ data: { repository: null } }));
+      const r = await client.listPullRequests(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('NOT_FOUND');
+    });
+
+    it('GH-CLIENT-PULL-006: token NEVER appears in any error path', async () => {
+      // Echo the token in the response body to make sure no error message leaks it.
+      http.expect('POST', GRAPHQL_URL, jsonResp({ message: `bad: ${TOKEN}` }, 401));
+      const r = await client.listPullRequests(SLUG);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(JSON.stringify(r)).not.toContain(TOKEN);
+    });
+
+    it('GH-CLIENT-PULL-006: invalid slug → INVALID_RESPONSE without making an HTTP call', async () => {
+      const r = await client.listPullRequests('no-slash');
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('INVALID_RESPONSE');
+      expect(http.calls).toHaveLength(0);
+    });
+
+    // GH-CLIENT-PULL-007 — Enterprise host translates `/api/v3` → `/api/graphql`
+    // (NOT `/api/v3/graphql` which would 404 against GHE).
+    it('GH-CLIENT-PULL-007: enterprise host (…/api/v3) posts GraphQL to …/api/graphql', async () => {
+      const enterpriseHost = 'https://ghes.example.com/api/v3';
+      const enterpriseClient = new GithubClient({
+        httpClient: http,
+        host: enterpriseHost,
+        auth: auth(),
+      });
+      const expectedGraphqlUrl = 'https://ghes.example.com/api/graphql';
+      http.expect(
+        'POST',
+        expectedGraphqlUrl,
+        jsonResp({ data: { repository: { pullRequests: { nodes: [] } } } }),
+      );
+      const r = await enterpriseClient.listPullRequests(SLUG);
+      expect(r.ok).toBe(true);
+      expect(http.calls).toHaveLength(1);
+      expect(http.calls[0]?.url).toBe(expectedGraphqlUrl);
+    });
+  });
 });
