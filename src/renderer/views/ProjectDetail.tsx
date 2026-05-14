@@ -36,9 +36,9 @@ import {
   IconRefresh,
   IconRuns,
   IconSearch,
-  IconSettings,
   IconTrash,
 } from '../components/icons';
+import { ProjectSettingsTab } from './ProjectSettingsTab';
 import { normalizePriority, type PriorityBucket } from '../lib/priority';
 import { formatRelative } from '../lib/time';
 import { useActiveRun } from '../state/active-run';
@@ -1311,11 +1311,22 @@ export function ProjectDetail({
             />
           )}
           {tab === 'settings' && (
-            <EmptyState
-              icon={<IconSettings size={26} />}
-              title="Project settings"
-              description="Editing repo paths, JQL, and credentials moves here in a future release. For now, recreate the project to make changes."
-              data-testid="tab-empty-settings"
+            <ProjectSettingsTab
+              project={project}
+              activeRun={activeRun}
+              onProjectChanged={async () => {
+                if (typeof window === 'undefined' || !window.api) return;
+                try {
+                  const result = await window.api.projects.get({ id: projectId });
+                  if (result.ok) {
+                    setState({ kind: 'ready', project: result.data });
+                  }
+                } catch {
+                  // Silent — the save toast already confirmed success;
+                  // a stale local copy is annoying but not data-loss.
+                }
+              }}
+              onDeleted={onBack}
             />
           )}
         </div>

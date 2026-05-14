@@ -1,0 +1,119 @@
+.tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding-block: var(--space-4);
+  /* The parent `.tabPanel` is `overflow: hidden` (its children own their own
+   * scroll, per the Tickets-tab table-card pattern). The settings tab has no
+   * inner card to scroll, so the tab itself is the scroller. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.formWrap {
+  /* AddProject paints its own .form gap; this wrap exists so future
+   * settings-only chrome (e.g. a sticky save bar) can land here without
+   * disturbing the inner form layout. */
+  display: contents;
+}
+
+/* ---- Destructive zone ---- */
+
+.dangerZone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--danger-border);
+  background: var(--danger-soft);
+}
+
+.dangerHead {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.dangerIcon {
+  flex: 0 0 auto;
+  color: var(--danger);
+  margin-top: 2px;
+}
+
+.dangerTitles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.dangerTitle {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dangerSubtitle {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.dangerBanner {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--warning-border);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dangerActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+/* ---- Delete confirm dialog body ---- */
+
+.confirmBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.confirmBody p {
+  margin: 0;
+}
+
+.confirmProjectName {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  background: var(--bg-card);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+}
+
+.confirmError {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
