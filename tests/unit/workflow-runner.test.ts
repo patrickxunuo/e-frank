@@ -821,6 +821,41 @@ describe('WorkflowRunner', () => {
   });
 
   // -------------------------------------------------------------------------
+  // WFR-018 — Claude exits cleanly mid-approval (GH-73)
+  // -------------------------------------------------------------------------
+  describe('WFR-018 claude exits while awaiting approval (GH-73)', () => {
+    it('WFR-018: clean exit while paused on awaitingApproval → state=failed with approval-abandoned message', async () => {
+      const h = await buildHarness();
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+
+      await waitForState(h, 'running');
+      h.fakeClaude.emitOutput(
+        '<<<EF_APPROVAL_REQUEST>>>{"plan":"do thing","options":["approve","reject"]}<<<END_EF_APPROVAL_REQUEST>>>\n',
+      );
+      await waitForState(h, 'awaitingApproval');
+
+      // Reproduce the GH-73 silent-done bug surface: don't call approve(),
+      // don't call cancel(). The skill — running under `claude -p` — just
+      // exits cleanly after emitting the marker (single-turn print mode
+      // can't block on stdin). Pre-fix: pipeline marched to `done` with
+      // no code changes. Post-fix: runner detects pending approvalDeferred
+      // at exit and routes the run to `failed`.
+      h.fakeClaude.emitExit(0, 'completed');
+
+      const final = await waitForFinal(h);
+      expect(final.state).toBe('failed');
+      // Error message surfaces the cause so users see "approval abandoned"
+      // rather than a generic "claude exited" message.
+      expect(final.error ?? '').toMatch(/approval|EF_APPROVAL_REQUEST/i);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // WFR-009 — cancel during awaitingApproval
   // -------------------------------------------------------------------------
   describe('WFR-009 cancel during awaitingApproval', () => {
