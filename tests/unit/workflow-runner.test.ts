@@ -33,6 +33,13 @@ import type {
   ExitEvent,
 } from '../../src/main/modules/claude-process-manager';
 import type { ProjectStoreFs } from '../../src/main/modules/project-store';
+import type {
+  WorktreeManager,
+  AddWorktreeRequest,
+  AddWorktreeResponse,
+  RemoveWorktreeRequest,
+  WorktreeResult,
+} from '../../src/main/modules/worktree-manager';
 import type { Run, RunStateEvent } from '../../src/shared/schema/run';
 import type { ProjectInstance } from '../../src/shared/schema/project-instance';
 
@@ -237,6 +244,39 @@ interface FakeSecretsManager {
   >;
 }
 
+/**
+ * In-memory WorktreeManager double (#GH-72). Tracks every add/remove call
+ * so tests can assert worktree lifecycle. `add` returns a synthetic cwd
+ * derived from runId so different runs get different cwds — useful for
+ * future concurrency tests. `remove` is silently idempotent.
+ */
+class FakeWorktreeManager {
+  readonly addCalls: AddWorktreeRequest[] = [];
+  readonly removeCalls: RemoveWorktreeRequest[] = [];
+  /** Override hook — tests that want addWorktree to fail set this. */
+  nextAddFails: { code: 'ADD_FAILED' | 'IO_FAILURE' | 'TIMEOUT'; message: string } | null =
+    null;
+
+  async addWorktree(req: AddWorktreeRequest): Promise<WorktreeResult<AddWorktreeResponse>> {
+    this.addCalls.push(req);
+    if (this.nextAddFails !== null) {
+      const failure = this.nextAddFails;
+      this.nextAddFails = null;
+      return { ok: false, error: failure };
+    }
+    return { ok: true, data: { cwd: `/tmp/fake-worktree/${req.runId}` } };
+  }
+
+  async removeWorktree(req: RemoveWorktreeRequest): Promise<WorktreeResult<void>> {
+    this.removeCalls.push(req);
+    return { ok: true, data: undefined };
+  }
+
+  async pruneStaleWorktrees(): Promise<WorktreeResult<{ pruned: string[] }>> {
+    return { ok: true, data: { pruned: [] } };
+  }
+}
+
 function makeFakeProject(over: Partial<ProjectInstance> = {}): ProjectInstance {
   return {
     id: 'p-1',
@@ -335,6 +375,7 @@ interface HarnessOptions {
   gitManager?: GitManager;
   prCreator?: PrCreator;
   jiraUpdater?: JiraUpdater;
+  worktreeManager?: FakeWorktreeManager;
 }
 
 interface Harness {
@@ -347,6 +388,7 @@ interface Harness {
   gitManager: GitManager;
   prCreator: PrCreator;
   jiraUpdater: JiraUpdater;
+  fakeWorktree: FakeWorktreeManager;
   /** Captured `state-changed` events, in firing order. */
   stateEvents: RunStateEvent[];
   /** Captured `current-changed` events, in firing order. */
@@ -376,6 +418,7 @@ async function buildHarness(opts: HarnessOptions = {}): Promise<Harness> {
   const gitManager = opts.gitManager ?? new StubGitManager();
   const prCreator = opts.prCreator ?? new StubPrCreator();
   const jiraUpdater = opts.jiraUpdater ?? new StubJiraUpdater();
+  const fakeWorktree = opts.worktreeManager ?? new FakeWorktreeManager();
 
   const fakeClaude = new FakeClaudeProcessManager();
   const claudeManager = fakeClaude as unknown as ClaudeProcessManager;
@@ -393,6 +436,7 @@ async function buildHarness(opts: HarnessOptions = {}): Promise<Harness> {
     gitManager,
     prCreator,
     jiraUpdater,
+    worktreeManager: fakeWorktree as unknown as WorktreeManager,
   });
 
   const stateEvents: RunStateEvent[] = [];
@@ -414,6 +458,7 @@ async function buildHarness(opts: HarnessOptions = {}): Promise<Harness> {
     gitManager,
     prCreator,
     jiraUpdater,
+    fakeWorktree,
     stateEvents,
     currentEvents,
     markRunningSpy,
@@ -1907,6 +1952,122 @@ describe('WorkflowRunner', () => {
         expect(matches).toHaveLength(1);
         expect(matches[0]?.status).toBe('done');
       }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // WFR-043..045 — per-run git worktrees (#GH-72 PR A)
+  // -------------------------------------------------------------------------
+  describe('WFR-043 worktree.add invoked with run context', () => {
+    it('WFR-043: addWorktree called with runId + baseBranch + repoPath; cwd passed to claude', async () => {
+      const h = await buildHarness();
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+
+      await waitForState(h, 'running');
+
+      expect(h.fakeWorktree.addCalls).toHaveLength(1);
+      expect(h.fakeWorktree.addCalls[0]).toMatchObject({
+        runId: start.data.run.id,
+        baseBranch: 'main',
+        repoPath: '/abs/repo',
+      });
+      // The cwd handed to claude is the worktree's path, NOT the project's
+      // primary localPath. That isolation is the whole point of #GH-72.
+      expect(h.fakeClaude.runRequests).toHaveLength(1);
+      expect(h.fakeClaude.runRequests[0]?.cwd).toBe(
+        `/tmp/fake-worktree/${start.data.run.id}`,
+      );
+
+      // Clean up so the harness doesn't dangle.
+      h.fakeClaude.emitExit(0, 'completed');
+      await waitForFinal(h);
+    });
+  });
+
+  describe('WFR-044 worktree.remove invoked on every terminal path', () => {
+    it('WFR-044a: removeWorktree called on success path', async () => {
+      const h = await buildHarness();
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+      await waitForState(h, 'running');
+      h.fakeClaude.emitExit(0, 'completed');
+      const final = await waitForFinal(h);
+      expect(final.state).toBe('done');
+      expect(h.fakeWorktree.removeCalls).toHaveLength(1);
+      expect(h.fakeWorktree.removeCalls[0]).toMatchObject({
+        runId: start.data.run.id,
+        repoPath: '/abs/repo',
+      });
+    });
+
+    it('WFR-044b: removeWorktree called on cancellation path', async () => {
+      const h = await buildHarness();
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+      await waitForState(h, 'running');
+      await h.runner.cancel(start.data.run.id);
+      try {
+        h.fakeClaude.emitExit(null, 'cancelled', 'SIGTERM');
+      } catch {
+        // already exited
+      }
+      const final = await waitForFinal(h);
+      expect(final.state).toBe('cancelled');
+      expect(h.fakeWorktree.removeCalls).toHaveLength(1);
+    });
+
+    it('WFR-044c: removeWorktree called on failure path', async () => {
+      const h = await buildHarness();
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+      await waitForState(h, 'running');
+      // Non-zero exit → state=failed.
+      h.fakeClaude.emitExit(1, 'error');
+      const final = await waitForFinal(h);
+      expect(final.state).toBe('failed');
+      expect(h.fakeWorktree.removeCalls).toHaveLength(1);
+    });
+  });
+
+  describe('WFR-045 worktree.add failure routes the run to failed', () => {
+    it('WFR-045: addWorktree returning error → state=failed, claude never spawned', async () => {
+      const fakeWorktree = new FakeWorktreeManager();
+      fakeWorktree.nextAddFails = {
+        code: 'ADD_FAILED',
+        message: "fatal: '/abs/repo' is not a git repository",
+      };
+      const h = await buildHarness({ worktreeManager: fakeWorktree });
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+      const final = await waitForFinal(h);
+      expect(final.state).toBe('failed');
+      // Claude was never spawned — addWorktree failed inside locking, before
+      // the running state body that calls claudeManager.run.
+      expect(h.fakeClaude.runRequests).toHaveLength(0);
+      // remove was NOT called: worktree never succeeded so there's nothing
+      // to clean up. The cleanup branch is gated on `worktreeCwd !== null`.
+      expect(h.fakeWorktree.removeCalls).toHaveLength(0);
     });
   });
 });

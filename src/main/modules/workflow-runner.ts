@@ -65,6 +65,7 @@ import type { PrCreator } from './pr-creator.js';
 import type { JiraUpdater } from './jira-updater.js';
 import type { RunStore } from './run-store.js';
 import type { Ticket } from '../../shared/schema/ticket.js';
+import type { WorktreeManager } from './worktree-manager.js';
 
 const TICKET_KEY_REGEX = /^[A-Z][A-Z0-9_]*-\d+$/;
 
@@ -173,6 +174,14 @@ export interface WorkflowRunnerOptions {
   gitManager: GitManager;
   prCreator: PrCreator;
   jiraUpdater: JiraUpdater;
+  /**
+   * Per-run git worktree manager (#GH-72). The runner asks for a fresh
+   * worktree on `start` and removes it on terminal status, so each run
+   * gets its own isolated checkout. PR A wires the existing single-run
+   * path through worktrees; PR B drops the app-wide lock and lets
+   * concurrent runs coexist (each with its own worktree).
+   */
+  worktreeManager: WorktreeManager;
   /**
    * Read-only adapter over the ticket poller's per-project cache. The runner
    * uses it ONLY to resolve a ticket's `summary` by `key` so branch + commit
@@ -539,7 +548,19 @@ export class WorkflowRunner extends EventEmitter {
     project: ProjectInstance,
     _ticketSummary: string,
   ): Promise<void> {
-    const repoCwd = project.repo.localPath;
+    const repoPath = project.repo.localPath;
+    /**
+     * #GH-72: each run gets its own isolated git worktree (a sibling
+     * checkout under `worktreesRoot`) so it can't race with the user's
+     * primary working tree or with other runs. The worktree is created
+     * once at the start of the pipeline and torn down unconditionally
+     * after the terminal state — the `finally`-equivalent cleanup below
+     * handles failure / cancel paths the same as success.
+     *
+     * `worktreeCwd` is `null` until `addWorktree` succeeds; if creation
+     * fails the pipeline routes to `failed` before claude is even spawned.
+     */
+    let worktreeCwd: string | null = null;
     let pipelineError: string | null = null;
     let cancelled = false;
 
@@ -554,6 +575,21 @@ export class WorkflowRunner extends EventEmitter {
         if (!res.ok) {
           throw new Error(`run-history.markRunning failed: ${res.error.code} - ${res.error.message}`);
         }
+        // After lock acquisition, allocate the isolated worktree. Done
+        // inside `locking` (rather than its own pipeline phase) because
+        // it's an implementation detail of preparing the workspace —
+        // the user-visible timeline shouldn't gain a "worktree-add" step.
+        const wt = await this.options.worktreeManager.addWorktree({
+          runId: ctx.run.id,
+          baseBranch: project.repo.baseBranch,
+          repoPath,
+        });
+        if (!wt.ok) {
+          throw new Error(
+            `worktree.add failed: ${wt.error.code} - ${wt.error.message}`,
+          );
+        }
+        worktreeCwd = wt.data.cwd;
       });
 
       // -- running -- (Claude takes over: spawns the skill, drives git/
@@ -561,7 +597,13 @@ export class WorkflowRunner extends EventEmitter {
       //               so the runner can keep `Run.state` honest, emits
       //               approval markers to pause for human review.)
       await this.runState(ctx, 'running', async () => {
-        await this.runClaudeWithApprovals(ctx, repoCwd);
+        // worktreeCwd is non-null here: the `locking` block above either
+        // assigned it or threw, in which case we wouldn't reach this state.
+        // The runtime check appeases TS's `let | null` narrowing.
+        if (worktreeCwd === null) {
+          throw new Error('internal: worktreeCwd missing after locking phase');
+        }
+        await this.runClaudeWithApprovals(ctx, worktreeCwd);
       });
     } catch (err) {
       if (err instanceof CancelledError) {
@@ -578,6 +620,23 @@ export class WorkflowRunner extends EventEmitter {
           step.error = message;
         }
         ctx.run.error = message;
+      }
+    }
+
+    // -- worktree cleanup -- (#GH-72; runs on every terminal path).
+    // Idempotent — `removeWorktree` no-ops if the directory is absent,
+    // so an `addWorktree` failure earlier doesn't make this throw. We
+    // log failures but never propagate them: a stuck worktree is a
+    // disk-clutter problem, not a reason to surface the run as failed.
+    if (worktreeCwd !== null) {
+      const rm = await this.options.worktreeManager.removeWorktree({
+        runId: ctx.run.id,
+        repoPath,
+      });
+      if (!rm.ok) {
+        console.warn(
+          `[workflow-runner] worktree.remove failed for runId=${ctx.run.id}: ${rm.error.code} - ${rm.error.message}`,
+        );
       }
     }
 
