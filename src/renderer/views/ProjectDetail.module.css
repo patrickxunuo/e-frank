@@ -130,6 +130,18 @@
   justify-content: flex-end;
 }
 
+/*
+ * Pin the page-level Refresh button to a stable width so the label can
+ * change per tab ("Refresh tickets" / "Refresh PRs" / "Refresh runs")
+ * without the button visibly jumping left/right when the user switches
+ * tabs. Width fits the longest label + icon + size="sm" padding; shorter
+ * labels render centered within the same frame.
+ */
+.headActions > button[data-testid='refresh-button'] {
+  min-width: 144px;
+  justify-content: center;
+}
+
 .headDivider {
   width: 1px;
   height: 22px;
@@ -555,6 +567,68 @@
   color: var(--text-secondary);
   letter-spacing: 0.01em;
   align-self: center;
+}
+
+/*
+ * Header row hosts the count, the state-filter chip group, and the Refresh
+ * button. Heading sits left; chips center via `margin-left: auto` on the
+ * filter group; Refresh pinned to the right by the natural flow.
+ */
+.pullsHeaderRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+}
+
+.pullsFilters {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.pullsFilterChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.pullsFilterChip:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-strong);
+}
+
+.pullsFilterChipActive {
+  color: var(--text-primary);
+  background: var(--surface-overlay-subtle);
+  border-color: var(--border-strong);
+}
+
+.pullsFilterCount {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  min-width: 14px;
+  text-align: right;
+}
+
+.pullsFilterChipActive .pullsFilterCount {
+  color: var(--text-secondary);
 }
 
 .pullTitle {

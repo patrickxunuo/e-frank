@@ -257,6 +257,14 @@ describe('<ProjectDetail> PRs tab — #GH-67', () => {
     ];
     const stub = installApi({ pullsResult: { ok: true, data: { rows } } });
     await renderAndOpenPrsTab(stub);
+    // Merged + closed are hidden by default — flip those chips on so the
+    // badge-variant assertions below have rows to query.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('pulls-filter-merged'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('pulls-filter-closed'));
+    });
     const badge50 = await screen.findByTestId('pull-state-50');
     const badge51 = await screen.findByTestId('pull-state-51');
     const badge52 = await screen.findByTestId('pull-state-52');
@@ -267,11 +275,14 @@ describe('<ProjectDetail> PRs tab — #GH-67', () => {
     expect(badge53).toHaveAttribute('data-variant', 'info');
   });
 
-  it('PRS-005: refresh button calls pulls.list again', async () => {
+  it('PRS-005: page-level Refresh button calls pulls.list again when PRs tab is active', async () => {
     const stub = installApi();
     await renderAndOpenPrsTab(stub);
     expect(stub.pullsList).toHaveBeenCalledTimes(1);
-    const refresh = await screen.findByTestId('pulls-refresh-button');
+    // No more inline `pulls-refresh-button` after the GH-67 follow-up
+    // refactor — the page-level Refresh in the header dispatches per-tab.
+    expect(screen.queryByTestId('pulls-refresh-button')).not.toBeInTheDocument();
+    const refresh = await screen.findByTestId('refresh-button');
     await act(async () => {
       fireEvent.click(refresh);
     });
@@ -356,6 +367,122 @@ describe('<ProjectDetail> PRs tab — #GH-67', () => {
     expect(screen.queryByTestId('pull-review-33')).not.toBeInTheDocument();
     const row = await screen.findByTestId('pull-row-33');
     expect(row).toHaveTextContent('—');
+  });
+
+  it('PRS-012: status filter defaults to open + draft, hiding merged + closed rows', async () => {
+    const rows: PullDto[] = [
+      makePull(60, { state: 'open' }),
+      makePull(61, { state: 'draft' }),
+      makePull(62, { state: 'merged' }),
+      makePull(63, { state: 'closed' }),
+    ];
+    const stub = installApi({ pullsResult: { ok: true, data: { rows } } });
+    await renderAndOpenPrsTab(stub);
+    // open + draft visible by default
+    expect(await screen.findByTestId('pull-row-60')).toBeInTheDocument();
+    expect(screen.getByTestId('pull-row-61')).toBeInTheDocument();
+    // merged + closed hidden
+    expect(screen.queryByTestId('pull-row-62')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pull-row-63')).not.toBeInTheDocument();
+    // Filter chips reflect default `aria-pressed`/`data-active` state
+    expect(screen.getByTestId('pulls-filter-open')).toHaveAttribute('data-active', 'true');
+    expect(screen.getByTestId('pulls-filter-draft')).toHaveAttribute('data-active', 'true');
+    expect(screen.getByTestId('pulls-filter-merged')).toHaveAttribute('data-active', 'false');
+    expect(screen.getByTestId('pulls-filter-closed')).toHaveAttribute('data-active', 'false');
+    // Counts come from the full unfiltered rows (so users can see what's there)
+    expect(screen.getByTestId('pulls-filter-merged')).toHaveTextContent('1');
+    expect(screen.getByTestId('pulls-filter-closed')).toHaveTextContent('1');
+  });
+
+  it('PRS-013: clicking a filter chip toggles row visibility', async () => {
+    const rows: PullDto[] = [
+      makePull(70, { state: 'open' }),
+      makePull(71, { state: 'merged' }),
+    ];
+    const stub = installApi({ pullsResult: { ok: true, data: { rows } } });
+    await renderAndOpenPrsTab(stub);
+    expect(screen.queryByTestId('pull-row-71')).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('pulls-filter-merged'));
+    });
+    expect(await screen.findByTestId('pull-row-71')).toBeInTheDocument();
+    // Toggling open OFF removes the open row
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('pulls-filter-open'));
+    });
+    expect(screen.queryByTestId('pull-row-70')).not.toBeInTheDocument();
+    expect(screen.getByTestId('pull-row-71')).toBeInTheDocument();
+  });
+
+  it('PRS-014: filter-empty state shows when rows exist but none match the filter', async () => {
+    const rows: PullDto[] = [
+      makePull(80, { state: 'merged' }),
+      makePull(81, { state: 'closed' }),
+    ];
+    const stub = installApi({ pullsResult: { ok: true, data: { rows } } });
+    await renderAndOpenPrsTab(stub);
+    // Default filter hides both merged + closed — distinct empty state, not
+    // the "no PRs at all" empty state.
+    expect(await screen.findByTestId('pulls-filter-empty')).toBeInTheDocument();
+    expect(screen.queryByTestId('tab-empty-prs')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pulls-table')).not.toBeInTheDocument();
+  });
+
+  it('PRS-015: page-level Refresh label follows the active tab; disabled on Settings', async () => {
+    const stub = installApi({ pullsResult: { ok: true, data: { rows: [makePull(1)] } } });
+    render(<ProjectDetail projectId="p-1" onBack={noop} onNavigateToConnections={noop} />);
+    await waitFor(() => {
+      expect(stub.projectsGet).toHaveBeenCalled();
+    });
+    // Default tab is Tickets.
+    const refresh = await screen.findByTestId('refresh-button');
+    expect(refresh).toHaveTextContent(/Refresh tickets/i);
+    expect(refresh).not.toBeDisabled();
+    // Switch to PRs.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('tab', { name: /Pull Requests/i }));
+    });
+    expect(screen.getByTestId('refresh-button')).toHaveTextContent(/Refresh PRs/i);
+    expect(screen.getByTestId('refresh-button')).not.toBeDisabled();
+    // Switch to Settings → disabled.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('tab', { name: /Settings/i }));
+    });
+    expect(screen.getByTestId('refresh-button')).toBeDisabled();
+  });
+
+  it('PRS-016: clicking page-level Refresh while on PRs tab swaps stale rows for skeleton', async () => {
+    // Hold the second fetch's resolution so we can observe the in-flight state.
+    let resolveSecond: (r: IpcResult<PullsListResponse>) => void = () => {};
+    const stub = installApi({
+      pullsResult: { ok: true, data: { rows: [makePull(42, { title: 'Stale PR' })] } },
+    });
+    // After first call, subsequent calls return the pending promise.
+    (stub.pullsList as Mock).mockImplementationOnce(() =>
+      Promise.resolve({ ok: true, data: { rows: [makePull(42, { title: 'Stale PR' })] } }),
+    );
+    (stub.pullsList as Mock).mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          resolveSecond = res;
+        }),
+    );
+    await renderAndOpenPrsTab(stub);
+    expect(await screen.findByText('Stale PR')).toBeInTheDocument();
+    // Trigger the refresh; the second pulls.list call hangs.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('refresh-button'));
+    });
+    // Stale row gone; skeleton rendering (table still mounted via testid).
+    await waitFor(() => {
+      expect(screen.queryByText('Stale PR')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('pulls-table')).toBeInTheDocument();
+    // Resolve the in-flight fetch.
+    await act(async () => {
+      resolveSecond({ ok: true, data: { rows: [makePull(43, { title: 'Fresh PR' })] } });
+    });
+    expect(await screen.findByText('Fresh PR')).toBeInTheDocument();
   });
 
   it('PRS-011: non-GitHub repos show explanatory empty state, not the error banner', async () => {

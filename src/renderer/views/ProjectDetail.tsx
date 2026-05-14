@@ -551,6 +551,27 @@ export function ProjectDetail({
    * stay cheap and only Refresh re-fetches.
    */
   const projectPulls = useProjectPulls(projectId);
+  /**
+   * PRs tab status filter (#GH-67 follow-up). Default hides `merged` /
+   * `closed` so the tab opens to "active work" — the user's primary signal
+   * is open + draft PRs that still need their attention. Toggling a chip
+   * is purely client-side: the GraphQL fetch already returns all states,
+   * so flipping the filter is instant with no extra request.
+   */
+  const [pullStateFilter, setPullStateFilter] = useState<Set<PullDto['state']>>(
+    () => new Set<PullDto['state']>(['open', 'draft']),
+  );
+  const togglePullStateFilter = useCallback((key: PullDto['state']): void => {
+    setPullStateFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }, []);
   const activeRun = useActiveRun(projectId);
   const [autoMode, setAutoMode] = useAutoMode(projectId);
 
@@ -856,6 +877,42 @@ export function ProjectDetail({
     { id: 'settings', label: 'Settings' },
   ];
 
+  /**
+   * Page-level Refresh dispatch (#GH-67 follow-up). The single top-right
+   * Refresh button delegates to the active tab's data hook so its scope
+   * is always predictable — "refresh refreshes what I'm looking at"
+   * rather than the pre-refactor footgun where the page-level button
+   * silently refreshed tickets even from the PRs tab.
+   *
+   * `refresh: null` disables the button. Settings has no list to refresh
+   * (the form's state IS the data; Save is the commit), and Runs lacks
+   * a hook-level refresh() today — the runs `useEffect` re-fetches on
+   * every tab visit so users have a built-in workaround. Adding a real
+   * Runs refresh is filed as a follow-up.
+   */
+  const tabRefreshAction: Record<
+    TabId,
+    { label: string; refresh: (() => void) | null; refreshing: boolean }
+  > = {
+    tickets: {
+      label: 'Refresh tickets',
+      refresh: () => {
+        void pages.refresh();
+      },
+      refreshing: pages.refreshing,
+    },
+    prs: {
+      label: 'Refresh PRs',
+      refresh: () => {
+        void projectPulls.refresh();
+      },
+      refreshing: projectPulls.refreshing,
+    },
+    runs: { label: 'Refresh runs', refresh: null, refreshing: false },
+    settings: { label: 'Refresh', refresh: null, refreshing: false },
+  };
+  const activeRefresh = tabRefreshAction[tab];
+
   const ticketColumns: DataTableColumn<TicketDto>[] = [
     {
       // Run is the leftmost column. Multi-select used to live here as
@@ -1087,7 +1144,24 @@ export function ProjectDetail({
   const runsBody = ((): JSX.Element => {
     const isReloading = runHistory.loading;
     const hasRuns = runHistory.runs.length > 0;
-    if (!isReloading && runHistory.error !== null && !hasRuns) {
+    // Show skeleton during any in-flight fetch (initial mount OR tab-flip
+    // re-fetch from a previously-loaded state) so the user doesn't stare
+    // at stale rows while waiting for fresh data.
+    if (isReloading) {
+      return (
+        <DataTable
+          columns={runColumns}
+          rows={[]}
+          rowKey={(row) => row.id}
+          rowTestId={(row) => `run-row-${row.id}`}
+          onRowClick={(row) => onOpenExecution?.(row.id)}
+          fillHeight
+          loadingRows={5}
+          data-testid="runs-tab-table"
+        />
+      );
+    }
+    if (runHistory.error !== null && !hasRuns) {
       return (
         <EmptyState
           icon={<IconRuns size={26} />}
@@ -1097,7 +1171,7 @@ export function ProjectDetail({
         />
       );
     }
-    if (!isReloading && !hasRuns) {
+    if (!hasRuns) {
       return (
         <EmptyState
           icon={<IconRuns size={26} />}
@@ -1115,7 +1189,6 @@ export function ProjectDetail({
         rowTestId={(row) => `run-row-${row.id}`}
         onRowClick={(row) => onOpenExecution?.(row.id)}
         fillHeight
-        loadingRows={isReloading && !hasRuns ? 5 : undefined}
         data-testid="runs-tab-table"
       />
     );
@@ -1233,32 +1306,51 @@ export function ProjectDetail({
     const isRateLimited = projectPulls.errorCode === 'RATE_LIMITED';
     const isOtherError = projectPulls.error !== null && !isAuthError && !isRateLimited;
 
+    const stateCounts: Record<PullDto['state'], number> = {
+      open: 0,
+      draft: 0,
+      merged: 0,
+      closed: 0,
+    };
+    for (const row of projectPulls.rows) {
+      stateCounts[row.state] += 1;
+    }
+    const filteredRows = projectPulls.rows.filter((r) => pullStateFilter.has(r.state));
+    const hasFilteredRows = filteredRows.length > 0;
+    const filterChipOrder: PullDto['state'][] = ['open', 'draft', 'merged', 'closed'];
+
     return (
       <div className={styles.ticketsTableWrap}>
-        <div className={styles.ticketsSearchRow}>
+        <div className={styles.pullsHeaderRow}>
           <span className={styles.pullsHeading}>
-            {hasRows
-              ? `${projectPulls.rows.length} ${projectPulls.rows.length === 1 ? 'pull request' : 'pull requests'}`
+            {hasFilteredRows
+              ? `${filteredRows.length} ${filteredRows.length === 1 ? 'pull request' : 'pull requests'}`
               : 'Pull requests'}
           </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            leadingIcon={
-              <span
-                className={`${styles.refreshIcon} ${projectPulls.refreshing ? styles.refreshSpinning : ''}`}
-              >
-                <IconRefresh size={14} />
-              </span>
-            }
-            onClick={() => {
-              void projectPulls.refresh();
-            }}
-            disabled={projectPulls.refreshing || projectPulls.loading}
-            data-testid="pulls-refresh-button"
+          <div
+            className={styles.pullsFilters}
+            role="group"
+            aria-label="Filter pull requests by state"
+            data-testid="pulls-filter-group"
           >
-            Refresh
-          </Button>
+            {filterChipOrder.map((key) => {
+              const active = pullStateFilter.has(key);
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={`${styles.pullsFilterChip} ${active ? styles.pullsFilterChipActive : ''}`}
+                  aria-pressed={active}
+                  data-active={active}
+                  data-testid={`pulls-filter-${key}`}
+                  onClick={() => togglePullStateFilter(key)}
+                >
+                  <span className={styles.pullsFilterLabel}>{pullStateLabel(key)}</span>
+                  <span className={styles.pullsFilterCount}>{stateCounts[key]}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {isAuthError && (
@@ -1317,22 +1409,43 @@ export function ProjectDetail({
           </div>
         )}
 
-        {!isReloading && !hasRows && projectPulls.error === null ? (
-          <EmptyState
-            icon={<IconPullRequest size={26} />}
-            title="No open pull requests"
-            description="When a PR is opened against this project's repo, it will appear here. Use Refresh to re-check."
-            data-testid="tab-empty-prs"
-          />
-        ) : (
+        {isReloading || projectPulls.refreshing ? (
+          // Skeleton path — first mount OR manual refresh. The empty-state
+          // branches below intentionally don't fire during refresh: even
+          // when stale rows would have been empty, the user just pressed
+          // Refresh and deserves a visible "fetching" signal.
           <DataTable
             columns={pullColumns}
-            rows={projectPulls.rows}
+            rows={[]}
             rowKey={(row) => String(row.number)}
             rowTestId={(row) => `pull-row-${row.number}`}
             onRowClick={(row) => openPullExternal(row.url)}
             fillHeight
-            loadingRows={isReloading && !hasRows ? 5 : undefined}
+            loadingRows={5}
+            data-testid="pulls-table"
+          />
+        ) : !hasRows && projectPulls.error === null ? (
+          <EmptyState
+            icon={<IconPullRequest size={26} />}
+            title="No pull requests"
+            description="When a PR is opened against this project's repo, it will appear here. Use Refresh to re-check."
+            data-testid="tab-empty-prs"
+          />
+        ) : hasRows && !hasFilteredRows ? (
+          <EmptyState
+            icon={<IconPullRequest size={26} />}
+            title="No pull requests match the current filter"
+            description="Toggle a state chip above to widen the filter. Merged / Closed are hidden by default."
+            data-testid="pulls-filter-empty"
+          />
+        ) : (
+          <DataTable
+            columns={pullColumns}
+            rows={filteredRows}
+            rowKey={(row) => String(row.number)}
+            rowTestId={(row) => `pull-row-${row.number}`}
+            onRowClick={(row) => openPullExternal(row.url)}
+            fillHeight
             data-testid="pulls-table"
           />
         )}
@@ -1359,9 +1472,13 @@ export function ProjectDetail({
      * Empty-state branch: only when we've actually finished loading and
      * there are zero rows. During a reload we keep the table mounted
      * (sticky headers + skeleton rows) so the column context doesn't
-     * vanish on every sort flip.
+     * vanish on every sort flip. `pages.refreshing` is also excluded
+     * because `useTicketPages.refresh()` calls `setRows([])` synchronously
+     * — without this guard, the empty-state branch would short-circuit
+     * the skeleton path below the moment the user clicks Refresh.
      */
-    const showEmpty = !isReloading && !hasRows;
+    const isRefetching = pages.refreshing;
+    const showEmpty = !isReloading && !hasRows && !isRefetching;
     const emptyContent = showEmpty
       ? committedSearch.trim() !== ''
         ? (
@@ -1401,6 +1518,28 @@ export function ProjectDetail({
 
     return (
       <div className={styles.ticketsTableWrap}>
+        {pages.error && (
+          <div
+            className={styles.banner}
+            role="alert"
+            data-testid="tickets-error-banner"
+          >
+            <span>
+              <strong>Couldn’t refresh tickets.</strong> {pages.error}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              leadingIcon={<IconClose size={12} />}
+              onClick={() => {
+                void pages.refresh();
+              }}
+              data-testid="tickets-error-retry"
+            >
+              Try again
+            </Button>
+          </div>
+        )}
         <div className={styles.ticketsSearchRow}>
           <Input
             value={ticketSearchInput}
@@ -1420,17 +1559,21 @@ export function ProjectDetail({
         ) : (
           <DataTable
             columns={ticketColumns}
-            rows={pages.rows}
+            // During a manual refresh (page-level Refresh button), swap
+            // stale rows for skeleton so the empty-then-populated flash
+            // doesn't look broken. `loadingRows={8}` already covered the
+            // first-mount case; this extends the same treatment to refresh.
+            rows={isRefetching ? [] : pages.rows}
             rowKey={(row) => row.key}
             rowTestId={(row) => `ticket-row-${row.key}`}
             fillHeight
             sort={effectiveSort}
             onSortChange={(next) => setSortState(next)}
             footer={tableFooter}
-            // 8 placeholder rows when we're actively fetching the first
-            // page (mount, sort flip, or refresh) — keeps the sticky
-            // headers in place during the round-trip.
-            loadingRows={isReloading && !hasRows ? 8 : undefined}
+            // 8 placeholder rows when we're actively fetching (first mount,
+            // sort flip, or manual refresh) — keeps the sticky header
+            // visible and the table-shaped silhouette in place.
+            loadingRows={(isReloading && !hasRows) || isRefetching ? 8 : undefined}
             data-testid="tickets-table"
           />
         )}
@@ -1502,45 +1645,23 @@ export function ProjectDetail({
               size="sm"
               leadingIcon={
                 <span
-                  className={`${styles.refreshIcon} ${pages.refreshing ? styles.refreshSpinning : ''}`}
+                  className={`${styles.refreshIcon} ${activeRefresh.refreshing ? styles.refreshSpinning : ''}`}
                 >
                   <IconRefresh size={14} />
                 </span>
               }
               onClick={() => {
-                void pages.refresh();
+                activeRefresh.refresh?.();
               }}
-              disabled={pages.refreshing}
+              disabled={activeRefresh.refresh === null || activeRefresh.refreshing}
+              title={activeRefresh.label}
               data-testid="refresh-button"
             >
-              Refresh
+              {activeRefresh.label}
             </Button>
           </div>
         </div>
       </header>
-
-      {pages.error && (
-        <div
-          className={styles.banner}
-          role="alert"
-          data-testid="tickets-error-banner"
-        >
-          <span>
-            <strong>Couldn’t refresh tickets.</strong> {pages.error}
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            leadingIcon={<IconClose size={12} />}
-            onClick={() => {
-              void pages.refresh();
-            }}
-            data-testid="tickets-error-retry"
-          >
-            Try again
-          </Button>
-        </div>
-      )}
 
       {runBanner && (
         <div
