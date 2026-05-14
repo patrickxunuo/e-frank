@@ -19,7 +19,7 @@
 }
 
 .lockup {
-  height: 24px;
+  height: 32px;
   width: auto;
   display: block;
   /* Wordmark uses `fill="currentColor"`; routing color through

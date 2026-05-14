@@ -3,6 +3,12 @@
   flex-direction: column;
   gap: var(--space-6);
   padding-block: var(--space-4);
+  /* The parent `.tabPanel` is `overflow: hidden` (its children own their own
+   * scroll, per the Tickets-tab table-card pattern). The settings tab has no
+   * inner card to scroll, so the tab itself is the scroller. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .formWrap {
