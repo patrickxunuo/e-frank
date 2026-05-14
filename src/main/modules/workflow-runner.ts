@@ -232,6 +232,35 @@ class CancelledError extends Error {
   }
 }
 
+/**
+ * Thrown by `runClaudeWithApprovals` when the Claude CLI exits cleanly while
+ * a `dispatchApproval` coroutine is still awaiting user input (#GH-73).
+ *
+ * Background: skills run under `claude -p` (print / single-turn) which
+ * exits after one turn — there is no inter-turn stdin read available, so
+ * any skill that emits `<<<EF_APPROVAL_REQUEST>>>` and then "reads stdin"
+ * per the SKILL.md contract is making a request the spawn-mode cannot
+ * honour. Without this guard the pipeline would march to `done` with no
+ * code changes (the skill never got past the approval gate) while the
+ * dispatchApproval coroutine sat forever on an orphaned `await`.
+ *
+ * The proper fix is to re-architect the approval flow so it doesn't
+ * depend on Claude reading stdin mid-turn — filed as a follow-up to
+ * GH-73. This error makes the failure mode loud + correct in the
+ * meantime: the run terminates `failed` with a clear message instead
+ * of the silent `done` users were seeing.
+ */
+class ApprovalAbandonedError extends Error {
+  constructor() {
+    super(
+      'Claude exited while still awaiting a response to an EF_APPROVAL_REQUEST. ' +
+        "Skills cannot block on stdin under e-frank's print-mode (`claude -p`) spawn — " +
+        'see GH-73 follow-up for the approval-flow re-architecture.',
+    );
+    this.name = 'ApprovalAbandonedError';
+  }
+}
+
 /** Mutable per-run runtime state. Lives on the runner instance, not in `Run`. */
 interface ActiveRunCtx {
   run: Run;
@@ -777,6 +806,20 @@ export class WorkflowRunner extends EventEmitter {
           `claude exited with reason="${exitEvent.reason}" exitCode=${String(exitEvent.exitCode)}`,
         );
       }
+      // GH-73: Claude exited cleanly but a dispatchApproval coroutine is still
+      // awaiting user input. Under `-p` mode the CLI can't read stdin between
+      // turns, so the skill's "wait for approve\n" never fires; without this
+      // guard the run would march to `done` with no code changes while the
+      // dispatchApproval coroutine sat on an orphaned await. Reject the
+      // deferred so dispatchApproval's catch can clean up (idempotently), then
+      // throw so the pipeline body catch routes the run to `failed`.
+      if (ctx.approvalDeferred !== null) {
+        const deferred = ctx.approvalDeferred;
+        ctx.approvalDeferred = null;
+        const err = new ApprovalAbandonedError();
+        deferred.reject(err);
+        throw err;
+      }
     } catch (err) {
       if (ctx.detachOutputListener !== null) {
         ctx.detachOutputListener();
@@ -1076,25 +1119,40 @@ export class WorkflowRunner extends EventEmitter {
     try {
       response = await approvalPromise;
     } catch (err) {
-      // Cancellation reaches here via `cancel()` rejecting the deferred.
-      // Cleanup state, then re-throw so the running-state body propagates
-      // cancellation.
+      // Two rejection paths land here:
+      //   1. `cancel()` rejects the deferred while the run is paused on
+      //      approval → state is still `awaitingApproval` → we clean up
+      //      and re-throw so the running-state body sees the cancellation.
+      //   2. GH-73: `runClaudeWithApprovals` rejects the deferred because
+      //      Claude exited cleanly while we were still awaiting input. By
+      //      the time this catch runs as a microtask, the pipeline catch
+      //      has already moved the run to `failed`. Mutating state here
+      //      would clobber that.
+      //
+      // Mitigation: only run the state cleanup if we're still in
+      // `awaitingApproval`. If the pipeline already advanced, the catch
+      // becomes a no-op — we just re-throw so the orphan path falls out.
       cancelledFromCallback = true;
       const lastIdx = ctx.run.steps.length - 1;
       const lastStep = ctx.run.steps[lastIdx];
-      if (lastStep !== undefined && lastStep.state === 'awaitingApproval') {
+      const stillAwaiting =
+        ctx.run.state === 'awaitingApproval' &&
+        lastStep !== undefined &&
+        lastStep.state === 'awaitingApproval' &&
+        lastStep.status === 'running';
+      if (stillAwaiting) {
         lastStep.status = 'done';
         lastStep.finishedAt = this.clock.now();
+        ctx.run.pendingApproval = null;
+        // Restore the phase we were in before the pause; default to
+        // 'running' for the legacy single-phase case.
+        ctx.run.state = ctx.priorPhase ?? 'running';
+        ctx.priorPhase = null;
+        ctx.approvalDeferred = null;
+        this.emitStateChanged(ctx);
+        this.emit('current-changed', { run: deepCloneRun(ctx.run) });
+        await this.persist(ctx);
       }
-      ctx.run.pendingApproval = null;
-      // Restore the phase we were in before the pause; default to
-      // 'running' for the legacy single-phase case.
-      ctx.run.state = ctx.priorPhase ?? 'running';
-      ctx.priorPhase = null;
-      ctx.approvalDeferred = null;
-      this.emitStateChanged(ctx);
-      this.emit('current-changed', { run: deepCloneRun(ctx.run) });
-      await this.persist(ctx);
       throw err instanceof Error ? err : new Error(String(err));
     }
     void cancelledFromCallback;
