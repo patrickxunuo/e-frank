@@ -256,14 +256,20 @@ describe('ClaudeProcessManager', () => {
       expect(spawner.lastSpawned).toBeNull();
     });
 
-    it('CPM-007: single active run — second run while active is rejected', () => {
+    it('CPM-007: concurrent runs allowed — second run while another is active succeeds (#GH-79)', () => {
       const first = manager.run({ ticketKey: VALID_TICKET, cwd: VALID_CWD });
       expect(first.ok).toBe(true);
 
+      // Pre-#GH-79: second run was rejected with ALREADY_RUNNING.
+      // Post-#GH-79: the app-wide single-active lock is dropped; the manager
+      // can spawn multiple Claude subprocesses (each independent — separate
+      // child process, separate stdio).
       const second = manager.run({ ticketKey: 'XYZ-9', cwd: VALID_CWD });
-      expect(second.ok).toBe(false);
-      if (second.ok) return;
-      expect(second.error.code).toBe('ALREADY_RUNNING');
+      expect(second.ok).toBe(true);
+      if (!second.ok) return;
+      // Both runs return distinct runIds.
+      if (!first.ok) return;
+      expect(second.data.runId).not.toBe(first.data.runId);
     });
 
     it('CPM-008: run after previous exited is allowed', () => {

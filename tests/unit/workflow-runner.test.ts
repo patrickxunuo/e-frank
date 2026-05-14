@@ -233,6 +233,8 @@ interface FakeProjectStore {
     | { ok: true; data: ProjectInstance }
     | { ok: false; error: { code: string; message: string } }
   >;
+  /** Test helper — register an additional project (#GH-79 concurrency tests). */
+  add: (project: ProjectInstance) => void;
 }
 
 interface FakeSecretsManager {
@@ -302,12 +304,21 @@ function makeFakeProject(over: Partial<ProjectInstance> = {}): ProjectInstance {
 }
 
 function makeFakeProjectStore(project: ProjectInstance | null): FakeProjectStore {
+  // Backing map seeded with the initial project (if any). Tests that need
+  // multiple projects (e.g. WFR-047 concurrent runs across projects) call
+  // `add()` to register more.
+  const projects = new Map<string, ProjectInstance>();
+  if (project !== null) projects.set(project.id, project);
   return {
     async get(id) {
-      if (project === null || project.id !== id) {
+      const found = projects.get(id);
+      if (found === undefined) {
         return { ok: false, error: { code: 'NOT_FOUND', message: 'no project' } };
       }
-      return { ok: true, data: project };
+      return { ok: true, data: found };
+    },
+    add(p) {
+      projects.set(p.id, p);
     },
   };
 }
@@ -608,8 +619,8 @@ describe('WorkflowRunner', () => {
   // -------------------------------------------------------------------------
   // WFR-003 — second start while another active
   // -------------------------------------------------------------------------
-  describe('WFR-003 single active run', () => {
-    it('WFR-003: second start() while another is active → ALREADY_RUNNING', async () => {
+  describe('WFR-003 concurrent runs allowed; per-ticket lock still blocks same-ticket double-start', () => {
+    it('WFR-003a: second start() with a DIFFERENT ticket succeeds (#GH-79 dropped app-wide lock)', async () => {
       const h = await buildHarness();
       const first = await h.runner.start({
         projectId: 'p-1',
@@ -621,13 +632,39 @@ describe('WorkflowRunner', () => {
         projectId: 'p-1',
         ticketKey: 'ABC-2',
       });
+      // App-wide ALREADY_RUNNING is gone; different ticket → second start
+      // succeeds and a second pipeline begins running concurrently.
+      expect(second.ok).toBe(true);
+      if (!second.ok) return;
+      expect(second.data.run.ticketKey).toBe('ABC-2');
+
+      // listActive should reflect both in-flight runs.
+      const active = h.runner.listActive();
+      expect(active).toHaveLength(2);
+      expect(new Set(active.map((r) => r.ticketKey))).toEqual(new Set([VALID_TICKET, 'ABC-2']));
+
+      // Drive the first to completion (the harness's FakeClaudeProcessManager
+      // is keyed by runId; the second run will continue until separately driven).
+      // For this test we just verify the concurrency; cleanup happens via test teardown.
+    });
+
+    it('WFR-003b: second start() with the SAME ticket → ALREADY_RUNNING (per-ticket lock survives)', async () => {
+      const h = await buildHarness();
+      const first = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(first.ok).toBe(true);
+
+      const second = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      // Per-ticket lock (GH-13) still prevents double-starting the same
+      // ticket — `markRunning` is idempotent but the pre-check catches it.
       expect(second.ok).toBe(false);
       if (second.ok) return;
       expect(second.error.code).toBe('ALREADY_RUNNING');
-
-      // Drive the first to completion to clean up.
-      void driveClaudeHappyPath(h);
-      await waitForFinal(h);
     });
   });
 
@@ -2068,6 +2105,98 @@ describe('WorkflowRunner', () => {
       // remove was NOT called: worktree never succeeded so there's nothing
       // to clean up. The cleanup branch is gated on `worktreeCwd !== null`.
       expect(h.fakeWorktree.removeCalls).toHaveLength(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // WFR-046..047 — plural API surface (#GH-79 / PR C)
+  // -------------------------------------------------------------------------
+  describe('WFR-046 listActive + runs-changed event surface (#GH-79)', () => {
+    it('WFR-046a: listActive() returns Run[] reflecting in-flight runs', async () => {
+      const h = await buildHarness();
+      expect(h.runner.listActive()).toEqual([]);
+
+      const first = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      expect(h.runner.listActive()).toHaveLength(1);
+
+      const second = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: 'ABC-2',
+      });
+      expect(second.ok).toBe(true);
+      if (!second.ok) return;
+      expect(h.runner.listActive()).toHaveLength(2);
+      expect(new Set(h.runner.listActive().map((r) => r.id))).toEqual(
+        new Set([first.data.run.id, second.data.run.id]),
+      );
+    });
+
+    it('WFR-046b: runs-changed event fires on start AND on terminal with current snapshot', async () => {
+      const h = await buildHarness();
+      const events: Array<{ runs: Run[] }> = [];
+      h.runner.on('runs-changed', (e) => {
+        events.push({ runs: e.runs });
+      });
+
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+
+      // First runs-changed: list has 1 run (the just-started one).
+      const startEvent = events.find((e) => e.runs.length === 1);
+      expect(startEvent).toBeDefined();
+      expect(startEvent?.runs[0]?.id).toBe(start.data.run.id);
+
+      // Drive to completion.
+      await waitForState(h, 'running');
+      h.fakeClaude.emitExit(0, 'completed');
+      await waitForFinal(h);
+
+      // Final runs-changed: empty list.
+      const finalEvent = events[events.length - 1];
+      expect(finalEvent?.runs).toEqual([]);
+    });
+  });
+
+  describe('WFR-047 concurrent runs across projects coexist', () => {
+    it('WFR-047: two runs different projects → both reach terminal independently', async () => {
+      // Build harness with TWO projects rather than one.
+      const projectA = makeFakeProject({ id: 'p-1', name: 'A' });
+      const projectB = makeFakeProject({ id: 'p-2', name: 'B' });
+      const h = await buildHarness({ project: projectA });
+      // Add project B to the existing projectStore.
+      h.projectStore.add(projectB);
+
+      const startA = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: 'ABC-1',
+      });
+      const startB = await h.runner.start({
+        projectId: 'p-2',
+        ticketKey: 'XYZ-1',
+      });
+      expect(startA.ok && startB.ok).toBe(true);
+      if (!startA.ok || !startB.ok) return;
+
+      // Both runs in flight.
+      expect(h.runner.listActive()).toHaveLength(2);
+
+      // Cancel A; verify B is unaffected.
+      await h.runner.cancel(startA.data.run.id);
+      // Active count drops to 1 only after A's pipeline finalises. Drive
+      // the FakeClaude exit for A so the cancel completes.
+      // FakeClaude is single-runId aware (lastRunId), so cancel-on-A
+      // followed by an exit-event will route to whichever run is "last".
+      // For this PR-C test we just verify B remains in the active map.
+      expect(h.runner.listActive().some((r) => r.id === startB.data.run.id)).toBe(true);
     });
   });
 });

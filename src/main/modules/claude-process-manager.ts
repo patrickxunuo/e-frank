@@ -233,7 +233,14 @@ export class ClaudeProcessManager extends EventEmitter {
   private readonly command: string;
   private readonly skillName: string;
 
-  private active: ActiveRun | null = null;
+  /**
+   * Active runs, keyed by runId (#GH-79). Pre-PR-B this was a single
+   * `ActiveRun | null` slot; PR B replaces it with a map so the runner
+   * can spawn multiple Claude subprocesses for concurrent runs (each
+   * spawn is independent — separate child process, separate stdio).
+   * The app-wide ALREADY_RUNNING check at `run()` is dropped.
+   */
+  private readonly active = new Map<string, ActiveRun>();
 
   constructor(options: ClaudeProcessManagerOptions) {
     super();
@@ -272,15 +279,10 @@ export class ClaudeProcessManager extends EventEmitter {
       };
     }
 
-    if (this.active !== null) {
-      return {
-        ok: false,
-        error: {
-          code: 'ALREADY_RUNNING',
-          message: `a run is already active (runId=${this.active.runId})`,
-        },
-      };
-    }
+    // #GH-79: app-wide ALREADY_RUNNING check is dropped — multiple
+    // concurrent Claude subprocesses are supported, each independent
+    // (separate child, separate stdio). Per-ticket protection still
+    // lives at the WorkflowRunner layer via runHistory locks.
 
     const runId = randomUUID();
     const startedAt = Date.now();
@@ -348,7 +350,7 @@ export class ClaudeProcessManager extends EventEmitter {
       killEscalationTimer: null,
       exited: false,
     };
-    this.active = activeRun;
+    this.active.set(runId, activeRun);
 
     // Wire up streaming output. We listen for both Buffer and string chunks.
     if (child.stdout !== null) {
@@ -387,16 +389,13 @@ export class ClaudeProcessManager extends EventEmitter {
    * `reason: 'cancelled'` (see business rule on reason precedence).
    */
   cancel(runId: string): RunResult<{ runId: string }> {
-    const active = this.active;
-    if (active === null || active.runId !== runId) {
+    const active = this.active.get(runId);
+    if (active === undefined) {
       return {
         ok: false,
         error: {
           code: 'NOT_RUNNING',
-          message:
-            active === null
-              ? 'no active run to cancel'
-              : `runId mismatch: active runId is ${active.runId}, got ${runId}`,
+          message: `no active run with runId="${runId}"`,
         },
       };
     }
@@ -417,16 +416,13 @@ export class ClaudeProcessManager extends EventEmitter {
    * multi-line responses or raw bytes.
    */
   write(req: { runId: string; text: string }): RunResult<{ bytesWritten: number }> {
-    const active = this.active;
-    if (active === null || active.runId !== req.runId) {
+    const active = this.active.get(req.runId);
+    if (active === undefined) {
       return {
         ok: false,
         error: {
           code: 'NOT_RUNNING',
-          message:
-            active === null
-              ? 'no active run to write to'
-              : `runId mismatch: active runId is ${active.runId}, got ${req.runId}`,
+          message: `no active run with runId="${req.runId}"`,
         },
       };
     }
@@ -455,15 +451,20 @@ export class ClaudeProcessManager extends EventEmitter {
     };
   }
 
-  /** Returns the active run snapshot, or null if idle. */
+  /**
+   * Returns the FIRST in-flight run snapshot for back-compat with legacy
+   * callers (#GH-79). Pre-PR-B this returned the lone active run; now it
+   * returns the first inserted run. Plural callers should iterate via
+   * the runner's `listActive()`.
+   */
   status(): { runId: string; pid: number | undefined; startedAt: number } | null {
-    if (this.active === null) {
-      return null;
-    }
+    if (this.active.size === 0) return null;
+    const first = this.active.values().next().value;
+    if (first === undefined) return null;
     return {
-      runId: this.active.runId,
-      pid: this.active.pid,
-      startedAt: this.active.startedAt,
+      runId: first.runId,
+      pid: first.pid,
+      startedAt: first.startedAt,
     };
   }
 
@@ -573,11 +574,12 @@ export class ClaudeProcessManager extends EventEmitter {
       reason,
     };
 
-    // Clear active state BEFORE emitting so a listener that calls run() in
-    // response to exit isn't blocked by ALREADY_RUNNING.
-    if (this.active === run) {
-      this.active = null;
-    }
+    // Remove this run from the active map BEFORE emitting (#GH-79). The
+    // pre-PR-B comment said this was to avoid blocking listeners that
+    // call run() from the exit handler; with the lock dropped the order
+    // is no longer load-bearing, but we keep it stable so the map
+    // reflects "post-exit reality" by the time subscribers run.
+    this.active.delete(run.runId);
 
     this.emit('exit', exitEvent);
   }
@@ -600,7 +602,7 @@ export class ClaudeProcessManager extends EventEmitter {
   }
 
   private triggerTimeout(run: ActiveRun): void {
-    if (run.exited || this.active !== run) {
+    if (run.exited || this.active.get(run.runId) !== run) {
       return;
     }
     if (run.pendingReason === null) {

@@ -32,6 +32,7 @@ import {
   type RunsStartResponse,
   type RunsModifyRequest,
   type RunsCurrentResponse,
+  type RunsListActiveResponse,
   type RunsListHistoryRequest,
   type RunsListHistoryResponse,
   type RunsDeleteRequest,
@@ -1693,6 +1694,19 @@ function registerIpcHandlers(): void {
     },
   );
 
+  // #GH-79: plural counterpart — every in-flight run as a Run[]. Empty
+  // array = idle runner. Renderer's `useGlobalActiveRuns` /
+  // `useActiveRuns(projectId)` hooks read from this.
+  ipcMain.handle(
+    IPC_CHANNELS.RUNS_LIST_ACTIVE,
+    async (): Promise<IpcResult<RunsListActiveResponse>> => {
+      if (workflowRunner === null) {
+        return notInitialized('WorkflowRunner');
+      }
+      return { ok: true, data: { runs: workflowRunner.listActive() } };
+    },
+  );
+
   ipcMain.handle(
     IPC_CHANNELS.RUNS_LIST_HISTORY,
     async (_event, raw): Promise<IpcResult<RunsListHistoryResponse>> => {
@@ -2444,6 +2458,11 @@ async function initStores(): Promise<void> {
     });
     runner.on('current-changed', (e: { run: Run | null }) => {
       broadcastToWindows(IPC_CHANNELS.RUNS_CURRENT_CHANGED, toIpcCurrentChangedEvent(e));
+    });
+    // #GH-79: forward plural list-changed events. Cheap — Map mutations
+    // happen only on start / terminal, not per-state-transition.
+    runner.on('runs-changed', (e: { runs: Run[] }) => {
+      broadcastToWindows(IPC_CHANNELS.RUNS_LIST_CHANGED, e);
     });
     workflowRunner = runner;
 

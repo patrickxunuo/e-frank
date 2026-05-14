@@ -344,7 +344,16 @@ function deriveBranchName(
 export class WorkflowRunner extends EventEmitter {
   private readonly options: WorkflowRunnerOptions;
   private readonly clock: { now: () => number };
-  private active: ActiveRunCtx | null = null;
+  /**
+   * Active runs, keyed by runId (#GH-79 / #GH-72 PR B). Pre-PR-B this was a
+   * single `ActiveRunCtx | null` slot; PR B replaces it with a map so the
+   * runner supports multiple concurrent runs (each with its own worktree
+   * from PR A). The app-wide `ALREADY_RUNNING` check is dropped — the
+   * per-ticket cross-session lock from #GH-13 still prevents starting the
+   * same ticket twice. Insertion order matters: `current()` returns the
+   * FIRST inserted run for back-compat with legacy singular callers.
+   */
+  private readonly active = new Map<string, ActiveRunCtx>();
 
   constructor(options: WorkflowRunnerOptions) {
     super();
@@ -355,20 +364,32 @@ export class WorkflowRunner extends EventEmitter {
   // -- Public API ----------------------------------------------------------
 
   current(): Run | null {
-    if (this.active === null) return null;
-    return deepCloneRun(this.active.run);
+    if (this.active.size === 0) return null;
+    // Return the FIRST inserted run for back-compat with legacy singular
+    // callers (which assumed there was ever only one). Plural callers
+    // should use `listActive()` instead.
+    const first = this.active.values().next().value;
+    if (first === undefined) return null;
+    return deepCloneRun(first.run);
+  }
+
+  /**
+   * Returns every in-flight run as a Run[] (#GH-79). Plural counterpart
+   * to `current()`. Used by the renderer's `useGlobalActiveRuns` /
+   * `useActiveRuns(projectId)` hooks and the new `runs:list-active` IPC.
+   */
+  listActive(): Run[] {
+    const out: Run[] = [];
+    for (const ctx of this.active.values()) {
+      out.push(deepCloneRun(ctx.run));
+    }
+    return out;
   }
 
   async start(req: StartRunRequest): Promise<RunnerResult<{ run: Run }>> {
-    if (this.active !== null) {
-      return {
-        ok: false,
-        error: {
-          code: 'ALREADY_RUNNING',
-          message: `a run is already active (runId=${this.active.run.id})`,
-        },
-      };
-    }
+    // #GH-79: app-wide ALREADY_RUNNING check is dropped — concurrent runs
+    // are supported. The per-ticket cross-session lock below (GH-13)
+    // still prevents the SAME ticket from being double-started.
     if (!ticketKeyValid(req.ticketKey)) {
       return {
         ok: false,
@@ -392,15 +413,30 @@ export class WorkflowRunner extends EventEmitter {
     }
     const project = projectRes.data;
 
-    // Cross-session lock pre-check (GH-13). The `this.active !== null` guard
-    // above catches in-process duplicates; this catches orphaned locks
-    // surviving a crash (`runHistory.json` persists across restarts). If we
-    // skip this check, `markRunning` is idempotent and silently re-acquires
-    // the lock, letting the user start a second run on a ticket whose
-    // previous run state was abandoned. The startup `releaseStaleLocks(0)`
-    // hook in `initStores` should clear these on boot — this guard exists
-    // for the rare race where a different in-flight runner instance
-    // (or a programming error elsewhere) left a lock behind.
+    // In-memory per-ticket check (#GH-79). Pre-#GH-79 the app-wide
+    // `this.active !== null` guard caught any duplicate start synchronously.
+    // With concurrent runs allowed, the cross-session pre-check below isn't
+    // sufficient on its own: `runHistory.markRunning` is async (queued
+    // through enqueue), so a second start() for the same ticket can pass
+    // the pre-check before the first start's lock has persisted. Walking
+    // `this.active.values()` catches in-process duplicates synchronously.
+    for (const ctx of this.active.values()) {
+      if (ctx.run.projectId === req.projectId && ctx.run.ticketKey === req.ticketKey) {
+        return {
+          ok: false,
+          error: {
+            code: 'ALREADY_RUNNING',
+            message: `a run is already active for ticket "${req.ticketKey}" (runId=${ctx.run.id})`,
+          },
+        };
+      }
+    }
+
+    // Cross-session per-ticket lock (GH-13). Catches orphans from a previous
+    // app session that crashed mid-run and left a lock behind.
+    // `releaseStaleLocks(0)` at startup should clear these on boot; this
+    // guard catches the rare race where a different in-flight runner
+    // instance (or a bug elsewhere) left a lock behind anyway.
     const existingLocks = this.options.runHistory.getRunningWithMetadata(req.projectId);
     const orphaned = existingLocks.find((entry) => entry.key === req.ticketKey);
     if (orphaned !== undefined) {
@@ -469,7 +505,11 @@ export class WorkflowRunner extends EventEmitter {
       claudeExitDeferred: null,
       priorPhase: null,
     };
-    this.active = ctx;
+    this.active.set(run.id, ctx);
+    // #GH-79: emit a plural snapshot every time the active-set changes,
+    // so renderer hooks subscribing to `runs-changed` see the fresh shape
+    // without polling.
+    this.emitRunsChanged();
 
     // Fire-and-forget: drive the pipeline asynchronously so `start()` returns
     // immediately with the initial Run snapshot. Consumers track progress
@@ -483,16 +523,13 @@ export class WorkflowRunner extends EventEmitter {
   }
 
   async cancel(runId: string): Promise<RunnerResult<{ runId: string }>> {
-    const ctx = this.active;
-    if (ctx === null || ctx.run.id !== runId) {
+    const ctx = this.active.get(runId);
+    if (ctx === undefined) {
       return {
         ok: false,
         error: {
           code: 'NOT_RUNNING',
-          message:
-            ctx === null
-              ? 'no active run to cancel'
-              : `runId mismatch: active runId is ${ctx.run.id}, got ${runId}`,
+          message: `no active run with runId="${runId}"`,
         },
       };
     }
@@ -697,10 +734,10 @@ export class WorkflowRunner extends EventEmitter {
     this.emitStateChanged(ctx);
     await this.persist(ctx);
 
-    // Emit current-changed with the final run snapshot, then clear active
-    // and emit current-changed(null) so subscribers can reset their UI.
+    // Emit current-changed with the final run snapshot first, then delete
+    // this run from the active map.
     this.emit('current-changed', { run: deepCloneRun(ctx.run) });
-    this.active = null;
+    this.active.delete(ctx.run.id);
     // Detach any lingering claude listeners.
     if (ctx.detachOutputListener !== null) {
       ctx.detachOutputListener();
@@ -710,7 +747,29 @@ export class WorkflowRunner extends EventEmitter {
       ctx.detachExitListener();
       ctx.detachExitListener = null;
     }
-    this.emit('current-changed', { run: null });
+    // #GH-79: only signal "no active runs" via the legacy current-changed
+    // contract when the entire active map is empty. Siblings that are still
+    // in flight keep the runner "active" from a legacy-subscriber POV.
+    // Always fire runs-changed so plural subscribers see the new shape.
+    if (this.active.size === 0) {
+      this.emit('current-changed', { run: null });
+    }
+    this.emitRunsChanged();
+  }
+
+  /**
+   * Emit the plural `runs-changed` event with the current set of in-flight
+   * runs (#GH-79). Called on every active-map mutation: a new `start()`,
+   * a run reaching terminal state. The runtime cost is one snapshot per
+   * mutation, which is bounded by user-driven run starts/finishes — not
+   * by per-state-transition churn.
+   */
+  private emitRunsChanged(): void {
+    const runs: Run[] = [];
+    for (const ctx of this.active.values()) {
+      runs.push(deepCloneRun(ctx.run));
+    }
+    this.emit('runs-changed', { runs });
   }
 
   /**
@@ -1291,16 +1350,13 @@ export class WorkflowRunner extends EventEmitter {
     runId: string,
     response: ApprovalResponse,
   ): Promise<RunnerResult<{ runId: string }>> {
-    const ctx = this.active;
-    if (ctx === null || ctx.run.id !== runId) {
+    const ctx = this.active.get(runId);
+    if (ctx === undefined) {
       return {
         ok: false,
         error: {
           code: 'NOT_RUNNING',
-          message:
-            ctx === null
-              ? 'no active run'
-              : `runId mismatch: active runId is ${ctx.run.id}, got ${runId}`,
+          message: `no active run with runId="${runId}"`,
         },
       };
     }
@@ -1323,6 +1379,12 @@ export class WorkflowRunner extends EventEmitter {
       run: deepCloneRun(ctx.run),
     };
     this.emit('state-changed', event);
+    // #GH-79: state transitions mutate the in-memory Run.state field. The
+    // plural snapshot reflects that change too, so subscribers to
+    // `runs-changed` see per-transition updates without having to also
+    // subscribe to `state-changed`. Bounded cost: one Map.values() walk
+    // per transition; current pipeline emits ~10 transitions per run.
+    this.emitRunsChanged();
   }
 
   /**
@@ -1351,6 +1413,7 @@ export class WorkflowRunner extends EventEmitter {
 
   override on(event: 'state-changed', listener: (e: RunStateEvent) => void): this;
   override on(event: 'current-changed', listener: (e: { run: Run | null }) => void): this;
+  override on(event: 'runs-changed', listener: (e: { runs: Run[] }) => void): this;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   override on(event: string | symbol, listener: (...args: any[]) => void): this;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1360,6 +1423,7 @@ export class WorkflowRunner extends EventEmitter {
 
   override emit(event: 'state-changed', e: RunStateEvent): boolean;
   override emit(event: 'current-changed', e: { run: Run | null }): boolean;
+  override emit(event: 'runs-changed', e: { runs: Run[] }): boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   override emit(event: string | symbol, ...args: any[]): boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
