@@ -9,6 +9,7 @@ import { Connections } from './views/Connections';
 import { ExecutionView } from './views/ExecutionView';
 import { ProjectDetail } from './views/ProjectDetail';
 import { ProjectList } from './views/ProjectList';
+import { Settings } from './views/Settings';
 import { Skills } from './views/Skills';
 import { useNotificationDispatchers } from './state/notification-dispatchers';
 import { useProjects } from './state/projects';
@@ -18,6 +19,7 @@ type ViewState =
   | { kind: 'list' }
   | { kind: 'connections' }
   | { kind: 'skills' }
+  | { kind: 'settings' }
   | { kind: 'detail'; projectId: string }
   | { kind: 'execution'; runId: string; projectId: string };
 
@@ -53,12 +55,13 @@ function renderExecution(view: ExecutionViewState, setView: SetView): JSX.Elemen
 function activeNavFor(view: ViewState): SidebarNavId {
   if (view.kind === 'connections') return 'connections';
   if (view.kind === 'skills') return 'skills';
+  if (view.kind === 'settings') return 'settings';
   return 'projects';
 }
 
 function routeFor(
   view: ViewState,
-): 'list' | 'detail' | 'execution' | 'connections' | 'skills' {
+): 'list' | 'detail' | 'execution' | 'connections' | 'skills' | 'settings' {
   return view.kind;
 }
 
@@ -84,10 +87,11 @@ export function App(): JSX.Element {
       setView({ kind: 'connections' });
     } else if (id === 'skills') {
       setView({ kind: 'skills' });
+    } else if (id === 'settings') {
+      setView({ kind: 'settings' });
     } else if (id === 'projects') {
       setView({ kind: 'list' });
     }
-    // 'settings' is a no-op until a settings view ships.
   };
 
   return (
@@ -112,6 +116,7 @@ export function App(): JSX.Element {
         )}
         {view.kind === 'connections' && <Connections />}
         {view.kind === 'skills' && <Skills />}
+        {view.kind === 'settings' && <Settings />}
         {view.kind === 'detail' && renderDetail(view, setView)}
         {view.kind === 'execution' && renderExecution(view, setView)}
 

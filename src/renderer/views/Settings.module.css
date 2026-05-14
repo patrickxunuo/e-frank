@@ -1,0 +1,220 @@
+/*
+ * Global Settings page shell (#GH-69 Foundation).
+ *
+ * Two-column body: left rail with section anchors, right content area
+ * with sections stacked vertically. The page itself doesn't scroll — the
+ * content column does, so the rail stays put while the user reads
+ * sections.
+ */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 1180px;
+  width: 100%;
+  margin: 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+}
+
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-width: 64ch;
+}
+
+.body {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: var(--space-6);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+@media (max-width: 768px) {
+  .body {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Left rail — sticky inside the body, lists section anchors. */
+.rail {
+  display: flex;
+  flex-direction: column;
+}
+
+.railNav {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.railLink {
+  display: block;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.railLink:hover {
+  color: var(--text-primary);
+  background: var(--surface-overlay-subtle);
+}
+
+.railLink:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Right content column — scrolls internally so the rail stays put. */
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: var(--space-2);
+  /* Hide-on-hover scrollbar treatment, matching the ProjectDetail tabs. */
+  scrollbar-gutter: stable;
+}
+
+.content::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-color: transparent;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.content:hover::-webkit-scrollbar-thumb {
+  background: var(--surface-overlay-mid);
+  border-color: var(--bg-app);
+}
+
+.content:hover::-webkit-scrollbar-thumb:hover {
+  background: var(--surface-overlay-strong);
+}
+
+.loadingBanner {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-overlay-subtle);
+  border: 1px solid var(--border-subtle);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.errorBanner {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* Anchor offset: when the user clicks a rail link, the section's top
+   * edge lands below any sticky header chrome rather than flush with the
+   * viewport top. */
+  scroll-margin-top: var(--space-4);
+}
+
+.sectionHead {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sectionBlurb {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/*
+ * Placeholder card — what every section renders until its follow-up PR
+ * lands. Visually deferred (dashed border + muted text) so a glance is
+ * enough to convey "not implemented yet, don't try to interact."
+ */
+.placeholderCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  border: 1px dashed var(--border-default);
+  background: var(--surface-overlay-subtle);
+}
+
+.placeholderLabel {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.placeholderBody {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}

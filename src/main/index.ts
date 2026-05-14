@@ -22,6 +22,9 @@ import {
   type SecretsSetRequest,
   type SecretsGetResponse,
   type SecretsListResponse,
+  type AppConfigGetResponse,
+  type AppConfigSetResponse,
+  type AppConfig,
   type JiraListResponse,
   type JiraRefreshResponse,
   type JiraTestConnectionRequest,
@@ -85,6 +88,7 @@ import {
 import { NodeSpawner } from './modules/spawner.js';
 import { ProjectStore } from './modules/project-store.js';
 import { ConnectionStore } from './modules/connection-store.js';
+import { AppConfigStore } from './modules/app-config-store.js';
 import { SafeStorageBackend, SecretsManager } from './modules/secrets-manager.js';
 import { FetchHttpClient } from './modules/http-client.js';
 import { JiraClient } from './modules/jira-client.js';
@@ -157,6 +161,7 @@ let skillFinder: SkillFinder | null = null;
 let secretsManager: SecretsManager | null = null;
 let projectStore: ProjectStore | null = null;
 let connectionStore: ConnectionStore | null = null;
+let appConfigStore: AppConfigStore | null = null;
 let runHistory: RunHistory | null = null;
 let jiraPoller: TicketPoller | null = null;
 let runStore: RunStore | null = null;
@@ -2180,6 +2185,50 @@ function registerIpcHandlers(): void {
       }
     },
   );
+
+  // -- App Config (issue #GH-69 Foundation) --
+  // Single-object store; get returns the merged-with-defaults config,
+  // set shallow-merges a partial and persists.
+  ipcMain.handle(
+    IPC_CHANNELS.APP_CONFIG_GET,
+    async (): Promise<IpcResult<AppConfigGetResponse>> => {
+      if (appConfigStore === null) {
+        return notInitialized('AppConfigStore');
+      }
+      const res = await appConfigStore.get();
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return { ok: true, data: { config: res.data } };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.APP_CONFIG_SET,
+    async (_event, raw): Promise<IpcResult<AppConfigSetResponse>> => {
+      if (appConfigStore === null) {
+        return notInitialized('AppConfigStore');
+      }
+      const partial =
+        typeof raw === 'object' && raw !== null && 'partial' in raw
+          ? (raw as { partial?: unknown }).partial
+          : undefined;
+      if (typeof partial !== 'object' || partial === null) {
+        return {
+          ok: false,
+          error: {
+            code: 'INVALID_REQUEST',
+            message: 'app-config:set request must carry { partial: object }',
+          },
+        };
+      }
+      const res = await appConfigStore.set(partial as Partial<AppConfig>);
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return { ok: true, data: { config: res.data } };
+    },
+  );
 }
 
 function toIpcCurrentChangedEvent(e: { run: Run | null }): RunsCurrentChangedEvent {
@@ -2277,6 +2326,24 @@ async function initStores(): Promise<void> {
       // Leave connectionStore null — handlers surface NOT_INITIALIZED.
     } else {
       connectionStore = connections;
+    }
+
+    // -- AppConfigStore (issue #GH-69 Foundation) --
+    // Single-object store under <userData>/app-config.json. The four
+    // content sections of the Settings page (Theme, Claude CLI, Workflow
+    // Defaults, About) read/write fields here; Foundation just stands up
+    // the infrastructure.
+    const appConfig = new AppConfigStore({
+      filePath: join(userData, 'app-config.json'),
+    });
+    const appConfigInit = await appConfig.init();
+    if (!appConfigInit.ok) {
+      console.error(
+        `[main] AppConfigStore init failed: ${appConfigInit.error.code} - ${appConfigInit.error.message}`,
+      );
+      // Leave appConfigStore null — handlers surface NOT_INITIALIZED.
+    } else {
+      appConfigStore = appConfig;
     }
 
     const store = new ProjectStore({

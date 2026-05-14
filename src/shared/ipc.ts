@@ -69,6 +69,13 @@ export type {
   Provider,
   AuthMethod,
 } from './schema/connection.js';
+// Re-export app-config types (#GH-69 Foundation).
+export type {
+  AppConfig,
+  ThemeMode,
+  WorkflowModeDefault,
+  AppConfigValidationError,
+} from './schema/app-config.js';
 
 export const IPC_CHANNELS = {
   PING: 'app:ping',
@@ -160,6 +167,9 @@ export const IPC_CHANNELS = {
   SHELL_OPEN_PATH: 'shell:open-path',
   /** Open a URL in the default browser. Host allow-list enforced in main. */
   SHELL_OPEN_EXTERNAL: 'shell:open-external',
+  // -- App config (issue #GH-69 Foundation) --
+  APP_CONFIG_GET: 'app-config:get',
+  APP_CONFIG_SET: 'app-config:set',
 } as const;
 
 export type PingRequest = { message: string };
@@ -379,6 +389,22 @@ export interface PullsListRequest {
 
 export interface PullsListResponse {
   rows: PullDto[];
+}
+
+// -- App Config IPC payloads (#GH-69 Foundation) ----------------------------
+
+export interface AppConfigGetResponse {
+  config: import('./schema/app-config.js').AppConfig;
+}
+
+export interface AppConfigSetRequest {
+  /** Shallow-merged into the existing config. Empty object is a valid no-op. */
+  partial: Partial<import('./schema/app-config.js').AppConfig>;
+}
+
+export interface AppConfigSetResponse {
+  /** Post-merge full config. */
+  config: import('./schema/app-config.js').AppConfig;
 }
 
 // -- Workflow Runner IPC payloads --------------------------------------------
@@ -801,5 +827,15 @@ export interface IpcApi {
      * process allow-list; rejected URLs return `FORBIDDEN_URL`.
      */
     openExternal: (req: ShellOpenExternalRequest) => Promise<IpcResult<null>>;
+  };
+  /**
+   * Global app config (#GH-69 Foundation). The four content sections of
+   * the Settings page (Theme / CLI / Defaults / About) read + write
+   * fields via `set({ partial })`. Missing fields fall back to
+   * `DEFAULT_APP_CONFIG` so a fresh install never sees null.
+   */
+  appConfig: {
+    get: () => Promise<IpcResult<AppConfigGetResponse>>;
+    set: (req: AppConfigSetRequest) => Promise<IpcResult<AppConfigSetResponse>>;
   };
 }

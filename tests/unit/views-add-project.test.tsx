@@ -255,6 +255,11 @@ function installApi(opts?: {
     shell: {
       openPath: vi.fn().mockResolvedValue({ ok: true, data: null }),
     } as unknown as IpcApi['shell'],
+    appConfig: {
+      get: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
+      set: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
+    },
+
   };
 
   (window as { api?: IpcApi }).api = api;

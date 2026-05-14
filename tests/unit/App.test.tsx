@@ -192,6 +192,11 @@ function makeIpcApiStub(
         .fn<IpcApi['shell']['openExternal']>()
         .mockResolvedValue({ ok: true, data: null }),
     },
+    appConfig: {
+      get: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
+      set: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
+    },
+
   };
 }
 
