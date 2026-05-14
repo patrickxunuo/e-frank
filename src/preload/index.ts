@@ -45,6 +45,8 @@ import {
   type RunsReadLogResponse,
   type TicketsListRequest,
   type TicketsListResponse,
+  type PullsListRequest,
+  type PullsListResponse,
   type RunsCurrentChangedEvent,
   type RunStateEvent,
   type Connection,
@@ -352,6 +354,13 @@ const api: IpcApi = {
     list: (req: TicketsListRequest): Promise<IpcResult<TicketsListResponse>> =>
       ipcRenderer.invoke(IPC_CHANNELS.TICKETS_LIST, req) as Promise<
         IpcResult<TicketsListResponse>
+      >,
+  },
+
+  pulls: {
+    list: (req: PullsListRequest): Promise<IpcResult<PullsListResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.PULLS_LIST, req) as Promise<
+        IpcResult<PullsListResponse>
       >,
   },
 

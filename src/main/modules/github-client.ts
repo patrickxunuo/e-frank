@@ -56,6 +56,31 @@ export interface GithubBranchSummary {
   protected: boolean;
 }
 
+/**
+ * One pull request, projected from the GraphQL response (`pullRequests.nodes[]`).
+ * Field names match the GraphQL schema 1:1 except for `authorLogin` (flattened
+ * from `author.login`) so the upstream IPC handler doesn't have to drill in.
+ *
+ * `authorLogin` and `reviewDecision` are nullable — the former for deleted
+ * accounts, the latter for PRs with no reviewers requested yet.
+ */
+export interface GithubPullSummary {
+  number: number;
+  title: string;
+  authorLogin: string | null;
+  /** GraphQL `state` enum: 'OPEN' | 'CLOSED' | 'MERGED'. */
+  state: 'OPEN' | 'CLOSED' | 'MERGED';
+  isDraft: boolean;
+  /** Null when no reviewers requested yet. */
+  reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
+  /** Null when not merged. */
+  mergedAt: string | null;
+  /** Null when still open. */
+  closedAt: string | null;
+  updatedAt: string;
+  url: string;
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -391,6 +416,242 @@ export class GithubClient {
     return { ok: true, data: parsed };
   }
 
+  /**
+   * GraphQL POST helper. Translates the host's REST base (`api.github.com`)
+   * to its GraphQL counterpart (`api.github.com/graphql`) and POSTs the
+   * standard `{query, variables}` envelope. Auth header is identical to REST
+   * — Bearer + PAT works for both endpoints on github.com and on enterprise
+   * hosts.
+   *
+   * Returns the raw `data` field from the GraphQL response (unknown — caller
+   * narrows). Distinguishes three error shapes:
+   *   - HTTP transport failure → NETWORK / TIMEOUT
+   *   - HTTP non-2xx → AUTH / RATE_LIMITED / SERVER_ERROR / etc.
+   *   - HTTP 200 with `errors[]` body → mapped per-error type:
+   *       - `RATE_LIMITED`        → RATE_LIMITED (with `secondaryRateLimit` too)
+   *       - any other GraphQL err → INVALID_RESPONSE
+   *
+   * Rate-limit details: GraphQL rate limits return a 200 response with an
+   * `errors[]` array — they do NOT 403. The reset time is in the
+   * `X-RateLimit-Reset` header (Unix seconds), echoed in the message so the
+   * renderer can surface it.
+   */
+  async graphql(query: string, variables: Record<string, unknown> = {}): Promise<GithubResult<unknown>> {
+    // Enterprise hosts use `…/api/v3` for REST; GraphQL lives at `…/api/graphql`
+    // (NOT `…/api/v3/graphql`). For Cloud the host is `https://api.github.com`
+    // and the GraphQL endpoint is `https://api.github.com/graphql`. Translate
+    // here so callers don't need to know the difference.
+    const graphqlBase = this.host.endsWith('/api/v3')
+      ? `${this.host.slice(0, -'/api/v3'.length)}/api`
+      : this.host;
+    const url = `${graphqlBase}/graphql`;
+    const httpReq: HttpRequest = {
+      method: 'POST',
+      url,
+      headers: { ...this.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, variables }),
+    };
+
+    let httpRes: HttpResult;
+    try {
+      httpRes = await this.httpClient.request(httpReq);
+    } catch {
+      return { ok: false, error: { code: 'NETWORK', message: 'network error' } };
+    }
+
+    if (!httpRes.ok) {
+      return liftHttpError<unknown>(httpRes.error);
+    }
+
+    const { status, headers, body } = httpRes.response;
+    if (status < 200 || status >= 300) {
+      // REST-style 403 with X-RateLimit-Remaining: 0 — primary rate limit.
+      // OR 403 with a Retry-After header — secondary (abuse / concurrent)
+      // rate limit. Both should surface as RATE_LIMITED so the renderer
+      // doesn't show the "Reconnect" banner for what is really a throttle.
+      const retryAfter = headers['retry-after'] ?? headers['Retry-After'];
+      const isPrimaryRateLimit = status === 403 && (headers['x-ratelimit-remaining'] ?? '') === '0';
+      const isSecondaryRateLimit = status === 403 && typeof retryAfter === 'string' && retryAfter !== '';
+      if (isPrimaryRateLimit || isSecondaryRateLimit) {
+        return {
+          ok: false,
+          error: {
+            code: 'RATE_LIMITED',
+            message: isSecondaryRateLimit
+              ? secondaryRateLimitMessage(retryAfter ?? '')
+              : rateLimitMessage(headers),
+            status,
+          },
+        };
+      }
+      return {
+        ok: false,
+        error: { code: statusToGithubCode(status), message: `GitHub returned ${status}`, status },
+      };
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      return {
+        ok: false,
+        error: { code: 'INVALID_RESPONSE', message: 'response body was not valid JSON', status },
+      };
+    }
+    if (!isPlainObject(parsed)) {
+      return {
+        ok: false,
+        error: { code: 'INVALID_RESPONSE', message: 'response body did not match expected shape', status },
+      };
+    }
+
+    const errors = parsed['errors'];
+    if (Array.isArray(errors) && errors.length > 0) {
+      const isRateLimited = errors.some(
+        (e) => isPlainObject(e) && (e['type'] === 'RATE_LIMITED' || e['type'] === 'SECONDARY_RATE_LIMITED'),
+      );
+      if (isRateLimited) {
+        return {
+          ok: false,
+          error: { code: 'RATE_LIMITED', message: rateLimitMessage(headers), status },
+        };
+      }
+      return {
+        ok: false,
+        error: { code: 'INVALID_RESPONSE', message: 'GraphQL errors in response', status },
+      };
+    }
+
+    if (!('data' in parsed)) {
+      return {
+        ok: false,
+        error: { code: 'INVALID_RESPONSE', message: 'response body did not match expected shape', status },
+      };
+    }
+    return { ok: true, data: parsed['data'] };
+  }
+
+  /**
+   * List the most-recently-updated 50 pull requests on `slug` (`owner/name`).
+   * Single GraphQL request — returns `state`, `isDraft`, `reviewDecision`,
+   * `mergedAt`, and `closedAt` together, so the badge / review-state mapping
+   * happens upstream without any follow-up REST calls.
+   *
+   * Cap is 50 (GraphQL max per page is 100; 50 is a sensible v1 default per
+   * #GH-67). No cursor / Load More for v1.
+   */
+  async listPullRequests(slug: string): Promise<GithubResult<GithubPullSummary[]>> {
+    const [owner, name] = slug.split('/', 2);
+    if (owner === undefined || name === undefined || owner === '' || name === '') {
+      return { ok: false, error: { code: 'INVALID_RESPONSE', message: 'invalid repo slug' } };
+    }
+    const query = `
+      query ListPRs($owner: String!, $name: String!) {
+        repository(owner: $owner, name: $name) {
+          pullRequests(first: 50, orderBy: { field: UPDATED_AT, direction: DESC }) {
+            nodes {
+              number
+              title
+              author { login }
+              state
+              isDraft
+              reviewDecision
+              mergedAt
+              closedAt
+              updatedAt
+              url
+            }
+          }
+        }
+      }
+    `;
+    const res = await this.graphql(query, { owner, name });
+    if (!res.ok) return res;
+
+    const data = res.data;
+    if (!isPlainObject(data)) {
+      return {
+        ok: false,
+        error: { code: 'INVALID_RESPONSE', message: 'response body did not match expected shape' },
+      };
+    }
+    const repository = data['repository'];
+    if (repository === null) {
+      // `repository: null` from GraphQL means the repo doesn't exist or the
+      // PAT can't see it — same UX as REST 404.
+      return { ok: false, error: { code: 'NOT_FOUND', message: `repository ${slug} not found` } };
+    }
+    if (!isPlainObject(repository)) {
+      return {
+        ok: false,
+        error: { code: 'INVALID_RESPONSE', message: 'response body did not match expected shape' },
+      };
+    }
+    const pullRequests = repository['pullRequests'];
+    if (!isPlainObject(pullRequests)) {
+      return {
+        ok: false,
+        error: { code: 'INVALID_RESPONSE', message: 'response body did not match expected shape' },
+      };
+    }
+    const nodes = pullRequests['nodes'];
+    if (!Array.isArray(nodes)) {
+      return {
+        ok: false,
+        error: { code: 'INVALID_RESPONSE', message: 'response body did not match expected shape' },
+      };
+    }
+
+    const out: GithubPullSummary[] = [];
+    for (const node of nodes) {
+      if (!isPlainObject(node)) continue;
+      const number = node['number'];
+      const title = node['title'];
+      const state = node['state'];
+      const isDraft = node['isDraft'];
+      const updatedAt = node['updatedAt'];
+      const url = node['url'];
+      if (
+        typeof number !== 'number' ||
+        typeof title !== 'string' ||
+        (state !== 'OPEN' && state !== 'CLOSED' && state !== 'MERGED') ||
+        typeof isDraft !== 'boolean' ||
+        typeof updatedAt !== 'string' ||
+        typeof url !== 'string'
+      ) {
+        continue;
+      }
+      const author = node['author'];
+      const authorLogin =
+        isPlainObject(author) && typeof author['login'] === 'string' ? author['login'] : null;
+      const reviewDecisionRaw = node['reviewDecision'];
+      const reviewDecision: GithubPullSummary['reviewDecision'] =
+        reviewDecisionRaw === 'APPROVED' ||
+        reviewDecisionRaw === 'CHANGES_REQUESTED' ||
+        reviewDecisionRaw === 'REVIEW_REQUIRED'
+          ? reviewDecisionRaw
+          : null;
+      const mergedAtRaw = node['mergedAt'];
+      const mergedAt = typeof mergedAtRaw === 'string' ? mergedAtRaw : null;
+      const closedAtRaw = node['closedAt'];
+      const closedAt = typeof closedAtRaw === 'string' ? closedAtRaw : null;
+      out.push({
+        number,
+        title,
+        authorLogin,
+        state,
+        isDraft,
+        reviewDecision,
+        mergedAt,
+        closedAt,
+        updatedAt,
+        url,
+      });
+    }
+    return { ok: true, data: out };
+  }
+
   // -- Internals -----------------------------------------------------------
 
   private headers(): Record<string, string> {
@@ -400,4 +661,33 @@ export class GithubClient {
       'X-GitHub-Api-Version': '2022-11-28',
     };
   }
+}
+
+/**
+ * Format a rate-limit error message with reset-time context. The renderer
+ * surfaces this verbatim in a banner — no structured field on `GithubResult`
+ * because `error.message` is already the right place for human-readable
+ * detail (and the only field IPC carries through reliably).
+ */
+function rateLimitMessage(headers: Readonly<Record<string, string>>): string {
+  const reset = headers['x-ratelimit-reset'] ?? headers['X-RateLimit-Reset'];
+  const seconds = typeof reset === 'string' ? Number.parseInt(reset, 10) : NaN;
+  if (Number.isFinite(seconds) && seconds > 0) {
+    const iso = new Date(seconds * 1000).toISOString();
+    return `GitHub rate limit exceeded. Resets at ${iso}.`;
+  }
+  return 'GitHub rate limit exceeded. Try again shortly.';
+}
+
+/**
+ * Secondary rate-limit messages embed the `Retry-After` header value (seconds
+ * to wait, per RFC 9110 §10.2.3). GitHub's secondary limits don't expose a
+ * reset epoch — only a relative wait — so we surface the duration directly.
+ */
+function secondaryRateLimitMessage(retryAfter: string): string {
+  const seconds = Number.parseInt(retryAfter, 10);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return `GitHub secondary rate limit hit. Retry in ${seconds}s.`;
+  }
+  return 'GitHub secondary rate limit hit. Try again shortly.';
 }

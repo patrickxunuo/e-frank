@@ -148,6 +148,9 @@ function makeIpcApiStub(
     tickets: {
       list: vi.fn<IpcApi['tickets']['list']>().mockResolvedValue(unusedErr()),
     },
+    pulls: {
+      list: vi.fn<IpcApi['pulls']['list']>().mockResolvedValue(unusedErr()),
+    },
     // #50 Custom titlebar — the renderer mounts <Titlebar /> at the root,
     // which calls chrome.getState() on mount and subscribes to state
     // changes. Stub it as an empty/quiet implementation so App tests stay

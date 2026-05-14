@@ -547,6 +547,36 @@
   justify-content: flex-end;
 }
 
+/* PRs tab cells (#GH-67) — type tokens mirror runs/tickets so columns rhyme. */
+.pullsHeading {
+  font-family: var(--font-display);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+  align-self: center;
+}
+
+.pullTitle {
+  font-family: var(--font-display);
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.pullAuthor {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.pullReviewEmpty {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 /*
  * Tickets tab — wrap that fills the panel and lets the inner table card
  * scroll its rows. Without `min-height: 0` on a flex column child,

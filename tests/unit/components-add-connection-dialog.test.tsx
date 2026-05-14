@@ -150,6 +150,9 @@ function installApi(opts?: {
     tickets: {
       list: vi.fn().mockResolvedValue(unusedErr()),
     } as unknown as IpcApi['tickets'],
+    pulls: {
+      list: vi.fn().mockResolvedValue(unusedErr()),
+    } as unknown as IpcApi['pulls'],
     chrome: {
       minimize: vi.fn().mockResolvedValue({ ok: true, data: null }),
       maximize: vi.fn().mockResolvedValue({ ok: true, data: null }),

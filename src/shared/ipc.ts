@@ -125,6 +125,8 @@ export const IPC_CHANNELS = {
   RUNS_READ_LOG: 'runs:read-log',
   // -- Paginated tickets (PR #40 expansion) --
   TICKETS_LIST: 'tickets:list',
+  // -- Project Pull Requests tab (issue #GH-67) --
+  PULLS_LIST: 'pulls:list',
   /** event channel (main -> renderer) */
   RUNS_CURRENT_CHANGED: 'runs:current-changed',
   /** event channel (main -> renderer) */
@@ -322,6 +324,53 @@ export interface TicketsListResponse {
   rows: TicketDto[];
   /** Undefined when there are no more pages. */
   nextCursor?: string;
+}
+
+// -- Project Pull Requests IPC payloads (issue #GH-67) -----------------------
+//
+// Renderer-facing record for one GitHub pull request on the project's repo.
+// State and review-state are derived in the main process from the GraphQL
+// fields so the renderer never has to reach into raw GitHub responses (which
+// would mean re-encoding the GraphQL → enum mapping per consumer).
+
+/**
+ * High-level state derived from `state` + `isDraft` + `mergedAt`. Drives the
+ * State badge column in the PRs tab.
+ *  - `open`     → PR is open and ready for review
+ *  - `draft`    → PR is open but marked as draft
+ *  - `merged`   → PR was merged
+ *  - `closed`   → PR was closed without merging
+ */
+export type PullState = 'open' | 'draft' | 'merged' | 'closed';
+
+/**
+ * Review decision from GitHub's GraphQL `reviewDecision` field, narrowed to
+ * the values that have a meaningful UI representation. `null` (no review
+ * requested yet) is preserved as `null` rather than collapsed so the renderer
+ * can show an em-dash placeholder.
+ */
+export type PullReviewDecision = 'approved' | 'changes_requested' | 'review_required' | null;
+
+export interface PullDto {
+  /** PR number — `#42` displayed in the leftmost column. */
+  number: number;
+  title: string;
+  /** GitHub login of the PR author. `null` for deleted accounts / Dependabot edge cases. */
+  authorLogin: string | null;
+  state: PullState;
+  reviewDecision: PullReviewDecision;
+  /** ISO-8601 timestamp of the most recent update — drives the Updated column + sort. */
+  updatedAt: string;
+  /** Direct link to the PR on github.com — opened via `shell.openExternal` on row click. */
+  url: string;
+}
+
+export interface PullsListRequest {
+  projectId: string;
+}
+
+export interface PullsListResponse {
+  rows: PullDto[];
 }
 
 // -- Workflow Runner IPC payloads --------------------------------------------
@@ -688,6 +737,9 @@ export interface IpcApi {
   };
   tickets: {
     list: (req: TicketsListRequest) => Promise<IpcResult<TicketsListResponse>>;
+  };
+  pulls: {
+    list: (req: PullsListRequest) => Promise<IpcResult<PullsListResponse>>;
   };
   chrome: {
     minimize: () => Promise<IpcResult<null>>;

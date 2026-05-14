@@ -24,6 +24,18 @@
   border-color: var(--accent-border);
 }
 
+/*
+ * `info` is visually the same accent palette as `running`, but semantically
+ * distinct: `running` carries an "active work in progress" connotation
+ * (often paired with a pulse dot), while `info` is for steady-state
+ * informational status — e.g. an open PR sitting in the queue.
+ */
+.info {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
 .success {
   color: var(--success);
   background: var(--success-soft);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ProjectInstanceDto,
+  PullDto,
   Run,
   RunState,
   TicketDto,
@@ -29,6 +30,7 @@ import {
   IconClipboard,
   IconClose,
   IconCode,
+  IconExternal,
   IconGitHub,
   IconJira,
   IconPlay,
@@ -49,6 +51,7 @@ import {
   useTicketPages,
   type TicketPagesQuery,
 } from '../state/ticket-pages';
+import { useProjectPulls } from '../state/project-pulls';
 import styles from './ProjectDetail.module.css';
 
 export interface ProjectDetailProps {
@@ -57,6 +60,9 @@ export interface ProjectDetailProps {
   /** Open the full Execution View for an active run (#8). Optional so legacy
    *  tests that don't exercise the Active Execution panel can omit it. */
   onOpenExecution?: (runId: string) => void;
+  /** Navigate to the Connections page — used by the PRs tab error banner
+   *  to offer a Reconnect action when the GitHub PAT is invalid (#GH-67). */
+  onNavigateToConnections?: () => void;
 }
 
 /**
@@ -171,6 +177,50 @@ function ticketProjectLabel(tickets: ProjectInstanceDto['tickets']): string {
     return tickets.projectKey || 'Jira';
   }
   return tickets.repoSlug || 'GitHub Issues';
+}
+
+/** Map a `PullState` to its `BadgeVariant` per #GH-67. */
+function pullStateVariant(s: PullDto['state']): BadgeVariant {
+  switch (s) {
+    case 'open':
+      return 'info';
+    case 'draft':
+      return 'neutral';
+    case 'merged':
+      return 'success';
+    case 'closed':
+      return 'warning';
+    default:
+      return 'neutral';
+  }
+}
+
+function pullStateLabel(s: PullDto['state']): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Map a non-null `PullReviewDecision` to a Badge variant. Null is rendered
+ *  as an em-dash placeholder upstream (no badge), so this is total. */
+function reviewDecisionVariant(d: NonNullable<PullDto['reviewDecision']>): BadgeVariant {
+  switch (d) {
+    case 'approved':
+      return 'success';
+    case 'changes_requested':
+      return 'danger';
+    case 'review_required':
+      return 'neutral';
+  }
+}
+
+function reviewDecisionLabel(d: NonNullable<PullDto['reviewDecision']>): string {
+  switch (d) {
+    case 'approved':
+      return 'Approved';
+    case 'changes_requested':
+      return 'Changes requested';
+    case 'review_required':
+      return 'Review required';
+  }
 }
 
 function priorityVariant(p: PriorityBucket): BadgeVariant {
@@ -442,6 +492,7 @@ export function ProjectDetail({
   projectId,
   onBack,
   onOpenExecution,
+  onNavigateToConnections,
 }: ProjectDetailProps): JSX.Element {
   const [state, setState] = useState<ProjectState>({ kind: 'loading' });
   const [tab, setTab] = useState<TabId>('tickets');
@@ -493,6 +544,13 @@ export function ProjectDetail({
   }, [effectiveSort.key, effectiveSort.dir, committedSearch]);
 
   const pages = useTicketPages(projectId, ticketQuery);
+  /**
+   * Pull-requests hook (#GH-67). Lives at the ProjectDetail level (not inside
+   * the prsBody render branch) so switching tabs doesn't unmount the hook
+   * and force a fresh GraphQL request — the issue requires that tab toggles
+   * stay cheap and only Refresh re-fetches.
+   */
+  const projectPulls = useProjectPulls(projectId);
   const activeRun = useActiveRun(projectId);
   const [autoMode, setAutoMode] = useAutoMode(projectId);
 
@@ -1063,6 +1121,225 @@ export function ProjectDetail({
     );
   })();
 
+  // -- PRs tab (#GH-67) -------------------------------------------------------
+  //
+  // Open the PR's html_url through the main-process allowlist (github.com is
+  // already permitted in `shell-external-validator.ts`). Plain function — no
+  // useCallback because we're past the early-return shells, where introducing
+  // a hook would break React's hooks-order rule on the loading / error paths.
+  const openPullExternal = (url: string): void => {
+    if (typeof window === 'undefined' || !window.api) return;
+    void window.api.shell.openExternal({ url });
+  };
+
+  const pullColumns: DataTableColumn<PullDto>[] = [
+    {
+      key: 'number',
+      header: '#',
+      width: '64px',
+      render: (row) => <span className={styles.idCell}>#{row.number}</span>,
+    },
+    {
+      key: 'title',
+      header: 'Title',
+      render: (row) => <span className={styles.pullTitle}>{row.title}</span>,
+    },
+    {
+      key: 'author',
+      header: 'Author',
+      width: '140px',
+      render: (row) => (
+        <span className={styles.pullAuthor}>{row.authorLogin ?? '—'}</span>
+      ),
+    },
+    {
+      key: 'state',
+      header: 'State',
+      width: '110px',
+      render: (row) => (
+        <Badge
+          variant={pullStateVariant(row.state)}
+          data-testid={`pull-state-${row.number}`}
+        >
+          {pullStateLabel(row.state)}
+        </Badge>
+      ),
+    },
+    {
+      key: 'review',
+      header: 'Review',
+      width: '160px',
+      render: (row) => {
+        if (row.reviewDecision === null) {
+          return <span className={styles.pullReviewEmpty}>—</span>;
+        }
+        return (
+          <Badge
+            variant={reviewDecisionVariant(row.reviewDecision)}
+            data-testid={`pull-review-${row.number}`}
+          >
+            {reviewDecisionLabel(row.reviewDecision)}
+          </Badge>
+        );
+      },
+    },
+    {
+      key: 'updated',
+      header: 'Updated',
+      width: '120px',
+      render: (row) => (
+        <span className={styles.runStartedAt}>{formatRelative(row.updatedAt)}</span>
+      ),
+    },
+    {
+      key: 'open',
+      header: '',
+      align: 'right',
+      width: '120px',
+      render: (row) => (
+        <Button
+          variant="ghost"
+          size="sm"
+          leadingIcon={<IconExternal size={12} />}
+          onClick={(e) => {
+            e.stopPropagation();
+            openPullExternal(row.url);
+          }}
+          data-testid={`pull-open-${row.number}`}
+        >
+          Open
+        </Button>
+      ),
+    },
+  ];
+
+  const prsBody = ((): JSX.Element => {
+    // Non-GitHub repos can't list PRs — show a friendly explainer rather than
+    // the generic "Couldn't load pull requests" banner the catch-all path
+    // would render.
+    if (project.repo.type !== 'github') {
+      return (
+        <EmptyState
+          icon={<IconPullRequest size={26} />}
+          title="Pull requests aren't supported for this repo"
+          description={`This project's repo is ${project.repo.type}. The Pull Requests tab is only populated for GitHub-backed projects.`}
+          data-testid="pulls-non-github"
+        />
+      );
+    }
+    const isReloading = projectPulls.loading;
+    const hasRows = projectPulls.rows.length > 0;
+    const isAuthError = projectPulls.errorCode === 'AUTH';
+    const isRateLimited = projectPulls.errorCode === 'RATE_LIMITED';
+    const isOtherError = projectPulls.error !== null && !isAuthError && !isRateLimited;
+
+    return (
+      <div className={styles.ticketsTableWrap}>
+        <div className={styles.ticketsSearchRow}>
+          <span className={styles.pullsHeading}>
+            {hasRows
+              ? `${projectPulls.rows.length} ${projectPulls.rows.length === 1 ? 'pull request' : 'pull requests'}`
+              : 'Pull requests'}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            leadingIcon={
+              <span
+                className={`${styles.refreshIcon} ${projectPulls.refreshing ? styles.refreshSpinning : ''}`}
+              >
+                <IconRefresh size={14} />
+              </span>
+            }
+            onClick={() => {
+              void projectPulls.refresh();
+            }}
+            disabled={projectPulls.refreshing || projectPulls.loading}
+            data-testid="pulls-refresh-button"
+          >
+            Refresh
+          </Button>
+        </div>
+
+        {isAuthError && (
+          <div className={styles.banner} role="alert" data-testid="pulls-auth-error-banner">
+            <span>
+              <strong>GitHub connection broken.</strong>{' '}
+              The PAT for this project's GitHub Connection is no longer valid.
+              Reconnect to refresh the token.
+            </span>
+            {onNavigateToConnections && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onNavigateToConnections()}
+                data-testid="pulls-reconnect-button"
+              >
+                Reconnect
+              </Button>
+            )}
+          </div>
+        )}
+
+        {isRateLimited && (
+          <div className={styles.banner} role="alert" data-testid="pulls-rate-limit-banner">
+            <span>
+              <strong>GitHub rate limit hit.</strong> {projectPulls.error}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                void projectPulls.refresh();
+              }}
+              data-testid="pulls-rate-limit-retry"
+            >
+              Try again
+            </Button>
+          </div>
+        )}
+
+        {isOtherError && (
+          <div className={styles.banner} role="alert" data-testid="pulls-error-banner">
+            <span>
+              <strong>Couldn't load pull requests.</strong> {projectPulls.error}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                void projectPulls.refresh();
+              }}
+              data-testid="pulls-error-retry"
+            >
+              Try again
+            </Button>
+          </div>
+        )}
+
+        {!isReloading && !hasRows && projectPulls.error === null ? (
+          <EmptyState
+            icon={<IconPullRequest size={26} />}
+            title="No open pull requests"
+            description="When a PR is opened against this project's repo, it will appear here. Use Refresh to re-check."
+            data-testid="tab-empty-prs"
+          />
+        ) : (
+          <DataTable
+            columns={pullColumns}
+            rows={projectPulls.rows}
+            rowKey={(row) => String(row.number)}
+            rowTestId={(row) => `pull-row-${row.number}`}
+            onRowClick={(row) => openPullExternal(row.url)}
+            fillHeight
+            loadingRows={isReloading && !hasRows ? 5 : undefined}
+            data-testid="pulls-table"
+          />
+        )}
+      </div>
+    );
+  })();
+
   const ticketsBody = ((): JSX.Element => {
     const isReloading = pages.loading;
     const hasRows = pages.rows.length > 0;
@@ -1302,14 +1579,7 @@ export function ProjectDetail({
         >
           {tab === 'tickets' && ticketsBody}
           {tab === 'runs' && runsBody}
-          {tab === 'prs' && (
-            <EmptyState
-              icon={<IconPullRequest size={26} />}
-              title="Pull requests will gather here"
-              description="Once the agent opens PRs against this repo, you’ll see status, review state, and merges in this tab."
-              data-testid="tab-empty-prs"
-            />
-          )}
+          {tab === 'prs' && prsBody}
           {tab === 'settings' && (
             <ProjectSettingsTab
               project={project}

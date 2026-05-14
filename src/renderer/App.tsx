@@ -34,6 +34,7 @@ function renderDetail(view: DetailViewState, setView: SetView): JSX.Element {
       onOpenExecution={(runId) => {
         setView({ kind: 'execution', runId, projectId });
       }}
+      onNavigateToConnections={() => setView({ kind: 'connections' })}
     />
   );
 }
