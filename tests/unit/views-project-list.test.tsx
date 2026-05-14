@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { ProjectList } from '../../src/renderer/views/ProjectList';
-import type { ProjectInstanceDto } from '../../src/shared/ipc';
+import { useGlobalActiveRuns } from '../../src/renderer/state/global-active-run';
+import type { ProjectInstanceDto, Run } from '../../src/shared/ipc';
+
+// Mock the plural hook so LIST-MULTI tests can drive the count-badge
+// behavior deterministically. Other tests get an empty-array return
+// (the default).
+vi.mock('../../src/renderer/state/global-active-run', () => ({
+  useGlobalActiveRuns: vi.fn(() => []),
+}));
 
 /**
  * LIST-001..008 — <ProjectList> view.
@@ -206,5 +214,75 @@ describe('<ProjectList /> — LIST', () => {
     const retry = screen.getByTestId('project-list-retry');
     fireEvent.click(retry);
     expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  // LIST-MULTI — Status column counts concurrent runs per project (#GH-81)
+  function makeRun(id: string, projectId: string, state: Run['state']): Run {
+    return {
+      id,
+      projectId,
+      ticketKey: `ABC-${id.slice(-1)}`,
+      mode: 'interactive',
+      branchName: `feat/abc-${id.slice(-1)}`,
+      state,
+      status: 'running',
+      steps: [],
+      pendingApproval: null,
+      startedAt: 0,
+    };
+  }
+
+  it('LIST-MULTI-001: two runs targeting the same project → "Running (2)" badge', () => {
+    (useGlobalActiveRuns as unknown as Mock).mockReturnValue([
+      makeRun('r-1', 'p-1', 'running'),
+      makeRun('r-2', 'p-1', 'implementing'),
+    ]);
+    render(
+      <ProjectList
+        projects={[makeProject('p-1', 'Alpha')]}
+        loading={false}
+        error={null}
+        onRefresh={noopAsync}
+        onAdd={noop}
+        onOpen={noop}
+      />,
+    );
+    expect(screen.getByText(/^Running \(2\)$/)).toBeInTheDocument();
+  });
+
+  it('LIST-MULTI-002: any run awaiting approval → "Awaiting (N)" wins over "Running (N)"', () => {
+    (useGlobalActiveRuns as unknown as Mock).mockReturnValue([
+      makeRun('r-1', 'p-1', 'running'),
+      makeRun('r-2', 'p-1', 'awaitingApproval'),
+    ]);
+    render(
+      <ProjectList
+        projects={[makeProject('p-1', 'Alpha')]}
+        loading={false}
+        error={null}
+        onRefresh={noopAsync}
+        onAdd={noop}
+        onOpen={noop}
+      />,
+    );
+    expect(screen.getByText(/^Awaiting \(2\)$/)).toBeInTheDocument();
+  });
+
+  it('LIST-MULTI-003: single run keeps singular label (no count suffix)', () => {
+    (useGlobalActiveRuns as unknown as Mock).mockReturnValue([
+      makeRun('r-1', 'p-1', 'running'),
+    ]);
+    render(
+      <ProjectList
+        projects={[makeProject('p-1', 'Alpha')]}
+        loading={false}
+        error={null}
+        onRefresh={noopAsync}
+        onAdd={noop}
+        onOpen={noop}
+      />,
+    );
+    expect(screen.getByText('Running')).toBeInTheDocument();
+    expect(screen.queryByText(/^Running \(/)).not.toBeInTheDocument();
   });
 });

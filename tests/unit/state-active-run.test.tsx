@@ -2,22 +2,18 @@
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { useEffect } from 'react';
-import { useActiveRun } from '../../src/renderer/state/active-run';
+import { useActiveRuns } from '../../src/renderer/state/active-run';
 import type { IpcApi, IpcResult } from '../../src/shared/ipc';
 import type { Run } from '../../src/shared/schema/run';
 
 /**
- * ACTIVE-RUN-001..006 — `useActiveRun` hook tests.
+ * ACTIVE-RUNS-001..006 — `useActiveRuns(projectId)` hook tests (#GH-81).
  *
- * The hook subscribes to `window.api.runs.{ current(), onCurrentChanged() }`.
- * Since `@testing-library/react`'s `renderHook` may or may not be available
- * in this version, we render a tiny `<HookConsumer />` component that calls
- * the hook and stashes the latest value into a ref so tests can read it.
- *
- * Patterns mirror `tests/unit/views-project-detail.test.tsx`:
+ * The plural hook subscribes to `window.api.runs.{ listActive(), onListChanged() }`.
+ * Mirrors the same patterns as the deleted `useActiveRun` (singular) tests:
  *  - Build a full `IpcApi` stub via `installApi()` and pin it on `window.api`.
- *  - Capture the registered `onCurrentChanged` listener via a `vi.fn()`
- *    `.mockImplementation` so tests can fire events directly.
+ *  - Capture the registered `onListChanged` listener via a `vi.fn()` mock
+ *    so tests can fire events directly.
  *  - `afterEach` deletes `window.api` and resets all mocks.
  */
 
@@ -28,15 +24,12 @@ declare global {
 }
 
 interface CapturedHook {
-  /** Latest run returned by the hook (re-rendered on every change). */
-  latest: Run | null;
+  /** Latest runs[] returned by the hook (re-rendered on every change). */
+  latest: Run[];
   /** All values seen across renders (for ordering assertions). */
-  history: (Run | null)[];
+  history: Run[][];
 }
 
-// Render a small consumer that drives the hook. We use a ref-style external
-// captor so tests can inspect what the hook returned without depending on
-// `renderHook` (whose API differs across React Testing Library versions).
 function HookConsumer({
   projectId,
   capture,
@@ -44,58 +37,47 @@ function HookConsumer({
   projectId: string;
   capture: CapturedHook;
 }): null {
-  const value = useActiveRun(projectId);
+  const value = useActiveRuns(projectId);
   useEffect(() => {
     capture.latest = value;
     capture.history.push(value);
-    // We intentionally depend on the identity of `value` so every change is
-    // observed.
   }, [value, capture]);
   return null;
 }
 
 interface ApiStub {
   api: IpcApi;
-  runsCurrent: Mock;
-  runsOnCurrentChanged: Mock;
-  /** Manual fire — invokes the listener registered via onCurrentChanged. */
-  fireCurrentChanged: (e: { run: Run | null }) => void;
+  runsListActive: Mock;
+  runsOnListChanged: Mock;
+  /** Manual fire — invokes the listener registered via onListChanged. */
+  fireListChanged: (e: { runs: Run[] }) => void;
 }
 
 function installApi(opts: {
-  /** Test-friendly shorthand: `current.data` is the Run (or null) — the
-   *  helper wraps it in the IPC `{ run: Run | null }` envelope. */
-  current?: { ok: true; data: Run | null } | { ok: false; error: { code: string; message: string } };
+  /** runs[] returned from listActive on mount. */
+  listActive?: { ok: true; data: Run[] } | { ok: false; error: { code: string; message: string } };
 }): ApiStub {
   const unusedErr = (): IpcResult<never> => ({
     ok: false,
     error: { code: 'NOT_USED_IN_FE_TESTS', message: '' },
   });
 
-  let listener: ((e: { run: Run | null }) => void) | null = null;
+  let listener: ((e: { runs: Run[] }) => void) | null = null;
 
-  // Convert the test's flat `data: Run | null` into the IPC contract's
-  // `data: { run: Run | null }` envelope so the hook (which destructures
-  // `data.run`) sees the right shape.
-  const currentResult: IpcResult<{ run: Run | null }> = opts.current
-    ? opts.current.ok
-      ? { ok: true, data: { run: opts.current.data } }
-      : opts.current
-    : { ok: true, data: { run: null } };
+  const listResult: IpcResult<{ runs: Run[] }> = opts.listActive
+    ? opts.listActive.ok
+      ? { ok: true, data: { runs: opts.listActive.data } }
+      : opts.listActive
+    : { ok: true, data: { runs: [] } };
 
-  const runsCurrent = vi.fn().mockResolvedValue(currentResult);
-  const runsOnCurrentChanged = vi.fn(
-    (cb: (e: { run: Run | null }) => void) => {
-      listener = cb;
-      return () => {
-        listener = null;
-      };
-    },
-  );
+  const runsListActive = vi.fn().mockResolvedValue(listResult);
+  const runsOnListChanged = vi.fn((cb: (e: { runs: Run[] }) => void) => {
+    listener = cb;
+    return () => {
+      listener = null;
+    };
+  });
 
-  // Build a complete `IpcApi` so renderer code that accidentally pokes other
-  // namespaces doesn't blow up. Only `runs.current` and `runs.onCurrentChanged`
-  // are exercised by these tests.
   const api: IpcApi = {
     ping: vi.fn<IpcApi['ping']>().mockResolvedValue({ reply: 'pong', receivedAt: 0 }),
     claude: {
@@ -144,24 +126,20 @@ function installApi(opts: {
       listJiraProjects: vi.fn() as unknown as IpcApi['connections']['listJiraProjects'],
       listBranches: vi.fn() as unknown as IpcApi['connections']['listBranches'],
     },
-    // Cast so we can install `runs` even though IpcApi['runs'] is a typed
-    // interface — Agent B is responsible for the schema, we just need the
-    // runtime shape for the hook to call against.
     runs: {
       start: vi.fn() as unknown as IpcApi['runs']['start'],
       cancel: vi.fn() as unknown as IpcApi['runs']['cancel'],
       approve: vi.fn() as unknown as IpcApi['runs']['approve'],
       reject: vi.fn() as unknown as IpcApi['runs']['reject'],
       modify: vi.fn() as unknown as IpcApi['runs']['modify'],
-      current: runsCurrent as unknown as IpcApi['runs']['current'],
+      current: vi.fn() as unknown as IpcApi['runs']['current'],
+      listActive: runsListActive as unknown as IpcApi['runs']['listActive'],
       listHistory: vi.fn() as unknown as IpcApi['runs']['listHistory'],
-      onCurrentChanged:
-        runsOnCurrentChanged as unknown as IpcApi['runs']['onCurrentChanged'],
-      onStateChanged: vi.fn(() => () => {}) as unknown as IpcApi['runs']['onStateChanged'],
-      // #8: extend with readLog. Hook tests don't exercise it, but a
-      // complete bridge keeps any future code reachable from useActiveRun
-      // happy.
+      delete: vi.fn() as unknown as IpcApi['runs']['delete'],
       readLog: vi.fn().mockResolvedValue({ ok: true, data: { entries: [] } }),
+      onCurrentChanged: vi.fn(() => () => {}) as unknown as IpcApi['runs']['onCurrentChanged'],
+      onListChanged: runsOnListChanged as unknown as IpcApi['runs']['onListChanged'],
+      onStateChanged: vi.fn(() => () => {}) as unknown as IpcApi['runs']['onStateChanged'],
     } as unknown as IpcApi['runs'],
     dialog: {
       selectFolder: vi.fn() as unknown as IpcApi['dialog']['selectFolder'],
@@ -181,7 +159,6 @@ function installApi(opts: {
     },
     skills: {
       list: vi.fn() as unknown as IpcApi['skills']['list'],
-      
       install: vi.fn() as unknown as IpcApi['skills']['install'],
       remove: vi.fn() as unknown as IpcApi['skills']['remove'],
       findStart: vi.fn() as unknown as IpcApi['skills']['findStart'],
@@ -198,9 +175,9 @@ function installApi(opts: {
   (window as { api?: IpcApi }).api = api;
   return {
     api,
-    runsCurrent,
-    runsOnCurrentChanged,
-    fireCurrentChanged: (e) => {
+    runsListActive,
+    runsOnListChanged,
+    fireListChanged: (e) => {
       if (listener) listener(e);
     },
   };
@@ -228,160 +205,121 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('useActiveRun — ACTIVE-RUN', () => {
-  // -------------------------------------------------------------------------
-  // ACTIVE-RUN-001 — mount calls runs.current; returns matching run
-  // -------------------------------------------------------------------------
-  describe('ACTIVE-RUN-001 mount + projectId match', () => {
-    it('ACTIVE-RUN-001: mount → runs.current called; matching projectId returned', async () => {
-      const run = makeRun({ projectId: 'p-1' });
-      const stub = installApi({ current: { ok: true, data: run } });
-      const cap: CapturedHook = { latest: null, history: [] };
+describe('useActiveRuns — ACTIVE-RUNS (#GH-81)', () => {
+  describe('ACTIVE-RUNS-001 mount + projectId filter', () => {
+    it('ACTIVE-RUNS-001: mount → listActive called; matching projectId entries returned', async () => {
+      const mine = makeRun({ id: 'r-1', projectId: 'p-1' });
+      const other = makeRun({ id: 'r-2', projectId: 'OTHER' });
+      const stub = installApi({ listActive: { ok: true, data: [mine, other] } });
+      const cap: CapturedHook = { latest: [], history: [] };
 
       render(<HookConsumer projectId="p-1" capture={cap} />);
 
       await waitFor(() => {
-        expect(stub.runsCurrent).toHaveBeenCalledTimes(1);
+        expect(stub.runsListActive).toHaveBeenCalledTimes(1);
       });
       await waitFor(() => {
-        expect(cap.latest).not.toBeNull();
+        expect(cap.latest).toHaveLength(1);
       });
-      expect(cap.latest?.projectId).toBe('p-1');
-      expect(cap.latest?.id).toBe('r-1');
+      expect(cap.latest[0]?.projectId).toBe('p-1');
+      expect(cap.latest[0]?.id).toBe('r-1');
     });
   });
 
-  // -------------------------------------------------------------------------
-  // ACTIVE-RUN-002 — different projectId → null
-  // -------------------------------------------------------------------------
-  describe('ACTIVE-RUN-002 mount + projectId mismatch', () => {
-    it('ACTIVE-RUN-002: active run is for OTHER project → returns null', async () => {
-      const run = makeRun({ projectId: 'OTHER' });
-      installApi({ current: { ok: true, data: run } });
-      const cap: CapturedHook = { latest: null, history: [] };
+  describe('ACTIVE-RUNS-002 mount with zero matching runs', () => {
+    it('ACTIVE-RUNS-002: only OTHER project runs in flight → empty array (NOT null)', async () => {
+      const other = makeRun({ projectId: 'OTHER' });
+      installApi({ listActive: { ok: true, data: [other] } });
+      const cap: CapturedHook = { latest: [], history: [] };
 
       render(<HookConsumer projectId="p-1" capture={cap} />);
-
-      // Allow the initial fetch to settle.
       await new Promise((r) => setTimeout(r, 20));
-      expect(cap.latest).toBeNull();
+      expect(cap.latest).toEqual([]);
     });
   });
 
-  // -------------------------------------------------------------------------
-  // ACTIVE-RUN-003 — onCurrentChanged matching projectId updates state
-  // -------------------------------------------------------------------------
-  describe('ACTIVE-RUN-003 onCurrentChanged matching projectId', () => {
-    it('ACTIVE-RUN-003: matching projectId event updates the hook value', async () => {
-      const stub = installApi({ current: { ok: true, data: null } });
-      const cap: CapturedHook = { latest: null, history: [] };
+  describe('ACTIVE-RUNS-003 multiple concurrent runs for the project', () => {
+    it('ACTIVE-RUNS-003: two matching + one other → returns 2-element array', async () => {
+      const r1 = makeRun({ id: 'r-1', projectId: 'p-1', ticketKey: 'ABC-1' });
+      const r2 = makeRun({ id: 'r-2', projectId: 'p-1', ticketKey: 'ABC-2' });
+      const r3 = makeRun({ id: 'r-3', projectId: 'OTHER', ticketKey: 'XYZ-9' });
+      installApi({ listActive: { ok: true, data: [r1, r2, r3] } });
+      const cap: CapturedHook = { latest: [], history: [] };
 
       render(<HookConsumer projectId="p-1" capture={cap} />);
-
-      // Wait for the listener to be registered.
       await waitFor(() => {
-        expect(stub.runsOnCurrentChanged).toHaveBeenCalledTimes(1);
+        expect(cap.latest).toHaveLength(2);
       });
-
-      const run = makeRun({ projectId: 'p-1', state: 'preparing' });
-      act(() => {
-        stub.fireCurrentChanged({ run });
-      });
-
-      await waitFor(() => {
-        expect(cap.latest).not.toBeNull();
-      });
-      expect(cap.latest?.id).toBe('r-1');
-      expect(cap.latest?.state).toBe('preparing');
+      expect(cap.latest.map((r) => r.id).sort()).toEqual(['r-1', 'r-2']);
     });
   });
 
-  // -------------------------------------------------------------------------
-  // ACTIVE-RUN-004 — onCurrentChanged non-matching projectId is ignored
-  // -------------------------------------------------------------------------
-  describe('ACTIVE-RUN-004 onCurrentChanged non-matching projectId', () => {
-    it('ACTIVE-RUN-004: events for OTHER project do NOT change the hook value', async () => {
-      const stub = installApi({ current: { ok: true, data: null } });
-      const cap: CapturedHook = { latest: null, history: [] };
+  describe('ACTIVE-RUNS-004 onListChanged updates state', () => {
+    it('ACTIVE-RUNS-004: list-changed event with new runs → hook value updates', async () => {
+      const stub = installApi({ listActive: { ok: true, data: [] } });
+      const cap: CapturedHook = { latest: [], history: [] };
 
       render(<HookConsumer projectId="p-1" capture={cap} />);
+      await waitFor(() => {
+        expect(stub.runsOnListChanged).toHaveBeenCalledTimes(1);
+      });
+
+      const r1 = makeRun({ id: 'r-1', projectId: 'p-1' });
+      const r2 = makeRun({ id: 'r-2', projectId: 'p-1', state: 'planning' });
+      act(() => {
+        stub.fireListChanged({ runs: [r1, r2] });
+      });
 
       await waitFor(() => {
-        expect(stub.runsOnCurrentChanged).toHaveBeenCalledTimes(1);
+        expect(cap.latest).toHaveLength(2);
       });
-
-      const otherRun = makeRun({ projectId: 'OTHER' });
-      act(() => {
-        stub.fireCurrentChanged({ run: otherRun });
-      });
-
-      // Allow microtasks to flush.
-      await new Promise((r) => setTimeout(r, 10));
-      expect(cap.latest).toBeNull();
     });
 
-    it('ACTIVE-RUN-004: null event clears the hook value (run completed)', async () => {
+    it('ACTIVE-RUNS-004: empty list-changed clears all entries (all runs terminal)', async () => {
       const stub = installApi({
-        current: { ok: true, data: makeRun({ projectId: 'p-1' }) },
+        listActive: { ok: true, data: [makeRun({ projectId: 'p-1' })] },
       });
-      const cap: CapturedHook = { latest: null, history: [] };
+      const cap: CapturedHook = { latest: [], history: [] };
 
       render(<HookConsumer projectId="p-1" capture={cap} />);
-
       await waitFor(() => {
-        expect(cap.latest).not.toBeNull();
+        expect(cap.latest).toHaveLength(1);
       });
 
       act(() => {
-        stub.fireCurrentChanged({ run: null });
+        stub.fireListChanged({ runs: [] });
       });
-
       await waitFor(() => {
-        expect(cap.latest).toBeNull();
+        expect(cap.latest).toEqual([]);
       });
     });
   });
 
-  // -------------------------------------------------------------------------
-  // ACTIVE-RUN-005 — unsubscribe on unmount
-  // -------------------------------------------------------------------------
-  describe('ACTIVE-RUN-005 unsubscribe on unmount', () => {
-    it('ACTIVE-RUN-005: unmount calls the unsubscribe returned by onCurrentChanged', async () => {
+  describe('ACTIVE-RUNS-005 unsubscribe on unmount', () => {
+    it('ACTIVE-RUNS-005: unmount calls the unsubscribe returned by onListChanged', async () => {
       const unsub = vi.fn();
-      const stub = installApi({ current: { ok: true, data: null } });
-      // Override the registration to inject our spy unsubscribe.
-      stub.runsOnCurrentChanged.mockImplementation(() => unsub);
+      const stub = installApi({ listActive: { ok: true, data: [] } });
+      stub.runsOnListChanged.mockImplementation(() => unsub);
 
-      const cap: CapturedHook = { latest: null, history: [] };
-      const { unmount } = render(
-        <HookConsumer projectId="p-1" capture={cap} />,
-      );
-
+      const cap: CapturedHook = { latest: [], history: [] };
+      const { unmount } = render(<HookConsumer projectId="p-1" capture={cap} />);
       await waitFor(() => {
-        expect(stub.runsOnCurrentChanged).toHaveBeenCalledTimes(1);
+        expect(stub.runsOnListChanged).toHaveBeenCalledTimes(1);
       });
-
       unmount();
       expect(unsub).toHaveBeenCalled();
     });
   });
 
-  // -------------------------------------------------------------------------
-  // ACTIVE-RUN-006 — window.api === undefined
-  // -------------------------------------------------------------------------
-  describe('ACTIVE-RUN-006 missing IPC bridge', () => {
-    it('ACTIVE-RUN-006: window.api === undefined → hook returns null without throwing', async () => {
-      // No `installApi()` call — window.api is unset.
+  describe('ACTIVE-RUNS-006 missing IPC bridge', () => {
+    it('ACTIVE-RUNS-006: window.api === undefined → hook returns empty array without throwing', async () => {
       delete (window as { api?: IpcApi }).api;
-      const cap: CapturedHook = { latest: null, history: [] };
-
-      // Should NOT throw on render.
+      const cap: CapturedHook = { latest: [], history: [] };
       expect(() => {
         render(<HookConsumer projectId="p-1" capture={cap} />);
       }).not.toThrow();
-
       await new Promise((r) => setTimeout(r, 10));
-      expect(cap.latest).toBeNull();
+      expect(cap.latest).toEqual([]);
     });
   });
 });

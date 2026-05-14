@@ -718,3 +718,107 @@
   gap: var(--space-3);
   margin-top: var(--space-2);
 }
+
+/*
+ * ActiveExecutionStack (#GH-81). When N>1 runs are in flight on the
+ * same project, we wrap the regular ActiveExecutionPanel in a stack
+ * that adds a compact header strip on top. The strip lists every run;
+ * clicking a row swaps which run gets the full panel beneath. Strip
+ * lives in the same hover-overlay slot the singular panel used, so
+ * the page-level `data-active-run` chrome (bottom clearance via the
+ * `--active-clearance` custom prop) still applies.
+ */
+/*
+ * The stack takes over the fixed positioning that .activePanel uses when
+ * rendered standalone (N=1 case). When N>1, the panel is rendered INSIDE
+ * the stack — `.activeStack .activePanel` below promotes it back to
+ * in-flow so the header strip sits cleanly above it as a single unit.
+ */
+.activeStack {
+  position: fixed;
+  left: 240px;
+  right: 0;
+  bottom: 0;
+  padding: 0 var(--space-7) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  z-index: 50;
+}
+
+@media (max-width: 1024px) {
+  .activeStack {
+    left: 200px;
+    padding: 0 var(--space-5) var(--space-4);
+  }
+}
+
+/* Panel inside the stack: drop its own fixed positioning so the stack
+ * (which is fixed) owns the viewport anchor. The inner card chrome
+ * remains intact. */
+.activeStack .activePanel {
+  position: static;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  padding: 0;
+}
+
+.activeStackStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-bottom: none;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.activeStackRow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 10px;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.activeStackRow:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-strong);
+}
+
+.activeStackRowFocused {
+  color: var(--text-primary);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.activeStackTicket {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.activeStackRowFocused .activeStackTicket {
+  color: var(--accent);
+}
+
+.activeStackState {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: inherit;
+  opacity: 0.85;
+}

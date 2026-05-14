@@ -48,7 +48,7 @@ const BRIDGE_UNAVAILABLE = 'IPC bridge unavailable';
  *   - `loadMore()` → fetch next page using `nextCursor` from the previous response.
  *   - `refresh()` → reset state, fetch first page (under the same query).
  *
- * Per-effect `cancelled` flag pattern (matches `useTickets`/`useActiveRun`):
+ * Per-effect `cancelled` flag pattern (matches `useTickets`/`useActiveRuns`):
  * when the query changes mid-flight, the in-flight request's setState calls
  * are ignored so a stale page can't land on top of a fresh query.
  *

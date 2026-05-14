@@ -43,7 +43,7 @@ import {
 import { ProjectSettingsTab } from './ProjectSettingsTab';
 import { normalizePriority, type PriorityBucket } from '../lib/priority';
 import { formatRelative } from '../lib/time';
-import { useActiveRun } from '../state/active-run';
+import { useActiveRuns } from '../state/active-run';
 import { useAutoMode } from '../state/auto-mode';
 import { useRunLog } from '../state/run-log';
 import { stripAnsi } from '../components/ansi';
@@ -572,7 +572,14 @@ export function ProjectDetail({
       return next;
     });
   }, []);
-  const activeRun = useActiveRun(projectId);
+  const activeRuns = useActiveRuns(projectId);
+  // First-of-many for legacy callsites that need a singular reference
+  // (the table-cell "is this row active?" check, the page-level
+  // `data-active-run` attribute, the SettingsTab gate). #GH-81 swaps the
+  // hook to plural; these sites keep first/null semantics until they
+  // need richer multi-run treatment (the only multi-run UI surface
+  // shipping in this PR is the ActiveExecutionStack below).
+  const activeRun = activeRuns.length > 0 ? (activeRuns[0] ?? null) : null;
   const [autoMode, setAutoMode] = useAutoMode(projectId);
 
   // Debounce search keystrokes → committedSearch. 300ms feels responsive
@@ -675,11 +682,15 @@ export function ProjectDetail({
     })();
   };
 
-  const handleCancelActive = (): void => {
-    if (activeRun === null) return;
+  /**
+   * Cancel one specific run by id. Pre-#GH-81 this was no-arg and operated
+   * on the single active run; now the caller (ActiveExecutionStack) tells
+   * us which run the user clicked Cancel on.
+   */
+  const handleCancelActive = (runId: string): void => {
     if (typeof window === 'undefined' || !window.api) return;
     const api = window.api;
-    void api.runs.cancel({ runId: activeRun.id }).then((res) => {
+    void api.runs.cancel({ runId }).then((res) => {
       if (!res.ok) {
         setRunBanner({
           kind: 'error',
@@ -1786,13 +1797,100 @@ export function ProjectDetail({
         );
       })()}
 
-      {activeRun && (
-        <ActiveExecutionPanel
-          run={activeRun}
+      {activeRuns.length > 0 && (
+        <ActiveExecutionStack
+          runs={activeRuns}
           onOpenExecution={onOpenExecution}
           onCancel={handleCancelActive}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * `<ActiveExecutionStack>` — multi-run aware wrapper (#GH-81).
+ *
+ * - N=1: renders the existing `<ActiveExecutionPanel>` inline. Back-compat
+ *   by feel; users with one run see what they've always seen.
+ * - N>1: renders a compact header strip listing every run + ONE expanded
+ *   `<ActiveExecutionPanel>` for whichever run is currently "focused".
+ *   Clicking a header row switches focus.
+ *
+ * Default focus: first run by insertion order (matches the runner's
+ * `current()` legacy semantics). Manual selection survives state
+ * transitions on the run but resets if the focused run terminates and
+ * is removed from the active set.
+ */
+interface ActiveExecutionStackProps {
+  runs: Run[];
+  onOpenExecution?: (runId: string) => void;
+  onCancel: (runId: string) => void;
+}
+
+function ActiveExecutionStack({
+  runs,
+  onOpenExecution,
+  onCancel,
+}: ActiveExecutionStackProps): JSX.Element | null {
+  // Tracks the user's explicit focus selection. `null` means "use the
+  // implicit default" (first run); manually-set values survive across
+  // run state transitions as long as the focused run is still in `runs`.
+  const [focusedRunId, setFocusedRunId] = useState<string | null>(null);
+
+  if (runs.length === 0) return null;
+
+  // Resolve which run is currently expanded. Manual focus wins; otherwise
+  // first by insertion. If the manually-focused run vanished (terminated
+  // and dropped from the runner's active map), fall back to the implicit
+  // default rather than rendering nothing.
+  const focused =
+    runs.find((r) => r.id === focusedRunId) ?? runs[0];
+
+  if (focused === undefined) return null;
+
+  // N=1: single-run back-compat layout.
+  if (runs.length === 1) {
+    return (
+      <ActiveExecutionPanel
+        run={focused}
+        onOpenExecution={onOpenExecution}
+        onCancel={() => onCancel(focused.id)}
+      />
+    );
+  }
+
+  // N>1: stacked layout. Compact header strip with N rows, full panel
+  // for the currently-focused run rendered below.
+  return (
+    <div className={styles.activeStack} data-testid="active-execution-stack">
+      <div className={styles.activeStackStrip} role="tablist">
+        {runs.map((run) => {
+          const isFocused = run.id === focused.id;
+          return (
+            <button
+              key={run.id}
+              type="button"
+              role="tab"
+              aria-selected={isFocused}
+              className={`${styles.activeStackRow} ${isFocused ? styles.activeStackRowFocused : ''}`}
+              data-testid={`active-stack-row-${run.id}`}
+              data-focused={isFocused}
+              onClick={() => setFocusedRunId(run.id)}
+            >
+              <span className={styles.activeStackTicket}>{run.ticketKey}</span>
+              <span className={styles.activeStackState}>
+                {RUN_STATE_LABELS[run.state]}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <ActiveExecutionPanel
+        run={focused}
+        onOpenExecution={onOpenExecution}
+        onCancel={() => onCancel(focused.id)}
+      />
     </div>
   );
 }
