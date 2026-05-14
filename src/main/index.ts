@@ -97,6 +97,8 @@ import {
 import { RunStore } from './modules/run-store.js';
 import { RunLogStore } from './modules/run-log-store.js';
 import { NodeGitManager } from './modules/git-manager.js';
+import { WorktreeManager } from './modules/worktree-manager.js';
+import { mkdir, readdir, access } from 'node:fs/promises';
 import { StubPrCreator } from './modules/pr-creator.js';
 import { StubJiraUpdater } from './modules/jira-updater.js';
 import { WorkflowRunner } from './modules/workflow-runner.js';
@@ -2404,6 +2406,34 @@ async function initStores(): Promise<void> {
       gitManager: new NodeGitManager({ spawner: new NodeSpawner() }),
       prCreator: new StubPrCreator(),
       jiraUpdater: new StubJiraUpdater(),
+      // #GH-72 PR A: every run gets its own worktree under
+      // <userData>/worktrees/<runId>. Concurrency-enablement (drop app-wide
+      // lock, multi-run UI) lands in PR B.
+      worktreeManager: new WorktreeManager({
+        spawner: new NodeSpawner(),
+        fs: {
+          mkdir: async (p, opts) => {
+            await mkdir(p, { recursive: opts.recursive });
+          },
+          readdir: async (p) => {
+            try {
+              return await readdir(p);
+            } catch (err) {
+              if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+              throw err;
+            }
+          },
+          exists: async (p) => {
+            try {
+              await access(p);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        },
+        worktreesRoot: join(userData, 'worktrees'),
+      }),
       // Read-only adapter — runner uses this only to resolve a ticket's
       // summary by key for branch/commit derivation. Returns mutable copy
       // since the poller's internal cache is ReadonlyArray.
