@@ -252,9 +252,16 @@ describe('src/shared/ipc.ts — Claude Process Manager extension', () => {
     type ManagerModule = typeof import('../../src/main/modules/claude-process-manager');
     type ManagerInstance = InstanceType<ManagerModule['ClaudeProcessManager']>;
 
-    it('ClaudeRunRequest matches manager RunRequest (run() argument)', () => {
+    it('ClaudeRunRequest is structurally assignable to manager RunRequest', () => {
+      // The IPC type is an intentional subset of manager RunRequest: the
+      // manager exposes a `command?: string` override (#GH-85) that the
+      // workflow runner injects per-run from `appConfig.claudeCliPath`,
+      // but the IPC handler in `src/main/index.ts` deliberately strips
+      // unknown fields so a renderer cannot smuggle a command. We assert
+      // structural assignability (ClaudeRunRequest → ManagerRunRequest)
+      // instead of strict equality so this invariant is locked in.
       type ManagerRunRequest = Parameters<ManagerInstance['run']>[0];
-      expectTypeOf<ClaudeRunRequest>().toEqualTypeOf<ManagerRunRequest>();
+      expectTypeOf<ClaudeRunRequest>().toMatchTypeOf<ManagerRunRequest>();
     });
 
     it('ClaudeRunResponse matches manager RunResponse (success branch of run())', () => {

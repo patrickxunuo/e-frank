@@ -62,6 +62,16 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/**
+ * Characters we forbid in `claudeCliPath` because the runner spawns
+ * through a shell. Covers POSIX (`;`, `|`, `&`, `<`, `>`, `(`, `)`, `$`,
+ * backtick, `*`, `?`, `~`, `!`, single + double quotes) and Windows
+ * (`%`, `^`) command interpreters, plus control characters (newlines,
+ * tabs, NULL).
+ */
+// eslint-disable-next-line no-control-regex
+const SHELL_UNSAFE_REGEX = /[;|&<>()$`*?~!"'%^\x00-\x1f]/;
+
 function isThemeMode(v: unknown): v is ThemeMode {
   return v === 'light' || v === 'dark' || v === 'system';
 }
@@ -116,14 +126,24 @@ export function validateAppConfig(
     }
   }
 
-  // claudeCliPath
+  // claudeCliPath — defense-in-depth (#GH-85). The runner spawns this
+  // path with `shell: true` (for Windows `.cmd` shim resolution), so we
+  // must reject shell metacharacters and control characters that could
+  // chain a second command (e.g. `claude.exe & calc.exe`). Newlines
+  // would also let the shell parse a separate command line.
   if (raw['claudeCliPath'] !== undefined) {
-    if (raw['claudeCliPath'] !== null && typeof raw['claudeCliPath'] !== 'string') {
+    const v = raw['claudeCliPath'];
+    if (v !== null && typeof v !== 'string') {
       errors.push({ field: 'claudeCliPath', message: 'must be a string or null' });
-    } else if (typeof raw['claudeCliPath'] === 'string' && raw['claudeCliPath'].length > 4096) {
+    } else if (typeof v === 'string' && v.length > 4096) {
       errors.push({ field: 'claudeCliPath', message: 'path too long (max 4096)' });
+    } else if (typeof v === 'string' && SHELL_UNSAFE_REGEX.test(v)) {
+      errors.push({
+        field: 'claudeCliPath',
+        message: 'path contains shell metacharacters or control characters',
+      });
     } else {
-      out.claudeCliPath = raw['claudeCliPath'] as string | null;
+      out.claudeCliPath = v as string | null;
     }
   }
 

@@ -6,18 +6,21 @@
  *
  * Section status:
  *   - Theme — implemented (#GH-84)
- *   - Claude CLI — placeholder, #GH-85 follow-up
+ *   - Claude CLI — implemented (#GH-85)
  *   - Workflow defaults — placeholder, #GH-86 follow-up
  *   - About — implemented (#GH-87)
  */
-import type { JSX } from 'react';
+import { useState, type JSX } from 'react';
 import type { ThemeMode } from '@shared/ipc';
 import { useAppConfig } from '../state/app-config';
 import { useAppInfo } from '../state/app-info';
+import { useClaudeCli } from '../state/claude-cli';
 import { useTheme } from '../state/theme';
 import { Button } from '../components/Button';
 import { RadioCardGroup, type RadioCardOption } from '../components/RadioCardGroup';
 import {
+  IconAlert,
+  IconCheck,
   IconExternal,
   IconFolder,
   IconMonitor,
@@ -31,6 +34,8 @@ import styles from './Settings.module.css';
 /** GitHub URLs the About section's link buttons open via shell.openExternal. */
 const ISSUE_URL = 'https://github.com/patrickxunuo/paperplane/issues/new';
 const RELEASES_URL = 'https://github.com/patrickxunuo/paperplane/releases';
+/** Anthropic install docs — surfaced from the Claude CLI section's not-found state. */
+const CLAUDE_INSTALL_DOCS_URL = 'https://docs.anthropic.com/en/docs/claude-code/quickstart';
 
 interface SettingsSection {
   /** Section anchor (used as `#hash` in the rail and as DOM id). */
@@ -53,7 +58,7 @@ const SECTIONS: ReadonlyArray<SettingsSection> = [
     id: 'claude-cli',
     label: 'Claude CLI',
     blurb: 'Discovery, version check, optional override path.',
-    followUp: 'GH-85',
+    followUp: null,
   },
   {
     id: 'defaults',
@@ -98,6 +103,9 @@ const THEME_OPTIONS: RadioCardOption<ThemeMode>[] = [
 function SectionBody({ section }: { section: SettingsSection }): JSX.Element {
   if (section.id === 'theme') {
     return <ThemeSection />;
+  }
+  if (section.id === 'claude-cli') {
+    return <ClaudeCliSection />;
   }
   if (section.id === 'about') {
     return <AboutSection />;
@@ -144,6 +152,266 @@ function ThemeSection(): JSX.Element {
           Loading saved preference…
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * Claude CLI section (#GH-85). Surfaces the discovered Claude CLI path +
+ * version + lets the user override the path. Behind the scenes the
+ * override is persisted to `appConfig.claudeCliPath`; the workflow
+ * runner reads it per-run, so changes take effect on the next run with
+ * no app restart.
+ *
+ * Three top-level states drive the rendering:
+ *   - `found`        — green check + path + version + Refresh button
+ *   - `not-found`    — red exclamation + install-docs link
+ *   - `error`        — IPC failure banner (rare; usually bridge missing)
+ *
+ * Below the status panel the override row is always visible — typing a
+ * path enables Test → on success enables Save. Clear-override is only
+ * enabled when a `source === 'override'` is currently configured. The
+ * Test button gates Save so the user can't persist a broken path.
+ */
+function ClaudeCliSection(): JSX.Element {
+  const cli = useClaudeCli();
+  const [overrideInput, setOverrideInput] = useState<string>('');
+  const [testing, setTesting] = useState<boolean>(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  // `true` only after a successful Test against the CURRENT overrideInput.
+  // Editing the input again resets this to false so the user has to re-Test.
+  const [testedPath, setTestedPath] = useState<string | null>(null);
+
+  async function onTest(): Promise<void> {
+    const path = overrideInput.trim();
+    if (path === '') return;
+    setTesting(true);
+    setValidationError(null);
+    setTestedPath(null);
+    const result = await cli.testOverride(path);
+    setTesting(false);
+    if (!result.ok) {
+      const friendly =
+        result.error.code === 'PATH_NOT_FOUND'
+          ? 'File does not exist at that path.'
+          : result.error.code === 'NOT_EXECUTABLE'
+            ? "That file isn't executable, or `--version` failed."
+            : result.error.code === 'NOT_CLAUDE'
+              ? "That binary's --version output doesn't look like Claude CLI."
+              : result.error.message || result.error.code;
+      setValidationError(friendly);
+      return;
+    }
+    setTestedPath(path);
+  }
+
+  async function onSave(): Promise<void> {
+    const path = overrideInput.trim();
+    if (path === '' || path !== testedPath) return;
+    const result = await cli.saveOverride(path);
+    if (!result.ok) {
+      dispatchToast({
+        type: 'error',
+        title: 'Could not save override',
+        body: result.error.message || result.error.code,
+      });
+      return;
+    }
+    setOverrideInput('');
+    setTestedPath(null);
+    setValidationError(null);
+    dispatchToast({
+      type: 'success',
+      title: 'Override saved',
+      body: `Claude CLI will spawn from ${path} on the next run.`,
+    });
+  }
+
+  async function onClear(): Promise<void> {
+    const result = await cli.clearOverride();
+    if (!result.ok) {
+      dispatchToast({
+        type: 'error',
+        title: 'Could not clear override',
+        body: result.error.message || result.error.code,
+      });
+      return;
+    }
+    setOverrideInput('');
+    setTestedPath(null);
+    setValidationError(null);
+    dispatchToast({
+      type: 'success',
+      title: 'Override cleared',
+      body: 'Claude CLI will be discovered via PATH on the next run.',
+    });
+  }
+
+  async function onOpenInstallDocs(): Promise<void> {
+    if (typeof window === 'undefined' || !window.api) return;
+    await window.api.shell.openExternal({ url: CLAUDE_INSTALL_DOCS_URL });
+  }
+
+  const saveDisabled = testedPath === null || testedPath !== overrideInput.trim();
+
+  return (
+    <div className={styles.cliCard} data-testid="settings-claude-cli-section">
+      {cli.state === 'loading' && (
+        <p
+          className={styles.cliHint}
+          data-testid="settings-claude-cli-loading"
+          role="status"
+        >
+          Probing Claude CLI…
+        </p>
+      )}
+
+      {cli.state === 'found' && (
+        <div className={styles.cliStatus} data-status="found">
+          <div className={styles.cliStatusIcon} data-testid="settings-claude-cli-status-found">
+            <IconCheck size={16} aria-hidden />
+          </div>
+          <dl className={styles.cliInfoGrid}>
+            <dt className={styles.cliInfoLabel}>Resolved path</dt>
+            <dd
+              className={styles.cliInfoValue}
+              data-testid="settings-claude-cli-resolved-path"
+            >
+              {cli.resolvedPath}
+              {cli.source === 'override' && (
+                <span className={styles.cliSourceTag}> (override)</span>
+              )}
+            </dd>
+            <dt className={styles.cliInfoLabel}>Version</dt>
+            <dd className={styles.cliInfoValue} data-testid="settings-claude-cli-version">
+              {cli.version}
+            </dd>
+          </dl>
+        </div>
+      )}
+
+      {cli.state === 'not-found' && (
+        <div className={styles.cliStatus} data-status="not-found">
+          <div
+            className={styles.cliStatusIcon}
+            data-tone="danger"
+            data-testid="settings-claude-cli-status-not-found"
+          >
+            <IconAlert size={18} aria-hidden />
+          </div>
+          <div className={styles.cliNotFoundBody}>
+            <p className={styles.cliNotFoundTitle}>Claude CLI not found</p>
+            <p className={styles.cliNotFoundCopy}>
+              {cli.source === 'override'
+                ? "The configured override path doesn't point at a working Claude CLI. Clear the override or replace it below."
+                : "Couldn't find `claude` on PATH. Install Claude Code, or set an override path below."}
+            </p>
+            <Button
+              variant="ghost"
+              leadingIcon={<IconExternal size={14} />}
+              onClick={() => {
+                void onOpenInstallDocs();
+              }}
+              data-testid="settings-claude-cli-install-link"
+            >
+              Install Claude Code
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {cli.state === 'error' && (
+        <p
+          className={styles.cliErrorBanner}
+          data-testid="settings-claude-cli-error"
+          role="alert"
+        >
+          Couldn't probe Claude CLI: {cli.error}
+        </p>
+      )}
+
+      <div className={styles.cliActionsRow}>
+        <Button
+          variant="ghost"
+          leadingIcon={<IconRefresh size={14} />}
+          onClick={() => {
+            void cli.refresh();
+          }}
+          disabled={cli.state === 'loading'}
+          data-testid="settings-claude-cli-refresh"
+        >
+          Refresh
+        </Button>
+      </div>
+
+      <div className={styles.cliOverrideRow}>
+        <label className={styles.cliOverrideLabel} htmlFor="claude-cli-override-input">
+          Override path
+        </label>
+        <input
+          id="claude-cli-override-input"
+          type="text"
+          className={styles.cliOverrideInput}
+          value={overrideInput}
+          onChange={(e) => {
+            setOverrideInput(e.target.value);
+            setTestedPath(null);
+            setValidationError(null);
+          }}
+          placeholder="/custom/path/to/claude"
+          data-testid="settings-claude-cli-override-input"
+        />
+        <div className={styles.cliOverrideButtons}>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              void onTest();
+            }}
+            disabled={overrideInput.trim() === '' || testing}
+            data-testid="settings-claude-cli-test"
+          >
+            {testing ? 'Testing…' : 'Test'}
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              void onSave();
+            }}
+            disabled={saveDisabled}
+            data-testid="settings-claude-cli-save"
+          >
+            Save
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              void onClear();
+            }}
+            disabled={cli.source !== 'override'}
+            data-testid="settings-claude-cli-clear"
+          >
+            Clear override
+          </Button>
+        </div>
+        {validationError !== null && (
+          <p
+            className={styles.cliValidationError}
+            data-testid="settings-claude-cli-validation-error"
+            role="alert"
+          >
+            {validationError}
+          </p>
+        )}
+        {testedPath !== null && testedPath === overrideInput.trim() && (
+          <p
+            className={styles.cliValidationOk}
+            data-testid="settings-claude-cli-validation-ok"
+            role="status"
+          >
+            Looks like Claude CLI — click Save to persist.
+          </p>
+        )}
+      </div>
     </div>
   );
 }

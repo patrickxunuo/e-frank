@@ -387,6 +387,13 @@ interface HarnessOptions {
   prCreator?: PrCreator;
   jiraUpdater?: JiraUpdater;
   worktreeManager?: FakeWorktreeManager;
+  /** #GH-85 — feeds claudeCliPath into the runner per-spawn. */
+  appConfigAdapter?: {
+    get: () => Promise<
+      | { ok: true; data: { claudeCliPath: string | null } }
+      | { ok: false; error: { code: string; message: string } }
+    >;
+  };
 }
 
 interface Harness {
@@ -448,6 +455,7 @@ async function buildHarness(opts: HarnessOptions = {}): Promise<Harness> {
     prCreator,
     jiraUpdater,
     worktreeManager: fakeWorktree as unknown as WorktreeManager,
+    appConfigAdapter: opts.appConfigAdapter,
   });
 
   const stateEvents: RunStateEvent[] = [];
@@ -2197,6 +2205,52 @@ describe('WorkflowRunner', () => {
       // followed by an exit-event will route to whichever run is "last".
       // For this PR-C test we just verify B remains in the active map.
       expect(h.runner.listActive().some((r) => r.id === startB.data.run.id)).toBe(true);
+    });
+  });
+
+  describe('WFR-CLI-OVERRIDE (#GH-85) — claudeCliPath threaded through per-run', () => {
+    it('WFR-CLI-OVERRIDE-001: appConfig.claudeCliPath set → claudeManager.run receives command override', async () => {
+      const h = await buildHarness({
+        appConfigAdapter: {
+          get: async () => ({
+            ok: true,
+            data: { claudeCliPath: '/custom/path/to/claude' },
+          }),
+        },
+      });
+      const start = await h.runner.start({ projectId: 'p-1', ticketKey: 'ABC-1' });
+      expect(start.ok).toBe(true);
+      // Drive the run through to claudeManager.run (worktree add → claude spawn).
+      // Drain the microtask queue so awaited setup completes.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(h.fakeClaude.runRequests.length).toBeGreaterThanOrEqual(1);
+      expect(h.fakeClaude.runRequests[0]?.command).toBe('/custom/path/to/claude');
+    });
+
+    it('WFR-CLI-OVERRIDE-002: appConfig.claudeCliPath = null → no command override (uses CPM default)', async () => {
+      const h = await buildHarness({
+        appConfigAdapter: {
+          get: async () => ({
+            ok: true,
+            data: { claudeCliPath: null },
+          }),
+        },
+      });
+      const start = await h.runner.start({ projectId: 'p-1', ticketKey: 'ABC-1' });
+      expect(start.ok).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(h.fakeClaude.runRequests[0]?.command).toBeUndefined();
+    });
+
+    it('WFR-CLI-OVERRIDE-003: no appConfigAdapter wired → no command override', async () => {
+      const h = await buildHarness();
+      const start = await h.runner.start({ projectId: 'p-1', ticketKey: 'ABC-1' });
+      expect(start.ok).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(h.fakeClaude.runRequests[0]?.command).toBeUndefined();
     });
   });
 });

@@ -172,6 +172,14 @@ export interface RunRequest {
   cwd: string;
   /** Optional override of timeout in ms for this run. */
   timeoutMs?: number;
+  /**
+   * Optional per-run binary override (#GH-85). When set, this spawns
+   * instead of the manager's constructor-provided `command`. The runner
+   * reads `appConfig.claudeCliPath` on each `run()` call and passes it
+   * here, so a Settings → Claude CLI override takes effect on the next
+   * run without restarting the app.
+   */
+  command?: string;
 }
 
 export interface RunResponse {
@@ -319,7 +327,8 @@ export class ClaudeProcessManager extends EventEmitter {
       // resolution via PATHEXT) and quotes args containing spaces
       // internally so cmd.exe / POSIX sh don't re-tokenize the prompt.
       child = this.spawner.spawn({
-        command: this.command,
+        // Per-run command override wins; defaults to constructor command.
+        command: req.command ?? this.command,
         args: [
           '-p',
           '--output-format=stream-json',

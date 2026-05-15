@@ -580,4 +580,26 @@ describe('ClaudeProcessManager', () => {
       expect(second.data.runId.length).toBeGreaterThan(0);
     });
   });
+
+  // ---------------------------------------------------------------
+  // CPM-OVERRIDE-001..002 — per-run binary override (#GH-85)
+  // ---------------------------------------------------------------
+  describe('CPM-OVERRIDE-001..002 per-run command override (#GH-85)', () => {
+    it('CPM-OVERRIDE-001: req.command overrides the constructor default', () => {
+      const r = manager.run({
+        ticketKey: VALID_TICKET,
+        cwd: VALID_CWD,
+        command: '/custom/path/to/claude',
+      });
+      expect(r.ok).toBe(true);
+      expect(spawner.lastOptions?.command).toBe('/custom/path/to/claude');
+    });
+
+    it('CPM-OVERRIDE-002: no req.command → constructor default is used', () => {
+      const mgr = new ClaudeProcessManager({ spawner, command: 'ctor-default' });
+      const r = mgr.run({ ticketKey: VALID_TICKET, cwd: VALID_CWD });
+      expect(r.ok).toBe(true);
+      expect(spawner.lastOptions?.command).toBe('ctor-default');
+    });
+  });
 });
