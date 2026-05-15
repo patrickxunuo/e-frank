@@ -117,6 +117,16 @@ export interface Run {
   finishedAt?: number;
   /** Final error if status='failed'. */
   error?: string;
+  /**
+   * Non-fatal note attached when the run finished with a tail-end issue
+   * (#GH-95). Today the only producer is the workflow runner's
+   * "timeout-after-PR" reclassification: when Claude times out AFTER the
+   * `creatingPr` phase has stamped `prUrl`, the run lands in `done`
+   * (the user-visible work shipped) but the renderer surfaces this as
+   * a yellow chip so the user knows the tail (ticket update / memory-
+   * bank refresh) may not have completed.
+   */
+  terminalWarning?: string | null;
 }
 
 export interface RunStateEvent {

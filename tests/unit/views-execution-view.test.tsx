@@ -970,3 +970,74 @@ describe('<ExecutionView /> — past-run detail (#GH-66)', () => {
     expect(onBackToRuns).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * EXEC-TERMINAL-WARNING — terminalWarning chip surfaced on past runs that
+ * landed in `done` with a non-fatal tail-end issue (#GH-95).
+ *
+ * Today the only producer is the runner's "timeout-after-PR"
+ * reclassification: when Claude times out AFTER the `creatingPr` phase
+ * has stamped `prUrl`, the run lands in `done` (the user-visible work
+ * shipped) but the renderer surfaces the warning so the user knows the
+ * tail (ticket update / memory-bank refresh) may not have completed.
+ */
+describe('<ExecutionView /> — terminalWarning chip (#GH-95)', () => {
+  it('EXEC-TERMINAL-WARNING-001: past-run with terminalWarning renders chip + PR link', async () => {
+    installApi({
+      current: { ok: true, data: { run: null } },
+      getResult: {
+        ok: true,
+        data: {
+          run: makeRun({
+            id: 'r-warn',
+            projectId: 'p-1',
+            status: 'done',
+            state: 'done',
+            startedAt: 0,
+            finishedAt: 1,
+            prUrl: 'https://github.com/o/r/pull/12',
+            terminalWarning:
+              'claude exited with reason="timeout" after PR creation; ' +
+              'tail work (ticket update / memory-bank refresh) may not have completed',
+          }),
+        },
+      },
+    });
+
+    render(<ExecutionView runId="r-warn" projectId="p-1" onBack={noop} />);
+
+    const chip = await screen.findByTestId('execution-terminal-warning');
+    expect(chip).toHaveTextContent(/timeout/i);
+    expect(chip).toHaveTextContent(/tail/i);
+    // Status badge is still Done — the warning is advisory, not a failure.
+    expect(screen.getByTestId('execution-status-badge')).toHaveTextContent(/done/i);
+    // PR link is still surfaced — the user can still open the merged work.
+    expect(screen.getByTestId('execution-meta-pr-link')).toBeInTheDocument();
+  });
+
+  it('EXEC-TERMINAL-WARNING-002: past-run without terminalWarning does NOT render the chip', async () => {
+    installApi({
+      current: { ok: true, data: { run: null } },
+      getResult: {
+        ok: true,
+        data: {
+          run: makeRun({
+            id: 'r-clean',
+            projectId: 'p-1',
+            status: 'done',
+            state: 'done',
+            startedAt: 0,
+            finishedAt: 1,
+            prUrl: 'https://github.com/o/r/pull/13',
+          }),
+        },
+      },
+    });
+
+    render(<ExecutionView runId="r-clean" projectId="p-1" onBack={noop} />);
+
+    // Wait for the past-run UI to settle, then assert the chip is absent.
+    await screen.findByTestId('execution-meta');
+    expect(screen.queryByTestId('execution-terminal-warning')).not.toBeInTheDocument();
+  });
+});

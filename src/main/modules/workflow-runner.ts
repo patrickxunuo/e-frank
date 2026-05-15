@@ -985,6 +985,25 @@ export class WorkflowRunner extends EventEmitter {
         ctx.cancellationToken.cancelled = true;
         throw new CancelledError();
       }
+      // GH-95: a timeout that fires AFTER the PR has been created is treated
+      // as completed-with-warning rather than failed. The user-visible work
+      // (branch + commit + push + PR) shipped; only the tail (ticket update
+      // / memory-bank refresh) was cut short. We stamp `terminalWarning` and
+      // return so the pipeline continues down the success path. The
+      // approval-deferred check below is intentionally skipped — by the time
+      // `creatingPr` has stamped prUrl, the planning approval marker has
+      // already been resolved (approval markers fire in Phase 3 of the
+      // skill, well before Phase 7's PR creation).
+      if (
+        exitEvent.reason === 'timeout' &&
+        ctx.run.prUrl !== undefined &&
+        ctx.run.prUrl !== ''
+      ) {
+        ctx.run.terminalWarning =
+          `claude exited with reason="timeout" after PR creation; ` +
+          'tail work (ticket update / memory-bank refresh) may not have completed';
+        return;
+      }
       if (exitEvent.reason !== 'completed' || (exitEvent.exitCode !== null && exitEvent.exitCode !== 0)) {
         throw new Error(
           `claude exited with reason="${exitEvent.reason}" exitCode=${String(exitEvent.exitCode)}`,

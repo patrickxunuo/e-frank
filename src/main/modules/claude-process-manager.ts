@@ -15,7 +15,7 @@ import { isAbsolute as pathIsAbsolute } from 'node:path';
 import type { Spawner, SpawnedProcess } from './spawner.js';
 
 const TICKET_KEY_REGEX = /^[A-Z][A-Z0-9_]*-\d+$/;
-const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes (#GH-95)
 const DEFAULT_KILL_GRACE_MS = 5000;
 const DEFAULT_COMMAND = 'claude';
 const DEFAULT_SKILL_NAME = 'ef-auto-feature';
@@ -149,7 +149,7 @@ function extractTextsFromEvent(event: unknown): string[] {
 
 export interface ClaudeProcessManagerOptions {
   spawner: Spawner;
-  /** ms before SIGTERM is sent automatically. Default 30 * 60 * 1000 (30 min). */
+  /** ms before SIGTERM is sent automatically. Default 60 * 60 * 1000 (60 min). */
   timeoutMs?: number;
   /** ms between SIGTERM and SIGKILL escalation during cancel/timeout. Default 5000. */
   killGraceMs?: number;

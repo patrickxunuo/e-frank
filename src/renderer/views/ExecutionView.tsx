@@ -421,6 +421,17 @@ export function ExecutionView({
               <span className={styles.subtitle}>
                 {project?.name ?? projectId} · Run {ready.id.slice(0, 8)}
               </span>
+              {ready.terminalWarning !== null &&
+                ready.terminalWarning !== undefined &&
+                ready.terminalWarning !== '' && (
+                  <div
+                    className={styles.terminalWarning}
+                    role="status"
+                    data-testid="execution-terminal-warning"
+                  >
+                    {ready.terminalWarning}
+                  </div>
+                )}
               {showMetaRow && (
                 <div className={styles.metaRow} data-testid="execution-meta">
                   {ready.branchName !== '' && (

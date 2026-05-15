@@ -2369,4 +2369,71 @@ describe('WorkflowRunner', () => {
       await waitForFinal(h);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // WFR-TIMEOUT-AFTER-PR — timeout that fires after the PR has been created
+  // is reclassified as completed-with-warning rather than failed (#GH-95).
+  // The user-visible work (branch + commit + push + PR) shipped; only the
+  // tail (ticket update / memory-bank refresh) was cut short. The runner
+  // stamps `Run.terminalWarning` and lands the run in `done`.
+  // -------------------------------------------------------------------------
+  describe('WFR-TIMEOUT-AFTER-PR (#GH-95)', () => {
+    it('WFR-TIMEOUT-AFTER-PR-001: timeout AFTER creatingPr marker → done + terminalWarning set', async () => {
+      const h = await buildHarness();
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+
+      await waitForState(h, 'running');
+      // Drive the skill's phase markers through the ship phase. The PR-URL
+      // payload on `creatingPr` is what the runner reads to decide that
+      // a subsequent timeout is "tail-end only" rather than mid-pipeline.
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>\n',
+      );
+      h.fakeClaude.emitOutput('<<<EF_PHASE>>>{"phase":"pushing"}<<<END_EF_PHASE>>>\n');
+      h.fakeClaude.emitOutput(
+        '<<<EF_PHASE>>>{"phase":"creatingPr","prUrl":"https://github.com/x/y/pull/1"}<<<END_EF_PHASE>>>\n',
+      );
+      // Wait for the runner to apply the marker so prUrl is populated on
+      // ctx.run BEFORE the exit fires.
+      await waitForState(h, 'creatingPr');
+
+      h.fakeClaude.emitExit(null, 'timeout');
+      const final = await waitForFinal(h);
+      expect(final.state).toBe('done');
+      expect(final.status).toBe('done');
+      expect(final.prUrl).toBe('https://github.com/x/y/pull/1');
+      expect(final.terminalWarning).toBeDefined();
+      expect(final.terminalWarning).toMatch(/timeout/i);
+      expect(final.terminalWarning).toMatch(/tail/i);
+    });
+
+    it('WFR-TIMEOUT-BEFORE-PR-001: timeout BEFORE prUrl is set → state=failed (regression guard)', async () => {
+      const h = await buildHarness();
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+
+      await waitForState(h, 'running');
+      // No `creatingPr` marker — prUrl stays undefined. A timeout in this
+      // window indicates the run was killed mid-pipeline before producing
+      // any user-visible artifact, so the runner MUST surface this as a
+      // hard failure.
+      h.fakeClaude.emitExit(null, 'timeout');
+
+      const final = await waitForFinal(h);
+      expect(final.state).toBe('failed');
+      expect(final.status).toBe('failed');
+      expect(final.prUrl).toBeUndefined();
+      expect(final.terminalWarning ?? null).toBeNull();
+      expect(final.error).toMatch(/timeout/i);
+    });
+  });
 });

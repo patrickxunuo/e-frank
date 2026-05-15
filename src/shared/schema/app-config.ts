@@ -50,7 +50,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   claudeCliPath: null,
   defaultWorkflowMode: 'interactive',
   defaultPollingIntervalSec: 60,
-  defaultRunTimeoutMin: 30,
+  defaultRunTimeoutMin: 60,
 };
 
 export interface AppConfigValidationError {
