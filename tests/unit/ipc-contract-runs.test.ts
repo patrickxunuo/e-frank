@@ -287,6 +287,28 @@ describe('src/shared/ipc.ts — Runs (workflow runner) extension', () => {
   });
 
   // -------------------------------------------------------------
+  // IPC-RUNS-GET — `runs:get` channel + `IpcApi.runs.get` (#GH-66)
+  // -------------------------------------------------------------
+  describe('IPC-RUNS-GET runs.get channel + IpcApi entry', () => {
+    it('IPC-RUNS-GET-001: RUNS_GET === "runs:get"', () => {
+      const channels = IPC_CHANNELS as unknown as Record<string, string>;
+      expect(channels.RUNS_GET).toBe('runs:get');
+    });
+
+    it('IPC-RUNS-GET-002: IpcApi.runs has a get method', () => {
+      expectTypeOf<IpcApi['runs']>().toHaveProperty('get');
+    });
+
+    it('IPC-RUNS-GET-003: IpcApi.runs.get signature: (req {runId}) → Promise<IpcResult<{run: Run}>>', () => {
+      type Fn = IpcApi['runs']['get'];
+      type Arg0 = Fn extends (req: infer A) => unknown ? A : never;
+      expectTypeOf<Arg0>().toHaveProperty('runId');
+      type Ret = ReturnType<Fn>;
+      expectTypeOf<Ret>().toEqualTypeOf<Promise<IpcResult<{ run: IpcRun }>>>();
+    });
+  });
+
+  // -------------------------------------------------------------
   // IPC-RUNS-005 — `runs:read-log` channel + `IpcApi.runs.readLog` (issue #8)
   // -------------------------------------------------------------
   describe('IPC-RUNS-005 readLog channel + IpcApi entry', () => {

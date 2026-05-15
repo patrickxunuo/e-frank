@@ -41,6 +41,8 @@ import {
   type RunsListActiveResponse,
   type RunsListHistoryRequest,
   type RunsListHistoryResponse,
+  type RunsGetRequest,
+  type RunsGetResponse,
   type RunsDeleteRequest,
   type RunsDeleteResponse,
   type RunsReadLogRequest,
@@ -324,6 +326,11 @@ const api: IpcApi = {
     ): Promise<IpcResult<RunsListHistoryResponse>> =>
       ipcRenderer.invoke(IPC_CHANNELS.RUNS_LIST_HISTORY, req) as Promise<
         IpcResult<RunsListHistoryResponse>
+      >,
+
+    get: (req: RunsGetRequest): Promise<IpcResult<RunsGetResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.RUNS_GET, req) as Promise<
+        IpcResult<RunsGetResponse>
       >,
 
     delete: (req: RunsDeleteRequest): Promise<IpcResult<RunsDeleteResponse>> =>

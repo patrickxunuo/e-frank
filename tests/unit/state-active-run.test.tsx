@@ -142,6 +142,7 @@ function installApi(opts: {
       current: vi.fn() as unknown as IpcApi['runs']['current'],
       listActive: runsListActive as unknown as IpcApi['runs']['listActive'],
       listHistory: vi.fn() as unknown as IpcApi['runs']['listHistory'],
+      get: vi.fn() as unknown as IpcApi['runs']['get'],
       delete: vi.fn() as unknown as IpcApi['runs']['delete'],
       readLog: vi.fn().mockResolvedValue({ ok: true, data: { entries: [] } }),
       onCurrentChanged: vi.fn(() => () => {}) as unknown as IpcApi['runs']['onCurrentChanged'],

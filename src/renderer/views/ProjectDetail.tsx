@@ -63,6 +63,12 @@ export interface ProjectDetailProps {
   /** Navigate to the Connections page — used by the PRs tab error banner
    *  to offer a Reconnect action when the GitHub PAT is invalid (#GH-67). */
   onNavigateToConnections?: () => void;
+  /**
+   * Tab to land on initially (#GH-66). Defaults to 'tickets'. Set to 'runs'
+   * when navigating back from a past-run detail view so the user lands on
+   * the same list they clicked from.
+   */
+  initialTab?: TabId;
 }
 
 /**
@@ -493,9 +499,10 @@ export function ProjectDetail({
   onBack,
   onOpenExecution,
   onNavigateToConnections,
+  initialTab,
 }: ProjectDetailProps): JSX.Element {
   const [state, setState] = useState<ProjectState>({ kind: 'loading' });
-  const [tab, setTab] = useState<TabId>('tickets');
+  const [tab, setTab] = useState<TabId>(initialTab ?? 'tickets');
   /**
    * Local search input value. Server-side search lives on `ticketQuery.search`;
    * we debounce keystrokes into that field so each character doesn't trigger

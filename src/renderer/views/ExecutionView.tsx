@@ -1,12 +1,23 @@
 /**
- * `<ExecutionView>` — full-screen route for the live AI Execution Log.
+ * `<ExecutionView>` — full-screen route for the live AI Execution Log AND
+ * past-run detail view (#GH-66).
  *
  * Resolves the run snapshot in this order:
- *   1. `runs.current()` — the active run
- *   2. otherwise treat as a terminal run (the hook will load via readLog)
+ *   1. `runs.current()` — the active run, if its id matches `runId`
+ *   2. `runs.get({ runId })` — persisted sidecar from RunStore, for runs
+ *      that have completed (or are running but owned by a different
+ *      active slot — the renderer's `useRunLog` will load entries from
+ *      disk via `readLog`)
+ *   3. otherwise `not-found` (sidecar missing — likely deleted)
  *
  * Live runs subscribe to `runs.onCurrentChanged` so the page stays in
- * lockstep with the runner. Terminal runs are read once via the hook.
+ * lockstep with the runner. Terminal runs read once.
+ *
+ * For runs whose persisted status is `running` / `pending` but the active
+ * runner doesn't claim them, we render an `Interrupted` badge — a desktop
+ * crash mid-run can leave a "running" sidecar that the runner never
+ * cleared. The on-disk record is authoritative for status; if the runner
+ * disagrees we trust the runner's silence as "no live process".
  *
  * The right pane hosts the `<ApprovalPanel>` (#9) when
  * `Run.pendingApproval` is populated; otherwise the body collapses to a
@@ -36,14 +47,31 @@ import styles from './ExecutionView.module.css';
 export interface ExecutionViewProps {
   runId: string;
   projectId: string;
+  /**
+   * Default back-handler — used for live runs (lands on the Tickets tab
+   * by convention, mirroring where the user typically came from).
+   */
   onBack: () => void;
+  /**
+   * Optional back-handler used when the resolved run is a past run
+   * (#GH-66). Lets the parent land the user on the Runs tab they clicked
+   * from instead of defaulting to Tickets. Falls back to `onBack` when
+   * unset.
+   */
+  onBackToRuns?: () => void;
 }
 
 type RunResolution =
   | { kind: 'loading' }
   | { kind: 'not-found' }
   | { kind: 'error'; message: string }
-  | { kind: 'ready'; run: Run };
+  /**
+   * `isLive` is true only when this run is the runner's currently-active run.
+   * Past-run lookups via `runs.get` set it to false even if `status` is still
+   * `running` on disk — that means the runner doesn't know about it (crashed
+   * or otherwise orphaned), so we render an `Interrupted` badge.
+   */
+  | { kind: 'ready'; run: Run; isLive: boolean };
 
 const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
   'done',
@@ -55,13 +83,22 @@ function isTerminal(run: Run): boolean {
   return TERMINAL_STATUSES.has(run.status);
 }
 
-function statusBadge(run: Run): JSX.Element {
+function statusBadge(run: Run, isLive: boolean): JSX.Element {
   let variant: BadgeVariant = 'neutral';
   let label: string = run.state;
   let pulse: 'active' | 'waiting' | false = false;
   switch (run.status) {
     case 'pending':
     case 'running':
+      // The on-disk snapshot says this is in flight, but if the runner
+      // doesn't claim it the most-likely cause is a crash mid-run that
+      // left the sidecar stamped `running`. Surface that as Interrupted
+      // so the user doesn't think a long-completed run is still ticking.
+      if (!isLive) {
+        variant = 'warning';
+        label = 'Interrupted';
+        break;
+      }
       variant = 'running';
       // Differentiate the two "alive" states: actively pushing forward vs
       // paused on a checkpoint. Different cadence reads at a glance.
@@ -93,14 +130,49 @@ function statusBadge(run: Run): JSX.Element {
   );
 }
 
+function formatDuration(startedAt: number, finishedAt: number | undefined): string | null {
+  if (
+    finishedAt === undefined ||
+    !Number.isFinite(finishedAt) ||
+    !Number.isFinite(startedAt) ||
+    finishedAt <= startedAt
+  ) {
+    return null;
+  }
+  const ms = finishedAt - startedAt;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remSec = seconds % 60;
+  if (minutes < 60) return remSec === 0 ? `${minutes}m` : `${minutes}m ${remSec}s`;
+  const hours = Math.floor(minutes / 60);
+  const remMin = minutes % 60;
+  return remMin === 0 ? `${hours}h` : `${hours}h ${remMin}m`;
+}
+
 export function ExecutionView({
   runId,
   projectId,
   onBack,
+  onBackToRuns,
 }: ExecutionViewProps): JSX.Element {
   const [resolution, setResolution] = useState<RunResolution>({ kind: 'loading' });
   const [project, setProject] = useState<ProjectInstanceDto | null>(null);
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
+  // Route the Back button: past-run lookups land on Runs tab when the
+  // parent provided that handler; everything else (live runs, loading,
+  // not-found, error) routes to the default onBack.
+  const handleBack = useCallback((): void => {
+    if (
+      resolution.kind === 'ready' &&
+      !resolution.isLive &&
+      onBackToRuns !== undefined
+    ) {
+      onBackToRuns();
+      return;
+    }
+    onBack();
+  }, [onBack, onBackToRuns, resolution]);
 
   const run = resolution.kind === 'ready' ? resolution.run : null;
   const log = useRunLog(run);
@@ -126,21 +198,22 @@ export function ExecutionView({
         const cur = await api.runs.current();
         if (cancelled) return;
         if (cur.ok && cur.data.run !== null && cur.data.run.id === runId) {
-          setResolution({ kind: 'ready', run: cur.data.run });
-        } else {
-          // Not the active run — for #8, treat the runId as a completed
-          // run. The Runs tab (future issue) will provide a proper
-          // history loader; here we synthesize a thin terminal-shaped Run
-          // from readLog if any entries exist, else show a not-found.
-          // We don't have a runs.get() yet, so fall back to a minimal
-          // shell + the log hook handles loading entries.
-          //
-          // If `runs.current()` returns a different runId, we can still
-          // render — the ExecutionLog hook will pull entries from the
-          // log file. We DON'T have the runner snapshot, so steps will
-          // be derived from the log alone.
-          setResolution({ kind: 'not-found' });
+          setResolution({ kind: 'ready', run: cur.data.run, isLive: true });
+          return;
         }
+        // Not the active run — load the persisted sidecar from RunStore.
+        // The log entries (if any) come from useRunLog's terminal path.
+        const get = await api.runs.get({ runId });
+        if (cancelled) return;
+        if (get.ok) {
+          setResolution({ kind: 'ready', run: get.data.run, isLive: false });
+          return;
+        }
+        if (get.error.code === 'NOT_FOUND') {
+          setResolution({ kind: 'not-found' });
+          return;
+        }
+        setResolution({ kind: 'error', message: get.error.message });
       } catch (err) {
         if (cancelled) return;
         const message = err instanceof Error ? err.message : String(err);
@@ -153,21 +226,25 @@ export function ExecutionView({
     };
   }, [runId]);
 
-  // Subscribe to current-changed for live runs.
+  // Subscribe to current-changed for live runs only. Past-run lookups
+  // (`isLive: false`) are static — the runner won't emit transitions for
+  // them, and any future runner-restart that re-attaches will be picked
+  // up on the next page mount.
   useEffect(() => {
     if (resolution.kind !== 'ready') return;
+    if (!resolution.isLive) return;
     if (typeof window === 'undefined' || !window.api) return;
     const api = window.api;
     if (isTerminal(resolution.run)) return;
 
     const offCurrent = api.runs.onCurrentChanged((event) => {
       if (event.run !== null && event.run.id === runId) {
-        setResolution({ kind: 'ready', run: event.run });
+        setResolution({ kind: 'ready', run: event.run, isLive: true });
       }
     });
     const offState = api.runs.onStateChanged((event: RunStateEvent) => {
       if (event.runId === runId) {
-        setResolution({ kind: 'ready', run: event.run });
+        setResolution({ kind: 'ready', run: event.run, isLive: true });
       }
     });
     return () => {
@@ -213,7 +290,7 @@ export function ExecutionView({
             <button
               type="button"
               className={styles.back}
-              onClick={onBack}
+              onClick={handleBack}
               data-testid="execution-back"
             >
               <IconArrowLeft size={12} />
@@ -242,7 +319,7 @@ export function ExecutionView({
             <button
               type="button"
               className={styles.back}
-              onClick={onBack}
+              onClick={handleBack}
               data-testid="execution-back"
             >
               <IconArrowLeft size={12} />
@@ -257,12 +334,12 @@ export function ExecutionView({
             </span>
             <span className={styles.errorBody}>
               {isNotFound
-                ? 'This run is no longer the active run, and full history navigation lands when the Runs tab ships. Head back to the project for now.'
+                ? 'This run no longer exists — its history record may have been deleted.'
                 : resolution.kind === 'error'
                   ? resolution.message
                   : ''}
             </span>
-            <Button variant="ghost" size="sm" onClick={onBack}>
+            <Button variant="ghost" size="sm" onClick={handleBack}>
               Back to project
             </Button>
           </div>
@@ -274,8 +351,16 @@ export function ExecutionView({
   // ---------- Ready ----------
 
   const ready = resolution.run;
-  const showApproval = ready.pendingApproval !== null;
+  const isLive = resolution.isLive;
+  const showApproval = isLive && ready.pendingApproval !== null;
   const terminal = isTerminal(ready);
+  // Hide the Cancel button for past-run lookups even if the on-disk snapshot
+  // is mid-pipeline — `runs.cancel` would 404 because the runner doesn't
+  // know about this run. `terminal` already covers done/failed/cancelled;
+  // `!isLive` extends the hide to Interrupted (stale running) runs.
+  const hideCancel = terminal || !isLive;
+  const duration = formatDuration(ready.startedAt, ready.finishedAt);
+  const showMetaRow = !isLive || terminal;
 
   const counterText =
     log.totalUserVisibleSteps === 0
@@ -299,7 +384,7 @@ export function ExecutionView({
           <button
             type="button"
             className={styles.back}
-            onClick={onBack}
+            onClick={handleBack}
             data-testid="execution-back"
           >
             <IconArrowLeft size={12} />
@@ -331,11 +416,47 @@ export function ExecutionView({
                     ? `${ready.ticketKey} — ${ready.ticketSummary}`
                     : ready.ticketKey}
                 </h1>
-                {statusBadge(ready)}
+                {statusBadge(ready, isLive)}
               </div>
               <span className={styles.subtitle}>
                 {project?.name ?? projectId} · Run {ready.id.slice(0, 8)}
               </span>
+              {showMetaRow && (
+                <div className={styles.metaRow} data-testid="execution-meta">
+                  {ready.branchName !== '' && (
+                    <span className={styles.metaItem} data-testid="execution-meta-branch">
+                      <span className={styles.metaLabel}>Branch</span>
+                      <span className={styles.metaValue}>{ready.branchName}</span>
+                    </span>
+                  )}
+                  {duration !== null && (
+                    <span className={styles.metaItem} data-testid="execution-meta-duration">
+                      <span className={styles.metaLabel}>Duration</span>
+                      <span className={styles.metaValue}>{duration}</span>
+                    </span>
+                  )}
+                  {ready.prUrl !== undefined && (() => {
+                    const prUrl = ready.prUrl;
+                    return (
+                      <span className={styles.metaItem} data-testid="execution-meta-pr">
+                        <span className={styles.metaLabel}>PR</span>
+                        <button
+                          type="button"
+                          className={styles.metaLink}
+                          onClick={(): void => {
+                            if (typeof window !== 'undefined' && window.api) {
+                              void window.api.shell.openExternal({ url: prUrl });
+                            }
+                          }}
+                          data-testid="execution-meta-pr-link"
+                        >
+                          Open PR
+                        </button>
+                      </span>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           </div>
           <div className={styles.headActions}>
@@ -349,7 +470,7 @@ export function ExecutionView({
               label="Auto-scroll"
               data-testid="log-autoscroll-toggle"
             />
-            {!terminal && (
+            {!hideCancel && (
               <Button
                 variant="destructive"
                 size="sm"
@@ -382,7 +503,7 @@ export function ExecutionView({
             <ApprovalPanel
               runId={ready.id}
               approval={ready.pendingApproval!}
-              disabled={isTerminal(ready)}
+              disabled={isTerminal(ready) || !isLive}
             />
           </aside>
         )}
