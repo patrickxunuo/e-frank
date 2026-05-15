@@ -190,6 +190,29 @@
 }
 
 /*
+ * Theme section card (#GH-84). Hosts the RadioCardGroup + an optional
+ * loading hint. Visually parallel to the placeholder card so finished
+ * vs unfinished sections feel like the same shape; the difference is
+ * the dashed border + muted text on the placeholder variant.
+ */
+.themeCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-card);
+}
+
+.themeHint {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/*
  * Placeholder card — what every section renders until its follow-up PR
  * lands. Visually deferred (dashed border + muted text) so a glance is
  * enough to convey "not implemented yet, don't try to interact."

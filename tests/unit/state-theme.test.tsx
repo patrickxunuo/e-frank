@@ -1,47 +1,50 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { useEffect } from 'react';
-import { useTheme, type ThemePreference } from '../../src/renderer/state/theme';
+import { useTheme, type ResolvedTheme } from '../../src/renderer/state/theme';
+import { useAppConfig } from '../../src/renderer/state/app-config';
+import type { AppConfig, ThemeMode } from '../../src/shared/ipc';
 
 /**
- * THEME-001..008 — `useTheme` hook tests.
+ * THEME-001..012 — `useTheme` hook tests (#GH-84 rewrite).
  *
- * Behaviour under test (from acceptance/ui-polish.md):
- *  - On first render with no localStorage value, returns 'dark' and
- *    writes data-theme="dark" on <html>.
- *  - localStorage 'light' or 'dark' is honoured; anything else falls
- *    back to 'dark'.
- *  - setTheme writes both DOM attribute and localStorage.
- *  - toggle flips dark<->light.
- *  - localStorage that throws on read/write degrades gracefully (no
- *    crash; in-memory state still updates).
+ * Post-#GH-84 the hook reads its preference from `useAppConfig()` and
+ * writes through to `localStorage['ef.theme']` as a flash-prevention
+ * cache for the index.html bootstrap script. System mode resolves
+ * via `window.matchMedia('(prefers-color-scheme: dark)')`.
  *
- * The tests use a tiny <HookConsumer /> that captures the latest hook
- * value into an out-parameter, so we can assert on state without
- * depending on @testing-library/react-hooks (not installed).
+ * The tests:
+ *  - Mock `useAppConfig` so we control the persisted config + observe
+ *    `update()` calls.
+ *  - Mock `window.matchMedia` so we control the system preference + can
+ *    fire `change` events to verify the listener wiring.
+ *  - Use a tiny `<HookConsumer />` to capture the latest hook return
+ *    value into a ref captor (the same pattern used elsewhere in this
+ *    codebase since `renderHook` isn't installed).
  */
+
+vi.mock('../../src/renderer/state/app-config', () => ({
+  useAppConfig: vi.fn(),
+}));
+
+const STORAGE_KEY = 'ef.theme';
+const SYSTEM_QUERY = '(prefers-color-scheme: dark)';
 
 interface CapturedHook {
   latest: ReturnType<typeof useTheme> | null;
-  history: ThemePreference[];
+  resolvedHistory: ResolvedTheme[];
 }
 
 function HookConsumer({ capture }: { capture: CapturedHook }): null {
   const value = useTheme();
   useEffect(() => {
     capture.latest = value;
-    capture.history.push(value.theme);
+    capture.resolvedHistory.push(value.resolvedTheme);
   }, [value, capture]);
   return null;
 }
 
-const STORAGE_KEY = 'ef.theme';
-
-/**
- * Build a fresh in-memory localStorage stub. We REPLACE the global
- * localStorage so getItem/setItem pull from this isolated map.
- */
 interface MemoryStorage {
   store: Map<string, string>;
   getItem: (key: string) => string | null;
@@ -73,212 +76,276 @@ function makeMemoryStorage(seed?: Record<string, string>): MemoryStorage {
   };
 }
 
-function installStorage(stub: MemoryStorage | Storage): void {
-  Object.defineProperty(window, 'localStorage', {
-    configurable: true,
-    value: stub,
-  });
+function installStorage(stub: MemoryStorage): void {
+  Object.defineProperty(window, 'localStorage', { configurable: true, value: stub });
 }
 
-function resetThemeAttribute(): void {
-  document.documentElement.removeAttribute('data-theme');
+interface MatchMediaStub {
+  matches: boolean;
+  listeners: Set<(e: MediaQueryListEvent) => void>;
 }
+
+function installMatchMedia(stub: MatchMediaStub): void {
+  (window as unknown as { matchMedia: (q: string) => MediaQueryList }).matchMedia = () =>
+    ({
+      matches: stub.matches,
+      media: SYSTEM_QUERY,
+      onchange: null,
+      addEventListener: (_t: string, listener: (e: MediaQueryListEvent) => void): void => {
+        stub.listeners.add(listener);
+      },
+      removeEventListener: (_t: string, listener: (e: MediaQueryListEvent) => void): void => {
+        stub.listeners.delete(listener);
+      },
+      addListener: (listener: (e: MediaQueryListEvent) => void): void => {
+        stub.listeners.add(listener);
+      },
+      removeListener: (listener: (e: MediaQueryListEvent) => void): void => {
+        stub.listeners.delete(listener);
+      },
+      dispatchEvent: () => false,
+    }) as unknown as MediaQueryList;
+}
+
+function makeConfig(over: Partial<AppConfig> = {}): AppConfig {
+  return {
+    theme: 'dark',
+    claudeCliPath: null,
+    defaultWorkflowMode: 'interactive',
+    defaultPollingIntervalSec: 60,
+    defaultRunTimeoutMin: 30,
+    ...over,
+  };
+}
+
+/**
+ * Install the `useAppConfig` mock with the given config + a spy `update`.
+ * Returns the spy so tests can assert on call args.
+ */
+function mockAppConfig(opts: {
+  config?: AppConfig | null;
+  loading?: boolean;
+  error?: string | null;
+} = {}): Mock {
+  const update = vi.fn().mockResolvedValue(opts.config ?? makeConfig());
+  (useAppConfig as unknown as Mock).mockReturnValue({
+    config: opts.config ?? makeConfig(),
+    loading: opts.loading ?? false,
+    error: opts.error ?? null,
+    refresh: vi.fn(),
+    update,
+  });
+  return update;
+}
+
+let media: MatchMediaStub;
 
 beforeEach(() => {
-  resetThemeAttribute();
-  // Default: a clean memory storage. Individual tests can override.
+  document.documentElement.removeAttribute('data-theme');
   installStorage(makeMemoryStorage());
+  media = { matches: false, listeners: new Set() };
+  installMatchMedia(media);
 });
 
 afterEach(() => {
   cleanup();
+  document.documentElement.removeAttribute('data-theme');
   vi.restoreAllMocks();
-  resetThemeAttribute();
+  (useAppConfig as unknown as Mock).mockReset();
 });
 
-describe('useTheme — THEME', () => {
-  // ---------------------------------------------------------------------------
-  // THEME-001 — First render, no stored value → 'dark' + html attr
-  // ---------------------------------------------------------------------------
-  it('THEME-001: first render with no localStorage → returns "dark" and writes data-theme="dark"', async () => {
-    const cap: CapturedHook = { latest: null, history: [] };
+describe('useTheme — THEME (#GH-84 3-mode + app-config + matchMedia)', () => {
+  it('THEME-001: app-config.theme="dark" → returns dark, resolves dark, writes data-theme + localStorage', async () => {
+    mockAppConfig({ config: makeConfig({ theme: 'dark' }) });
+    const cap: CapturedHook = { latest: null, resolvedHistory: [] };
     render(<HookConsumer capture={cap} />);
-
     await waitFor(() => {
       expect(cap.latest?.theme).toBe('dark');
     });
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
-    });
+    expect(cap.latest?.resolvedTheme).toBe('dark');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    expect((window.localStorage as unknown as MemoryStorage).store.get(STORAGE_KEY)).toBe('dark');
   });
 
-  // ---------------------------------------------------------------------------
-  // THEME-002 — Stored 'light' is honoured
-  // ---------------------------------------------------------------------------
-  it('THEME-002: localStorage "light" → returns "light" and writes attribute', async () => {
-    installStorage(makeMemoryStorage({ [STORAGE_KEY]: 'light' }));
-
-    const cap: CapturedHook = { latest: null, history: [] };
+  it('THEME-002: app-config.theme="light" → returns light, resolves light', async () => {
+    mockAppConfig({ config: makeConfig({ theme: 'light' }) });
+    const cap: CapturedHook = { latest: null, resolvedHistory: [] };
     render(<HookConsumer capture={cap} />);
-
     await waitFor(() => {
       expect(cap.latest?.theme).toBe('light');
     });
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute('data-theme')).toBe('light');
-    });
+    expect(cap.latest?.resolvedTheme).toBe('light');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
   });
 
-  // ---------------------------------------------------------------------------
-  // THEME-003 — Invalid stored value → fall back to 'dark'
-  // ---------------------------------------------------------------------------
-  it('THEME-003: invalid localStorage value → falls back to "dark"', async () => {
-    installStorage(makeMemoryStorage({ [STORAGE_KEY]: 'system' }));
-
-    const cap: CapturedHook = { latest: null, history: [] };
+  it('THEME-003: app-config.theme="system" + matchMedia dark → resolves dark, writes resolved value (not "system") to localStorage', async () => {
+    media.matches = true; // OS prefers dark
+    mockAppConfig({ config: makeConfig({ theme: 'system' }) });
+    const cap: CapturedHook = { latest: null, resolvedHistory: [] };
     render(<HookConsumer capture={cap} />);
-
     await waitFor(() => {
-      expect(cap.latest?.theme).toBe('dark');
+      expect(cap.latest?.theme).toBe('system');
     });
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
-    });
+    expect(cap.latest?.resolvedTheme).toBe('dark');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    // CRITICAL: localStorage carries the RESOLVED concrete value, not 'system'
+    // — so the index.html bootstrap script's binary check works unchanged.
+    const stored = (window.localStorage as unknown as MemoryStorage).store.get(STORAGE_KEY);
+    expect(stored).toBe('dark');
+    expect(stored).not.toBe('system');
   });
 
-  // ---------------------------------------------------------------------------
-  // THEME-004 — setTheme updates DOM attribute and localStorage
-  // ---------------------------------------------------------------------------
-  it('THEME-004: setTheme("light") writes both DOM attribute and localStorage', async () => {
-    const storage = makeMemoryStorage();
-    installStorage(storage);
-
-    const cap: CapturedHook = { latest: null, history: [] };
+  it('THEME-004: app-config.theme="system" + matchMedia light → resolves light, localStorage="light"', async () => {
+    media.matches = false; // OS prefers light
+    mockAppConfig({ config: makeConfig({ theme: 'system' }) });
+    const cap: CapturedHook = { latest: null, resolvedHistory: [] };
     render(<HookConsumer capture={cap} />);
+    await waitFor(() => {
+      expect(cap.latest?.resolvedTheme).toBe('light');
+    });
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+  });
 
+  it('THEME-005: matchMedia change while in system mode → resolved theme updates live', async () => {
+    media.matches = true; // start dark
+    mockAppConfig({ config: makeConfig({ theme: 'system' }) });
+    const cap: CapturedHook = { latest: null, resolvedHistory: [] };
+    render(<HookConsumer capture={cap} />);
+    await waitFor(() => {
+      expect(cap.latest?.resolvedTheme).toBe('dark');
+    });
+
+    // Simulate OS theme change to light.
+    await act(async () => {
+      for (const listener of media.listeners) {
+        listener({ matches: false } as MediaQueryListEvent);
+      }
+    });
+    await waitFor(() => {
+      expect(cap.latest?.resolvedTheme).toBe('light');
+    });
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+    expect((window.localStorage as unknown as MemoryStorage).store.get(STORAGE_KEY)).toBe('light');
+  });
+
+  it('THEME-006: setTheme("light") calls appConfig.update + updates DOM + localStorage', async () => {
+    const update = mockAppConfig({ config: makeConfig({ theme: 'dark' }) });
+    const cap: CapturedHook = { latest: null, resolvedHistory: [] };
+    render(<HookConsumer capture={cap} />);
     await waitFor(() => {
       expect(cap.latest).not.toBeNull();
     });
 
     await act(async () => {
-      cap.latest?.setTheme('light');
+      await cap.latest?.setTheme('light');
     });
 
-    await waitFor(() => {
-      expect(cap.latest?.theme).toBe('light');
-    });
+    expect(update).toHaveBeenCalledWith({ theme: 'light' });
     await waitFor(() => {
       expect(document.documentElement.getAttribute('data-theme')).toBe('light');
     });
-    expect(storage.store.get(STORAGE_KEY)).toBe('light');
+    expect((window.localStorage as unknown as MemoryStorage).store.get(STORAGE_KEY)).toBe('light');
   });
 
-  // ---------------------------------------------------------------------------
-  // THEME-005 — toggle dark → light updates state, attribute, storage
-  // ---------------------------------------------------------------------------
-  it('THEME-005: toggle() from dark → light updates state, attribute, storage', async () => {
-    const storage = makeMemoryStorage();
-    installStorage(storage);
-
-    const cap: CapturedHook = { latest: null, history: [] };
+  it('THEME-007: toggle() from dark → setTheme("light")', async () => {
+    const update = mockAppConfig({ config: makeConfig({ theme: 'dark' }) });
+    const cap: CapturedHook = { latest: null, resolvedHistory: [] };
     render(<HookConsumer capture={cap} />);
-
     await waitFor(() => {
-      expect(cap.latest?.theme).toBe('dark');
+      expect(cap.latest?.resolvedTheme).toBe('dark');
     });
-
     await act(async () => {
-      cap.latest?.toggle();
+      await cap.latest?.toggle();
     });
-
-    await waitFor(() => {
-      expect(cap.latest?.theme).toBe('light');
-    });
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute('data-theme')).toBe('light');
-    });
-    expect(storage.store.get(STORAGE_KEY)).toBe('light');
+    expect(update).toHaveBeenCalledWith({ theme: 'light' });
   });
 
-  // ---------------------------------------------------------------------------
-  // THEME-006 — toggle light → dark updates state, attribute, storage
-  // ---------------------------------------------------------------------------
-  it('THEME-006: toggle() from light → dark updates state, attribute, storage', async () => {
-    const storage = makeMemoryStorage({ [STORAGE_KEY]: 'light' });
-    installStorage(storage);
-
-    const cap: CapturedHook = { latest: null, history: [] };
+  it('THEME-008: toggle() from light → setTheme("dark")', async () => {
+    const update = mockAppConfig({ config: makeConfig({ theme: 'light' }) });
+    const cap: CapturedHook = { latest: null, resolvedHistory: [] };
     render(<HookConsumer capture={cap} />);
-
     await waitFor(() => {
-      expect(cap.latest?.theme).toBe('light');
+      expect(cap.latest?.resolvedTheme).toBe('light');
     });
-
     await act(async () => {
-      cap.latest?.toggle();
+      await cap.latest?.toggle();
     });
-
-    await waitFor(() => {
-      expect(cap.latest?.theme).toBe('dark');
-    });
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
-    });
-    expect(storage.store.get(STORAGE_KEY)).toBe('dark');
+    expect(update).toHaveBeenCalledWith({ theme: 'dark' });
   });
 
-  // ---------------------------------------------------------------------------
-  // THEME-007 — getItem throws → fall back to 'dark', no crash
-  // ---------------------------------------------------------------------------
-  it('THEME-007: localStorage.getItem throws → falls back to "dark", does not crash', async () => {
-    const throwing: MemoryStorage = makeMemoryStorage();
-    throwing.getItem = (): string | null => {
-      throw new Error('storage read denied');
-    };
-    installStorage(throwing);
-
-    const cap: CapturedHook = { latest: null, history: [] };
-
-    expect(() => {
-      render(<HookConsumer capture={cap} />);
-    }).not.toThrow();
-
-    await waitFor(() => {
-      expect(cap.latest?.theme).toBe('dark');
-    });
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // THEME-008 — setItem throws → state still updates, no crash
-  // ---------------------------------------------------------------------------
-  it('THEME-008: localStorage.setItem throws → state still updates, no crash', async () => {
-    const throwing: MemoryStorage = makeMemoryStorage();
-    throwing.setItem = (): void => {
-      throw new Error('storage write denied');
-    };
-    installStorage(throwing);
-
-    const cap: CapturedHook = { latest: null, history: [] };
+  it('THEME-009: toggle() from system + matchMedia dark → setTheme("light") (escapes system to opposite of resolved)', async () => {
+    media.matches = true;
+    const update = mockAppConfig({ config: makeConfig({ theme: 'system' }) });
+    const cap: CapturedHook = { latest: null, resolvedHistory: [] };
     render(<HookConsumer capture={cap} />);
-
     await waitFor(() => {
-      expect(cap.latest?.theme).toBe('dark');
+      expect(cap.latest?.resolvedTheme).toBe('dark');
+    });
+    await act(async () => {
+      await cap.latest?.toggle();
+    });
+    expect(update).toHaveBeenCalledWith({ theme: 'light' });
+  });
+
+  it('THEME-010: toggle() from system + matchMedia light → setTheme("dark")', async () => {
+    media.matches = false;
+    const update = mockAppConfig({ config: makeConfig({ theme: 'system' }) });
+    const cap: CapturedHook = { latest: null, resolvedHistory: [] };
+    render(<HookConsumer capture={cap} />);
+    await waitFor(() => {
+      expect(cap.latest?.resolvedTheme).toBe('light');
+    });
+    await act(async () => {
+      await cap.latest?.toggle();
+    });
+    expect(update).toHaveBeenCalledWith({ theme: 'dark' });
+  });
+
+  it('THEME-011: migration — app-config.theme=default ("dark") + localStorage="light" → promotes via update', async () => {
+    installStorage(makeMemoryStorage({ [STORAGE_KEY]: 'light' }));
+    const update = mockAppConfig({ config: makeConfig({ theme: 'dark' }) });
+    render(<HookConsumer capture={{ latest: null, resolvedHistory: [] }} />);
+    await waitFor(() => {
+      expect(update).toHaveBeenCalledWith({ theme: 'light' });
+    });
+  });
+
+  it('THEME-012: migration does NOT fire when app-config.theme is non-default (user already chose)', async () => {
+    installStorage(makeMemoryStorage({ [STORAGE_KEY]: 'dark' }));
+    const update = mockAppConfig({ config: makeConfig({ theme: 'light' }) });
+    render(<HookConsumer capture={{ latest: null, resolvedHistory: [] }} />);
+    // Give the migration effect a chance to run; assert it did NOT call update.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('THEME-013: setTheme persisted error doesn\'t crash — DOM still updates optimistically', async () => {
+    const failedUpdate = vi.fn().mockResolvedValue(null);
+    (useAppConfig as unknown as Mock).mockReturnValue({
+      config: makeConfig({ theme: 'dark' }),
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+      update: failedUpdate,
     });
 
-    expect(() => {
-      act(() => {
-        cap.latest?.setTheme('light');
-      });
-    }).not.toThrow();
+    const cap: CapturedHook = { latest: null, resolvedHistory: [] };
+    render(<HookConsumer capture={cap} />);
+    await waitFor(() => {
+      expect(cap.latest).not.toBeNull();
+    });
 
-    await waitFor(() => {
-      expect(cap.latest?.theme).toBe('light');
+    let threw = false;
+    await act(async () => {
+      try {
+        await cap.latest?.setTheme('light' as ThemeMode);
+      } catch {
+        threw = true;
+      }
     });
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute('data-theme')).toBe('light');
-    });
+    expect(threw).toBe(false);
+    // Optimistic update applied to local state + DOM even though persist returned null.
+    expect(cap.latest?.theme).toBe('light');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
   });
 });

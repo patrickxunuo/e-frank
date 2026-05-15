@@ -5,7 +5,6 @@ import { useGlobalActiveRuns } from '../state/global-active-run';
 import styles from './Sidebar.module.css';
 import { IconKey, IconProjects, IconSettings, IconSkills } from './icons';
 import { PaperplaneGlyph } from './PaperplaneGlyph';
-import { ThemeToggle } from './ThemeToggle';
 
 const APP_VERSION = `v${packageJson.version}`;
 
@@ -233,8 +232,6 @@ export function Sidebar({ activeNav, user, onNavigate }: SidebarProps): JSX.Elem
           )}
         </div>
       ) : null}
-
-      <ThemeToggle />
 
       {user && (
         <div className={styles.user} data-testid="sidebar-user">
