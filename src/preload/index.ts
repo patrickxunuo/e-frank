@@ -5,6 +5,7 @@ import {
   type IpcResult,
   type PingRequest,
   type PingResponse,
+  type AppInfoResponse,
   type ClaudeRunRequest,
   type ClaudeRunResponse,
   type ClaudeCancelRequest,
@@ -88,6 +89,11 @@ import {
 const api: IpcApi = {
   ping: (req: PingRequest): Promise<PingResponse> =>
     ipcRenderer.invoke(IPC_CHANNELS.PING, req) as Promise<PingResponse>,
+
+  app: {
+    info: (): Promise<IpcResult<AppInfoResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.APP_INFO) as Promise<IpcResult<AppInfoResponse>>,
+  },
 
   claude: {
     run: (req: ClaudeRunRequest): Promise<IpcResult<ClaudeRunResponse>> =>
@@ -480,6 +486,8 @@ const api: IpcApi = {
       ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_PATH, req) as Promise<IpcResult<null>>,
     openExternal: (req: ShellOpenExternalRequest): Promise<IpcResult<null>> =>
       ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_EXTERNAL, req) as Promise<IpcResult<null>>,
+    openLogDirectory: (): Promise<IpcResult<null>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_LOG_DIRECTORY) as Promise<IpcResult<null>>,
   },
 
   appConfig: {

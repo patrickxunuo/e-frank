@@ -58,6 +58,9 @@ function makeIpcApiStub(
     });
   return {
     ping: vi.fn<IpcApi['ping']>().mockResolvedValue(pingResponse),
+    app: {
+      info: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
+    },
     claude: {
       run: vi.fn<IpcApi['claude']['run']>().mockResolvedValue(unusedErr()),
       cancel: vi.fn<IpcApi['claude']['cancel']>().mockResolvedValue(unusedErr()),
@@ -190,6 +193,9 @@ function makeIpcApiStub(
       openPath: vi.fn<IpcApi['shell']['openPath']>().mockResolvedValue({ ok: true, data: null }),
       openExternal: vi
         .fn<IpcApi['shell']['openExternal']>()
+        .mockResolvedValue({ ok: true, data: null }),
+      openLogDirectory: vi
+        .fn<IpcApi['shell']['openLogDirectory']>()
         .mockResolvedValue({ ok: true, data: null }),
     },
     appConfig: {

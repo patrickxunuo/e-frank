@@ -147,6 +147,9 @@ function installApi(opts?: {
 
   const api: IpcApi = {
     ping: vi.fn<IpcApi['ping']>().mockResolvedValue({ reply: 'pong', receivedAt: 0 }),
+    app: {
+      info: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
+    },
     claude: {
       run: vi.fn<IpcApi['claude']['run']>().mockResolvedValue(unusedErr()),
       cancel: vi.fn<IpcApi['claude']['cancel']>().mockResolvedValue(unusedErr()),
@@ -236,6 +239,7 @@ function installApi(opts?: {
     shell: {
       openPath: vi.fn() as unknown as IpcApi['shell']['openPath'],
       openExternal: vi.fn() as unknown as IpcApi['shell']['openExternal'],
+      openLogDirectory: vi.fn() as unknown as IpcApi['shell']['openLogDirectory'],
     },
     appConfig: {
       get: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
