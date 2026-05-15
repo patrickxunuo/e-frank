@@ -95,12 +95,20 @@ export interface ScanSkillsOptions {
    */
   projectRoot?: string;
   fs?: SkillsScannerFs;
+  /**
+   * Map of skill folder name → source repo (#GH-93 polish). Read from
+   * `<userData>/installed-skill-sources.json`. Omit (or pass an empty
+   * object) and every SkillSummary surfaces with `sourceRepo: null` —
+   * matching the pre-tracker baseline.
+   */
+  sourceLookup?: Readonly<Record<string, string>>;
 }
 
 async function scanRoot(
   root: string,
   source: SkillSource,
   fsImpl: SkillsScannerFs,
+  sourceLookup: Readonly<Record<string, string>>,
 ): Promise<SkillSummary[]> {
   let entries: string[];
   try {
@@ -138,6 +146,7 @@ async function scanRoot(
         source,
         dirPath,
         skillMdPath,
+        sourceRepo: sourceLookup[id] ?? null,
       });
       continue;
     }
@@ -149,6 +158,7 @@ async function scanRoot(
       source,
       dirPath,
       skillMdPath,
+      sourceRepo: sourceLookup[id] ?? null,
     });
   }
   return result;
@@ -166,10 +176,11 @@ export async function scanInstalledSkills(
   const fsImpl = options.fs ?? defaultFs();
   const userRoot = options.userRoot ?? join(homedir(), '.claude', 'skills');
   const projectRoot = options.projectRoot;
+  const sourceLookup = options.sourceLookup ?? {};
 
-  const userSkills = await scanRoot(userRoot, 'user', fsImpl);
+  const userSkills = await scanRoot(userRoot, 'user', fsImpl, sourceLookup);
   const projectSkills =
-    projectRoot === undefined ? [] : await scanRoot(projectRoot, 'project', fsImpl);
+    projectRoot === undefined ? [] : await scanRoot(projectRoot, 'project', fsImpl, sourceLookup);
 
   const merged = new Map<string, SkillSummary>();
   for (const s of userSkills) merged.set(s.id, s);

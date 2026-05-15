@@ -72,6 +72,7 @@ const userSkill: SkillSummary = {
   source: 'user',
   dirPath: 'C:\\Users\\me\\.claude\\skills\\ef-feature',
   skillMdPath: 'C:\\Users\\me\\.claude\\skills\\ef-feature\\SKILL.md',
+  sourceRepo: null,
 };
 
 const projectSkill: SkillSummary = {
@@ -81,6 +82,7 @@ const projectSkill: SkillSummary = {
   source: 'project',
   dirPath: 'D:\\e-frank\\.claude\\skills\\frontend-design',
   skillMdPath: 'D:\\e-frank\\.claude\\skills\\frontend-design\\SKILL.md',
+  sourceRepo: null,
 };
 
 function installApi(opts?: {
@@ -189,10 +191,7 @@ function installApi(opts?: {
       list: skillsList,
       install: vi.fn().mockResolvedValue(unusedErr()),
       remove: skillsRemove,
-      findStart: vi.fn().mockResolvedValue(unusedErr()),
-      findCancel: vi.fn().mockResolvedValue(unusedErr()),
-      onFindOutput: vi.fn(() => () => {}),
-      onFindExit: vi.fn(() => () => {}),
+      search: vi.fn().mockResolvedValue(unusedErr()),
     } as unknown as IpcApi['skills'],
     shell: {
       openPath: vi.fn().mockResolvedValue({ ok: true, data: null }),

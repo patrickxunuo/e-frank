@@ -155,16 +155,18 @@ export const IPC_CHANNELS = {
   CHROME_GET_STATE: 'chrome:get-state',
   /** event channel (main -> renderer) */
   CHROME_STATE_CHANGED: 'chrome:state-changed',
-  // -- Skill management (issue #GH-38) -- discover, install, list, remove --
+  // -- Skill management (issue #GH-38, refactored #GH-93) — discover, install, list, remove --
   SKILLS_LIST: 'skills:list',
   SKILLS_INSTALL: 'skills:install',
   SKILLS_REMOVE: 'skills:remove',
-  SKILLS_FIND_START: 'skills:find-start',
-  SKILLS_FIND_CANCEL: 'skills:find-cancel',
-  /** event channel (main -> renderer) */
-  SKILLS_FIND_OUTPUT: 'skills:find-output',
-  /** event channel (main -> renderer) */
-  SKILLS_FIND_EXIT: 'skills:find-exit',
+  /**
+   * One-shot HTTP search against skills.sh (#GH-93). Replaced the
+   * SKILLS_FIND_* streaming-subprocess channels — there's no longer a
+   * Claude child process driving discovery, so no start/cancel/exit/output
+   * fan-out: the renderer just round-trips a query + limit and renders the
+   * array.
+   */
+  SKILLS_SEARCH: 'skills:search',
   // -- Shell open-path (issue #GH-38 companion) --
   SHELL_OPEN_PATH: 'shell:open-path',
   /** Open a URL in the default browser. Host allow-list enforced in main. */
@@ -659,6 +661,14 @@ export interface SkillSummary {
   dirPath: string;
   /** Absolute path to the SKILL.md file itself. */
   skillMdPath: string;
+  /**
+   * The `owner/repo` the skill was installed from (#GH-93 polish). Set
+   * by the main-process install handler from the API's `source` field
+   * and stored alongside the install. `null` for skills installed
+   * before this tracker existed — callers should fall back to name-only
+   * matching in that case (backward compat).
+   */
+  sourceRepo: string | null;
 }
 
 export interface SkillsListResponse {
@@ -674,6 +684,15 @@ export interface SkillsInstallRequest {
    * leading `@` opens the door to scoped-npm-package refs the way `npx
    * skills add @org/skill` expects them. */
   ref: string;
+  /**
+   * The expected folder name (#GH-93 polish). When supplied, main writes
+   * a `{skillId: ref}` entry into the source tracker on successful
+   * install so subsequent listings can dedupe by (skillId, sourceRepo)
+   * tuple. Optional so non-dialog install callers (e.g. tests) stay
+   * terse — without it, the install still works but the resulting
+   * skill listing will fall back to name-only dedupe.
+   */
+  skillId?: string;
 }
 
 export interface SkillsInstallResponse {
@@ -701,35 +720,41 @@ export interface SkillsRemoveResponse {
   exitCode: number | null;
 }
 
-export interface SkillsFindStartRequest {
-  /** User's natural-language search query. */
+/**
+ * Skills.sh result row (#GH-93). Field names mirror the API exactly so the
+ * renderer can consume the response without a translation layer. `skillId`
+ * is the bare slug used to dedupe against the locally-installed list
+ * (`SkillSummary.id === skillId`) AND the `npx skills add` ref the Install
+ * button passes through to `skills.install`.
+ */
+export interface ApiSkill {
+  /** Full id like `vercel-labs/agent-skills/web-design-guidelines`. */
+  id: string;
+  /** Bare slug, e.g. `web-design-guidelines` — install ref + dedupe key. */
+  skillId: string;
+  /** Display name (frequently equal to skillId). */
+  name: string;
+  /** Cumulative install count from the registry. */
+  installs: number;
+  /** Source slug like `vercel-labs/agent-skills` — rendered as a label. */
+  source: string;
+}
+
+export interface SkillsSearchRequest {
+  /** Free-text search. URL-encoded by the main process. */
   query: string;
+  /** Page size requested. Renderer starts at 20 and grows by 20 per
+   *  infinite-scroll bump (capped at 200). The skills.sh API doesn't
+   *  document an `offset` param, so paging is "re-request with bigger
+   *  limit" — over-fetch is bounded by the cap. */
+  limit: number;
 }
 
-export interface SkillsFindStartResponse {
-  /** Opaque id renderers use to correlate stream events with this find. */
-  findId: string;
-  pid: number | undefined;
-  startedAt: number;
-}
-
-export interface SkillsFindCancelRequest {
-  findId: string;
-}
-
-export interface SkillsFindOutputEvent {
-  findId: string;
-  stream: 'stdout' | 'stderr';
-  line: string;
-  timestamp: number;
-}
-
-export interface SkillsFindExitEvent {
-  findId: string;
-  exitCode: number | null;
-  signal: string | null;
-  durationMs: number;
-  reason: 'completed' | 'cancelled' | 'error';
+export interface SkillsSearchResponse {
+  skills: ApiSkill[];
+  /** Total matches reported by the API. Used by the renderer to decide
+   *  whether to keep paging (stop when `skills.length >= count`). */
+  count: number;
 }
 
 // -- Shell open-path (companion to skills feature) ---------------------------
@@ -880,12 +905,13 @@ export interface IpcApi {
     list: () => Promise<IpcResult<SkillsListResponse>>;
     install: (req: SkillsInstallRequest) => Promise<IpcResult<SkillsInstallResponse>>;
     remove: (req: SkillsRemoveRequest) => Promise<IpcResult<SkillsRemoveResponse>>;
-    findStart: (req: SkillsFindStartRequest) => Promise<IpcResult<SkillsFindStartResponse>>;
-    findCancel: (req: SkillsFindCancelRequest) => Promise<IpcResult<{ findId: string }>>;
-    /** Subscribe to streaming find-skills output. Returns unsubscribe fn. */
-    onFindOutput: (listener: (e: SkillsFindOutputEvent) => void) => () => void;
-    /** Subscribe to find-skills exit events. Returns unsubscribe fn. */
-    onFindExit: (listener: (e: SkillsFindExitEvent) => void) => () => void;
+    /**
+     * Direct HTTP search against skills.sh (#GH-93). Replaces the previous
+     * Claude-subprocess `findStart`/`findCancel`/`onFindOutput`/`onFindExit`
+     * streaming surface — paging is now stateless (re-request with a
+     * larger `limit`) and there is nothing to cancel mid-flight.
+     */
+    search: (req: SkillsSearchRequest) => Promise<IpcResult<SkillsSearchResponse>>;
   };
   shell: {
     openPath: (req: ShellOpenPathRequest) => Promise<IpcResult<null>>;
