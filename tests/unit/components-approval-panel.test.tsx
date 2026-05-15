@@ -164,10 +164,7 @@ function installApi(opts?: {
       
       install: vi.fn() as unknown as IpcApi['skills']['install'],
       remove: vi.fn() as unknown as IpcApi['skills']['remove'],
-      findStart: vi.fn() as unknown as IpcApi['skills']['findStart'],
-      findCancel: vi.fn() as unknown as IpcApi['skills']['findCancel'],
-      onFindOutput: vi.fn(() => () => {}) as unknown as IpcApi['skills']['onFindOutput'],
-      onFindExit: vi.fn(() => () => {}) as unknown as IpcApi['skills']['onFindExit'],
+      search: vi.fn() as unknown as IpcApi['skills']['search'],
     },
     shell: {
       openPath: vi.fn() as unknown as IpcApi['shell']['openPath'],

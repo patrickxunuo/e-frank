@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { SkillSource, SkillSummary } from '@shared/ipc';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
@@ -8,7 +8,6 @@ import { EmptyState } from '../components/EmptyState';
 import { FindSkillDialog } from '../components/FindSkillDialog';
 import { IconRefresh, IconSkills, IconTrash } from '../components/icons';
 import { useSkills } from '../state/skills';
-import { clearFindSkillCache } from '../state/find-skill-cache';
 import styles from './Skills.module.css';
 
 function sourceLabel(source: SkillSource): string {
@@ -33,19 +32,7 @@ export function Skills(): JSX.Element {
   // is why the previous build felt like the Refresh button did nothing.)
   const refreshing = loading && skills.length > 0;
 
-  // Wipe the FindSkillDialog result cache when the Skills page
-  // unmounts. The cache is meant to survive dialog close/reopen
-  // *within* the Skills page (so the user can flick the dialog open
-  // and see their last results), but should NOT persist across
-  // navigation — stale results from an earlier visit are surprising.
-  // App-close already clears naturally (memory-only store), and the
-  // FindSkillDialog clears on a new search; this hook handles the
-  // third trigger the user asked for.
-  useEffect(() => {
-    return () => {
-      clearFindSkillCache();
-    };
-  }, []);
+  const installedIds = useMemo(() => skills.map((s) => s.id), [skills]);
 
   const openFindDialog = useCallback((prefill: string): void => {
     setFindPrefill(prefill);
@@ -259,6 +246,7 @@ export function Skills(): JSX.Element {
       <FindSkillDialog
         open={findOpen}
         initialQuery={findPrefill}
+        installedIds={installedIds}
         onClose={() => setFindOpen(false)}
         onInstalled={handleAfterInstall}
       />

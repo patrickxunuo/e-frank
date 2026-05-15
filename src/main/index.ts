@@ -71,9 +71,8 @@ import {
   type SkillsInstallRequest,
   type SkillsInstallResponse,
   type SkillsRemoveResponse,
-  type SkillsFindStartResponse,
-  type SkillsFindOutputEvent,
-  type SkillsFindExitEvent,
+  type SkillsSearchRequest,
+  type SkillsSearchResponse,
   type ShellOpenPathRequest,
 } from '../shared/ipc.js';
 import type { Run, RunStateEvent, RunMode, RunLogEntry } from '../shared/schema/run.js';
@@ -124,14 +123,7 @@ import {
   InvalidSkillRefError,
   uninstallSkillViaNpx,
 } from './modules/skill-npx-installer.js';
-import {
-  SkillFinder,
-  FinderAlreadyActiveError,
-  FinderNotActiveError,
-  type FinderOutputEvent,
-  type FinderExitEvent,
-} from './modules/skill-finder.js';
-import { isValidFindSkillsQuery } from './modules/skill-query-validator.js';
+import { SkillsSearchClient } from './modules/skills-search-client.js';
 import { validateOpenExternalUrl } from './modules/shell-external-validator.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -153,16 +145,13 @@ let mainWindow: BrowserWindow | null = null;
 const claudeManager = new ClaudeProcessManager({ spawner: new NodeSpawner() });
 
 /**
- * Separate Claude spawn channel for the Skills `/find-skills` discovery
- * flow (#GH-38). Lives outside ClaudeProcessManager so it never collides
- * with the workflow runner's single-active-run guard — the user can
- * search for skills while a workflow is in flight.
- *
- * `cwd` is bound at app-ready time once `app.getPath('userData')` is
- * available. Until then `skillFinder` is null and handlers surface
- * NOT_INITIALIZED.
+ * Direct HTTP search against skills.sh for the Skills page Find Skill
+ * dialog (#GH-93). Replaces the previous Claude-subprocess SkillFinder —
+ * no fan-out, no streaming, just a one-shot request per page.
  */
-let skillFinder: SkillFinder | null = null;
+const skillsSearchClient = new SkillsSearchClient({
+  httpClient: new FetchHttpClient(),
+});
 
 // These are constructed at app-ready time (before window creation) because
 // `SafeStorageBackend` requires `app.whenReady()` and `app.getPath('userData')`
@@ -2069,12 +2058,18 @@ function registerIpcHandlers(): void {
     },
   );
 
+  // Direct HTTP search against skills.sh (#GH-93). Replaces the previous
+  // Claude-subprocess SKILLS_FIND_START/CANCEL/OUTPUT/EXIT channels.
   ipcMain.handle(
-    IPC_CHANNELS.SKILLS_FIND_START,
-    async (_event, raw): Promise<IpcResult<SkillsFindStartResponse>> => {
+    IPC_CHANNELS.SKILLS_SEARCH,
+    async (_event, raw): Promise<IpcResult<SkillsSearchResponse>> => {
       const queryRaw =
         typeof raw === 'object' && raw !== null && 'query' in raw
           ? (raw as { query?: unknown }).query
+          : undefined;
+      const limitRaw =
+        typeof raw === 'object' && raw !== null && 'limit' in raw
+          ? (raw as { limit?: unknown }).limit
           : undefined;
       if (typeof queryRaw !== 'string' || queryRaw.trim() === '') {
         return {
@@ -2082,66 +2077,18 @@ function registerIpcHandlers(): void {
           error: { code: 'INVALID_REQUEST', message: 'query must be a non-empty string' },
         };
       }
-      // Shell-injection defense. NodeSpawner defaults to `shell: true` so
-      // the query is concatenated into a `cmd.exe /c "claude ... -p
-      // /find-skills <query>"` string before the OS sees it. A malicious
-      // renderer could send `q & calc.exe` and break out. Centralized in
-      // `skill-query-validator.ts` so the policy has one home + one test.
-      if (!isValidFindSkillsQuery(queryRaw)) {
+      if (typeof limitRaw !== 'number' || !Number.isFinite(limitRaw) || limitRaw <= 0) {
         return {
           ok: false,
-          error: {
-            code: 'INVALID_QUERY',
-            message:
-              'query must be plain text under 200 chars without quotes or shell metacharacters',
-          },
+          error: { code: 'INVALID_REQUEST', message: 'limit must be a positive number' },
         };
       }
-      if (skillFinder === null) {
-        return notInitialized('SkillFinder');
+      const req: SkillsSearchRequest = { query: queryRaw, limit: limitRaw };
+      const result = await skillsSearchClient.search(req);
+      if (!result.ok) {
+        return { ok: false, error: { code: result.error.code, message: result.error.message } };
       }
-      try {
-        const active = skillFinder.start(queryRaw);
-        return {
-          ok: true,
-          data: { findId: active.findId, pid: active.pid, startedAt: active.startedAt },
-        };
-      } catch (err) {
-        if (err instanceof FinderAlreadyActiveError) {
-          return { ok: false, error: { code: err.code, message: err.message } };
-        }
-        const message = err instanceof Error ? err.message : String(err);
-        return { ok: false, error: { code: 'FIND_START_FAILED', message } };
-      }
-    },
-  );
-
-  ipcMain.handle(
-    IPC_CHANNELS.SKILLS_FIND_CANCEL,
-    async (_event, raw): Promise<IpcResult<{ findId: string }>> => {
-      const findIdRaw =
-        typeof raw === 'object' && raw !== null && 'findId' in raw
-          ? (raw as { findId?: unknown }).findId
-          : undefined;
-      if (typeof findIdRaw !== 'string' || findIdRaw === '') {
-        return {
-          ok: false,
-          error: { code: 'INVALID_REQUEST', message: 'findId must be a non-empty string' },
-        };
-      }
-      if (skillFinder === null) {
-        return notInitialized('SkillFinder');
-      }
-      try {
-        skillFinder.cancel(findIdRaw);
-        return { ok: true, data: { findId: findIdRaw } };
-      } catch (err) {
-        if (err instanceof FinderNotActiveError) {
-          return { ok: false, error: { code: err.code, message: err.message } };
-        }
-        const message = err instanceof Error ? err.message : String(err);
-        return { ok: false, error: { code: 'FIND_CANCEL_FAILED', message } };
-      }
+      return { ok: true, data: result.data };
     },
   );
 
@@ -2349,25 +2296,6 @@ function registerIpcHandlers(): void {
 
 function toIpcCurrentChangedEvent(e: { run: Run | null }): RunsCurrentChangedEvent {
   return { run: e.run };
-}
-
-function toIpcFindOutputEvent(e: FinderOutputEvent): SkillsFindOutputEvent {
-  return {
-    findId: e.findId,
-    stream: e.stream,
-    line: e.line,
-    timestamp: e.timestamp,
-  };
-}
-
-function toIpcFindExitEvent(e: FinderExitEvent): SkillsFindExitEvent {
-  return {
-    findId: e.findId,
-    exitCode: e.exitCode,
-    signal: e.signal,
-    durationMs: e.durationMs,
-    reason: e.reason,
-  };
 }
 
 function toIpcTicketsChangedEvent(e: TicketsChangedEvent): JiraTicketsChangedEvent {
@@ -2711,22 +2639,10 @@ async function initStores(): Promise<void> {
       });
     });
 
-    // -- Skill discovery (#GH-38) --
-    // Constructed late only because it needs `userData` (defined at the top
-    // of this try). Doesn't depend on any other store; failure here just
-    // means SkillFinder stays null and the find-skills handler surfaces
-    // NOT_INITIALIZED to the renderer.
-    const finder = new SkillFinder({
-      spawner: new NodeSpawner(),
-      cwd: userData,
-    });
-    finder.on('output', (e: FinderOutputEvent) => {
-      broadcastToWindows(IPC_CHANNELS.SKILLS_FIND_OUTPUT, toIpcFindOutputEvent(e));
-    });
-    finder.on('exit', (e: FinderExitEvent) => {
-      broadcastToWindows(IPC_CHANNELS.SKILLS_FIND_EXIT, toIpcFindExitEvent(e));
-    });
-    skillFinder = finder;
+    // Skill discovery (#GH-38, refactored #GH-93): the SkillsSearchClient
+    // is constructed eagerly at module load — no userData / store dependency
+    // — so there's nothing to wire up here. The SKILLS_SEARCH handler talks
+    // to it directly.
   } catch (err) {
 
     console.error('[main] store initialization threw:', err);

@@ -6,273 +6,252 @@ import {
   useState,
   type FormEvent,
 } from 'react';
-import Lottie from 'lottie-react';
-import type { SkillsFindExitEvent, SkillsFindOutputEvent } from '@shared/ipc';
+import type { ApiSkill } from '@shared/ipc';
+import { Badge } from './Badge';
 import { Button } from './Button';
 import { Dialog } from './Dialog';
 import { Input } from './Input';
-import { IconExternal, IconSkills } from './icons';
-import { PaperplaneGlyph } from './PaperplaneGlyph';
-import { parseSkillCandidates, type SkillCandidate } from './find-skill-candidates';
-import { getSkillSourceUrl } from './skill-source-url';
+import { IconSearch, IconSkills } from './icons';
 import { dispatchToast } from '../state/notifications';
-import {
-  clearFindSkillCache,
-  getFindSkillCache,
-  saveFindSkillCache,
-  type OutputLine,
-} from '../state/find-skill-cache';
-import paperplaneAnimation from '../../../design/logo/paperplane-floating.lottie.json';
 import styles from './FindSkillDialog.module.css';
 
 export interface FindSkillDialogProps {
   open: boolean;
   /** Pre-fills the search input when the dialog opens. */
   initialQuery?: string;
+  /**
+   * Locally-installed skill ids (folder basenames). Used to dedupe API
+   * results: rows whose `skillId` matches one of these render with an
+   * "Installed" badge and a disabled Install button.
+   */
+  installedIds: ReadonlyArray<string>;
   onClose: () => void;
   /** Called after a successful install so the parent can refresh the list. */
   onInstalled?: () => void;
 }
 
-const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
+/** Page size for the skills.sh search request. Issue #GH-93 spec. */
+export const PAGE_SIZE = 20;
+/** Hard cap on total results to avoid runaway scrolling. Issue #GH-93 spec. */
+export const MAX_RESULTS_CAP = 200;
+/** Debounce window for input-driven searches. Submit-via-Enter is immediate. */
+const SEARCH_DEBOUNCE_MS = 300;
 
-function usePrefersReducedMotion(): boolean {
-  const [prefers, setPrefers] = useState<boolean>(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-      return false;
-    }
-    return window.matchMedia(REDUCED_MOTION_QUERY).matches;
-  });
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-      return;
-    }
-    const mq = window.matchMedia(REDUCED_MOTION_QUERY);
-    const onChange = (e: MediaQueryListEvent): void => setPrefers(e.matches);
-    if (typeof mq.addEventListener === 'function') {
-      mq.addEventListener('change', onChange);
-      return () => mq.removeEventListener('change', onChange);
-    }
-    mq.addListener(onChange);
-    return () => mq.removeListener(onChange);
-  }, []);
-  return prefers;
+function formatInstalls(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '—';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toLocaleString();
 }
+
+interface SearchState {
+  /** Query that produced the current result set. */
+  query: string;
+  /** Current limit requested (grows by PAGE_SIZE per scroll bump). */
+  limit: number;
+  results: ApiSkill[];
+  /** Total reported by the API. Tracks when to stop paging. */
+  total: number;
+  loading: boolean;
+  /** Banner-level error message (null when no error). */
+  error: string | null;
+}
+
+const EMPTY_STATE: SearchState = {
+  query: '',
+  limit: 0,
+  results: [],
+  total: 0,
+  loading: false,
+  error: null,
+};
 
 export function FindSkillDialog({
   open,
   initialQuery = '',
+  installedIds,
   onClose,
   onInstalled,
 }: FindSkillDialogProps): JSX.Element {
-  // Seed all "persistable" state from the cache so a remount picks up
-  // the previous find's result. The useEffect below handles the
-  // open-prop transition path; useState initializers cover the very
-  // first render.
-  const initialCache = getFindSkillCache();
-  const [query, setQuery] = useState<string>(
-    initialQuery !== '' ? initialQuery : initialCache.query,
-  );
-  const [activeFindId, setActiveFindId] = useState<string | null>(null);
-  const [lines, setLines] = useState<OutputLine[]>(() => [...initialCache.lines]);
-  const [findError, setFindError] = useState<string | null>(initialCache.findError);
-  const [installingRef, setInstallingRef] = useState<string | null>(null);
+  const [query, setQuery] = useState<string>(initialQuery);
+  const [state, setState] = useState<SearchState>(EMPTY_STATE);
+  const [installingId, setInstallingId] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
-  const [manualRef, setManualRef] = useState<string>('');
-  const lineIdRef = useRef<number>(initialCache.nextLineId);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  /**
-   * Tracks whether the current in-flight find has streamed at least
-   * one line. We use this to defer clearing the cache until first
-   * line, so that hitting Stop before any output preserves the
-   * previously-cached candidates instead of wiping them.
-   */
-  const gotFirstLineRef = useRef<boolean>(false);
-  /**
-   * The query that was passed to the in-flight find. Captured at
-   * find-start so the cache `save` on exit can record the right
-   * query string regardless of what the input shows now (the user
-   * may have started typing a new query while the find ran).
-   */
-  const inflightQueryRef = useRef<string>('');
-
-  // Hydrate state on dialog open. If `initialQuery` prop is provided
-  // AND differs from the cached query, the prop wins (e.g. the Skills
-  // EmptyState CTA passes `ef-feature` — it's an explicit intent to
-  // search for that ref, not to re-display whatever was last cached).
-  // Otherwise, restore from cache.
+  /** Tracks the most recent in-flight request so out-of-order responses
+   *  (slow first page returning AFTER a faster second-page kick-off) can be
+   *  discarded by the UI. */
+  const requestSeqRef = useRef<number>(0);
+  /** Reset state when the dialog is opened so a previously-failed find
+   *  doesn't bleed into the new session. We deliberately do NOT cache
+   *  prior results — the skills.sh search is fast enough that re-fetch
+   *  on reopen is acceptable, and stale rows from a different machine
+   *  state (newly-installed skills, removed skills) are misleading. */
   useEffect(() => {
     if (!open) return;
-    const cached = getFindSkillCache();
-    const useProp = initialQuery !== '' && initialQuery !== cached.query;
-    if (useProp) {
-      setQuery(initialQuery);
-      setLines([]);
-      setFindError(null);
-      lineIdRef.current = 0;
-    } else {
-      setQuery(cached.query);
-      setLines([...cached.lines]);
-      setFindError(cached.findError);
-      lineIdRef.current = cached.nextLineId;
-    }
-    // These are transient — always reset on open regardless of cache.
+    setQuery(initialQuery);
+    setState(EMPTY_STATE);
+    setInstallingId(null);
     setInstallError(null);
-    setManualRef('');
-    setActiveFindId(null);
-    gotFirstLineRef.current = false;
+    requestSeqRef.current = 0;
   }, [open, initialQuery]);
 
-  // Subscribe to streaming output + exit events when a find is in flight.
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.api || activeFindId === null) {
-      return;
-    }
-    const api = window.api;
-    const offOutput = api.skills.onFindOutput((e: SkillsFindOutputEvent) => {
-      if (e.findId !== activeFindId) return;
-      // First line of this find → commit to the new search. Clear the
-      // cache so a downstream Stop-without-output snapshot can't
-      // restore stale lines mid-stream, and clear the visible-from-
-      // cache lines so the new result isn't appended to the old one.
-      if (!gotFirstLineRef.current) {
-        gotFirstLineRef.current = true;
-        clearFindSkillCache();
-        setLines([]);
-        setFindError(null);
-        lineIdRef.current = 0;
-      }
-      setLines((prev) => [
-        ...prev,
-        {
-          id: lineIdRef.current++,
-          stream: e.stream,
-          text: e.line,
-        },
-      ]);
-    });
-    const offExit = api.skills.onFindExit((e: SkillsFindExitEvent) => {
-      if (e.findId !== activeFindId) return;
-      setActiveFindId(null);
-      let nextFindError: string | null = null;
-      if (e.reason === 'error') {
-        nextFindError = 'find-skills failed to run (Claude CLI not installed?).';
-      } else if (e.reason === 'completed' && e.exitCode !== null && e.exitCode !== 0) {
-        // Surface non-zero exit codes so the user knows /find-skills
-        // didn't finish cleanly (e.g. Claude rate-limited or the skill
-        // isn't installed). The streamed stderr is already visible
-        // in the output area — banner just names the failure.
-        nextFindError = `find-skills exited with code ${e.exitCode}`;
-      }
-      setFindError(nextFindError);
+  const installedSet = useMemo(() => new Set(installedIds), [installedIds]);
 
-      if (gotFirstLineRef.current) {
-        // The find produced output → commit the new result to the
-        // cache. Use functional setLines so we capture the latest
-        // queued state (avoids a stale-closure on the lines array).
-        setLines((prev) => {
-          saveFindSkillCache({
-            query: inflightQueryRef.current,
-            lines: prev,
-            findError: nextFindError,
-            nextLineId: lineIdRef.current,
-          });
-          return prev;
-        });
-      } else {
-        // Cancelled / errored before first line → previously-cached
-        // candidates (if any) are still intact. Restore them so the
-        // user gets back to what they were looking at before the
-        // aborted re-search.
-        const cached = getFindSkillCache();
-        setLines([...cached.lines]);
-        setFindError(cached.findError);
-        setQuery(cached.query);
-        lineIdRef.current = cached.nextLineId;
-      }
-    });
-    return () => {
-      offOutput();
-      offExit();
-    };
-  }, [activeFindId]);
-
-  // Auto-scroll the output area when new lines arrive — but ONLY when
-  // the user is already pinned to the bottom. If they've scrolled up to
-  // read earlier candidates, leave their scroll position alone so we
-  // don't yank them back. 8px epsilon absorbs sub-pixel rounding.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el === null) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distanceFromBottom <= 8) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [lines]);
-
-  // Run the structured-output parser over the accumulated stdout. The
-  // SkillFinder is now driven by a prompt that asks Claude to respond
-  // ONLY with a JSON array; we slice the first `[...]` out and validate.
-  // If Claude rambles instead, `parsed` flips false and the dialog
-  // shows the raw stream + manual install input as a fallback.
-  const stdoutText = useMemo(
-    () => lines.filter((l) => l.stream === 'stdout').map((l) => l.text).join('\n'),
-    [lines],
-  );
-  const { candidates, parsed: hasStructuredCandidates } = useMemo(
-    () => parseSkillCandidates(stdoutText),
-    [stdoutText],
-  );
-
-  const handleStartFind = useCallback(
-    async (e?: FormEvent<HTMLFormElement>): Promise<void> => {
-      e?.preventDefault();
-      if (typeof window === 'undefined' || !window.api) return;
-      const trimmed = query.trim();
-      if (trimmed === '') return;
-      // Local lines reset so the loading indicator shows — but the
-      // cache stays intact until the FIRST streamed line of this new
-      // find (`gotFirstLineRef` path above). That lets Stop-before-
-      // output restore the previously-cached candidates rather than
-      // wiping them silently.
-      setLines([]);
-      setFindError(null);
-      lineIdRef.current = 0;
-      gotFirstLineRef.current = false;
-      inflightQueryRef.current = trimmed;
-      const result = await window.api.skills.findStart({ query: trimmed });
-      if (!result.ok) {
-        // Find-start IPC failed (validator rejected the query, or no
-        // bridge). Restore the previously-cached state so the dialog
-        // is back to its pre-search appearance. No new lines were
-        // ever produced, so the cache is still authoritative.
-        const cached = getFindSkillCache();
-        setLines([...cached.lines]);
-        setFindError(result.error.message || result.error.code || 'find-skills failed');
-        lineIdRef.current = cached.nextLineId;
+  /**
+   * Run the skills.sh search. When `appendTo` is non-null, the new rows
+   * are merged (deduped by skillId) onto the existing list — the
+   * pagination path. When null, the response replaces the list — the
+   * initial-search / new-query path.
+   */
+  const runSearch = useCallback(
+    async (
+      q: string,
+      limit: number,
+      appendTo: ApiSkill[] | null,
+    ): Promise<void> => {
+      const trimmed = q.trim();
+      if (trimmed === '') {
+        setState(EMPTY_STATE);
         return;
       }
-      setActiveFindId(result.data.findId);
+      if (typeof window === 'undefined' || !window.api) {
+        setState((s) => ({ ...s, error: 'IPC bridge unavailable', loading: false }));
+        return;
+      }
+      const seq = ++requestSeqRef.current;
+      // W1 fix: clear install-error banner when a new search kicks off so
+      // a previously-failed install banner doesn't outlive its context.
+      setInstallError(null);
+      setState((s) => ({
+        ...s,
+        loading: true,
+        error: null,
+        // On a fresh query, clear results immediately so the loader has
+        // the floor to itself; on append, keep what we have.
+        results: appendTo ?? [],
+        query: trimmed,
+        limit,
+      }));
+      const result = await window.api.skills.search({ query: trimmed, limit });
+      if (seq !== requestSeqRef.current) {
+        // Newer request has been started; drop this response.
+        return;
+      }
+      if (!result.ok) {
+        setState((s) => ({
+          ...s,
+          loading: false,
+          error: result.error.message || result.error.code || 'Search failed',
+        }));
+        return;
+      }
+      const incoming = result.data.skills;
+      let next: ApiSkill[];
+      if (appendTo === null) {
+        next = incoming;
+      } else {
+        // The skills.sh API doesn't support `offset`, so we re-request
+        // with a bigger `limit`. Merge by skillId to keep React keys
+        // stable across page bumps + tolerate duplicate rows.
+        const seen = new Set(appendTo.map((s) => s.skillId));
+        const merged = [...appendTo];
+        for (const row of incoming) {
+          if (!seen.has(row.skillId)) {
+            seen.add(row.skillId);
+            merged.push(row);
+          }
+        }
+        next = merged;
+      }
+      setState({
+        query: trimmed,
+        limit,
+        results: next,
+        total: result.data.count,
+        loading: false,
+        error: null,
+      });
     },
-    [query],
+    [],
   );
 
-  const handleCancel = useCallback(async (): Promise<void> => {
-    if (typeof window === 'undefined' || !window.api || activeFindId === null) return;
-    await window.api.skills.findCancel({ findId: activeFindId });
-  }, [activeFindId]);
+  /**
+   * Debounced input → search. Submit-via-Enter bypasses the debounce by
+   * calling runSearch directly through `handleSubmit`.
+   */
+  useEffect(() => {
+    if (!open) return;
+    const trimmed = query.trim();
+    if (trimmed === '') {
+      setState(EMPTY_STATE);
+      requestSeqRef.current++;
+      return;
+    }
+    if (trimmed === state.query) {
+      return;
+    }
+    const t = setTimeout(() => {
+      void runSearch(trimmed, PAGE_SIZE, null);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [query, open, state.query, runSearch]);
+
+  const handleSubmit = useCallback(
+    (e: FormEvent<HTMLFormElement>): void => {
+      e.preventDefault();
+      const trimmed = query.trim();
+      if (trimmed === '') return;
+      void runSearch(trimmed, PAGE_SIZE, null);
+    },
+    [query, runSearch],
+  );
+
+  /** Triggered by the IntersectionObserver sentinel at the bottom. */
+  const handleLoadMore = useCallback((): void => {
+    if (state.loading) return;
+    if (state.error !== null) return;
+    if (state.query === '') return;
+    if (state.results.length >= state.total) return;
+    if (state.results.length >= MAX_RESULTS_CAP) return;
+    const nextLimit = Math.min(state.limit + PAGE_SIZE, MAX_RESULTS_CAP);
+    if (nextLimit <= state.limit) return;
+    void runSearch(state.query, nextLimit, state.results);
+  }, [state, runSearch]);
+
+  // Wire up the IntersectionObserver. We attach to a sentinel <div> at
+  // the bottom of the results list; when it intersects the viewport (the
+  // scrollable parent), we trigger the next page.
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const sentinel = sentinelRef.current;
+    const root = scrollContainerRef.current;
+    if (sentinel === null || root === null) return;
+    if (typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            handleLoadMore();
+          }
+        }
+      },
+      { root, threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [open, handleLoadMore]);
 
   const handleInstall = useCallback(
-    async (ref: string, displayName?: string): Promise<void> => {
+    async (row: ApiSkill): Promise<void> => {
       if (typeof window === 'undefined' || !window.api) return;
-      const trimmed = ref.trim();
-      if (trimmed === '') return;
-      setInstallingRef(trimmed);
+      setInstallingId(row.skillId);
       setInstallError(null);
       try {
-        const result = await window.api.skills.install({ ref: trimmed });
+        const result = await window.api.skills.install({ ref: row.skillId });
         if (!result.ok) {
-          setInstallError(`${result.error.message || result.error.code}`);
+          setInstallError(result.error.message || result.error.code || 'Install failed');
           return;
         }
         if (result.data.status === 'failed') {
@@ -280,322 +259,183 @@ export function FindSkillDialog({
           setInstallError(tail);
           return;
         }
-        // Success — refresh the parent list and clear the manual input.
-        setManualRef('');
         onInstalled?.();
         dispatchToast({
           type: 'success',
-          title: `Installed ${displayName ?? trimmed}`,
+          title: `Installed ${row.name}`,
           ttlMs: 4_000,
-          dedupeKey: `skill-install-${trimmed}`,
+          dedupeKey: `skill-install-${row.skillId}`,
         });
       } finally {
-        setInstallingRef(null);
+        setInstallingId(null);
       }
     },
     [onInstalled],
   );
 
-  const handleOpenSource = useCallback(async (ref: string): Promise<void> => {
-    if (typeof window === 'undefined' || !window.api) return;
-    const url = getSkillSourceUrl(ref);
-    if (url === null) return;
-    await window.api.shell.openExternal({ url });
-  }, []);
-
-  /**
-   * Wipe both the persisted cache and the dialog's local view. The
-   * dialog falls back to its pre-search empty-state hint. The user
-   * keeps any draft query they typed — only the search results are
-   * cleared, since that's what "Clear" reads as in this context.
-   */
-  const handleClear = useCallback((): void => {
-    clearFindSkillCache();
-    setLines([]);
-    setFindError(null);
-    setQuery('');
-    lineIdRef.current = 0;
-  }, []);
-
-  const isFinding = activeFindId !== null;
-  const prefersReducedMotion = usePrefersReducedMotion();
-  // Once we have parsed candidates, hide the raw stream — the cards
-  // ARE the result view. Keep the stream visible for in-flight finds
-  // and for the fallback (no JSON detected).
-  const showRawStream = !hasStructuredCandidates;
+  const hasResults = state.results.length > 0;
+  const isInitialLoading = state.loading && !hasResults;
+  const isPaging = state.loading && hasResults;
+  const isAtCap = state.results.length >= MAX_RESULTS_CAP;
+  const isExhausted =
+    !state.loading && hasResults && state.results.length >= state.total;
+  const showEmpty =
+    !state.loading && !state.error && state.query !== '' && state.results.length === 0;
+  const showHint = !state.loading && state.error === null && state.query === '';
 
   return (
     <Dialog
       open={open}
-      onClose={() => {
-        // Block backdrop / Esc / X-button close while a find is in
-        // flight — Claude's output is the *result* of the search, so
-        // an accidental click outside shouldn't throw away 30s of
-        // streamed candidates. The user must hit Stop explicitly to
-        // cancel; once `isFinding` flips false the dialog closes
-        // normally.
-        if (isFinding) return;
-        onClose();
-      }}
+      onClose={onClose}
       size="lg"
       title="Find Skill"
-      subtitle="Ask Claude what skill best fits your stack or workflow."
+      subtitle="Search the skills.sh registry by name, description, or keyword."
       data-testid="find-skill-dialog"
     >
       <div className={styles.body} data-testid="find-skill-body">
-        {/*
-         * Three-row grid: sticky search top, scrollable middle region
-         * (loader + raw-stream + candidates list), sticky manual-install
-         * bottom. Long candidate lists no longer push the search input
-         * or the manual-install fallback off-screen.
-         */}
         <form
           className={`${styles.searchRow} ${styles.bodyHeader}`}
-          onSubmit={(e) => void handleStartFind(e)}
+          onSubmit={handleSubmit}
           data-testid="find-skill-body-header"
         >
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder='e.g. "image cropping" or "deploy to fly.io"'
-            disabled={isFinding}
+            placeholder='e.g. "ui" or "deploy to fly.io"'
+            leadingIcon={<IconSearch size={14} />}
             data-testid="find-skill-search"
           />
-          {isFinding ? (
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={() => void handleCancel()}
-              data-testid="find-skill-cancel"
-            >
-              Stop
-            </Button>
-          ) : (
-            <Button
-              type="submit"
-              variant="primary"
-              leadingIcon={<IconSkills size={14} />}
-              disabled={query.trim() === ''}
-              data-testid="find-skill-submit"
-            >
-              Search
-            </Button>
-          )}
+          <Button
+            type="submit"
+            variant="primary"
+            leadingIcon={<IconSkills size={14} />}
+            disabled={query.trim() === '' || state.loading}
+            data-testid="find-skill-submit"
+          >
+            Search
+          </Button>
         </form>
 
-        <div className={styles.bodyScroll} data-testid="find-skill-body-scroll">
-          {findError && (
+        <div
+          className={styles.bodyScroll}
+          ref={scrollContainerRef}
+          data-testid="find-skill-body-scroll"
+        >
+          {state.error !== null && (
             <div className={styles.errorBanner} role="alert" data-testid="find-skill-error">
-              <strong>Couldn't run find-skills.</strong> {findError}
+              <strong>Couldn't search skills.</strong> {state.error}
             </div>
           )}
 
-          {/*
-           * Paperplane Lottie loader — shown while a find is in flight and
-           * no output has streamed yet. Once Claude starts producing
-           * lines, the loader collapses and the stream / cards take over.
-           * `prefers-reduced-motion: reduce` falls back to the static
-           * paperplane glyph (same affordance, no animation).
-           */}
-          {isFinding && lines.length === 0 && (
-            <div className={styles.loadingFigure} data-testid="find-skill-loading-figure">
-              {prefersReducedMotion ? (
-                <svg
-                  width={80}
-                  height={80}
-                  viewBox="0 0 32 32"
-                  className={styles.loadingFigureStatic}
-                  aria-hidden="true"
-                >
-                  <PaperplaneGlyph />
-                </svg>
-              ) : (
-                <div className={styles.loadingFigureLottie} aria-hidden="true">
-                  <Lottie animationData={paperplaneAnimation} loop autoplay />
-                </div>
-              )}
+          {showHint && (
+            <div className={styles.streamHint} data-testid="find-skill-hint">
+              Type a query to search the public skills.sh catalog. Press
+              Enter or click Search to fetch results.
+            </div>
+          )}
+
+          {isInitialLoading && (
+            <div className={styles.loadingFigure} data-testid="find-skill-loading">
               <span className={styles.loadingFigureCaption}>Searching skills…</span>
             </div>
           )}
 
-          {/*
-           * Raw stream fallback. Shown when:
-           *   - the find is mid-flight (so the user sees something happening
-           *     even before Claude emits valid JSON), OR
-           *   - the find has completed but no JSON array was detectable
-           *     (Claude rambled instead of complying with the format).
-           * Hidden once `parseSkillCandidates` succeeds.
-           */}
-          {showRawStream && lines.length > 0 && (
-            <div className={styles.stream} ref={scrollRef} data-testid="find-skill-stream">
-              {lines.map((line) => (
-                <div
-                  key={line.id}
-                  className={styles.streamLine}
-                  data-stream={line.stream}
-                >
-                  {line.text}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/*
-           * Empty-state hint before any search has been kicked off.
-           */}
-          {showRawStream && lines.length === 0 && !isFinding && (
-            <div className={styles.streamHint}>
-              Search asks Claude to find Claude Code skills matching your query
-              and returns them as structured cards with an inline Install
-              button for each.
-            </div>
-          )}
-
-          {hasStructuredCandidates && candidates.length === 0 && !isFinding && (
+          {showEmpty && (
             <div className={styles.streamHint} data-testid="find-skill-empty-result">
-              Claude didn't recommend any skills for that query. Try a
-              different keyword, or paste a skill ref below if you know
-              the name.
+              No skills found for that query. Try a different keyword.
             </div>
           )}
 
-          {candidates.length > 0 && (
-            <div className={styles.candidates} data-testid="find-skill-candidates">
-              <div className={styles.candidatesHead}>
-                <span className={styles.candidatesLabel}>Recommended skills</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleClear}
-                  disabled={isFinding}
-                  data-testid="find-skill-clear"
-                >
-                  Clear
-                </Button>
-              </div>
-              <div className={styles.candidateList} data-layout="row">
-                {candidates.map((c) => (
-                  <SkillCandidateCard
-                    key={c.ref}
-                    candidate={c}
-                    installing={installingRef === c.ref}
-                    disabled={installingRef !== null && installingRef !== c.ref}
-                    onInstall={() => void handleInstall(c.ref, c.name)}
-                    onOpenSource={() => void handleOpenSource(c.ref)}
-                  />
-                ))}
-              </div>
+          {hasResults && (
+            <ul className={styles.resultsList} data-testid="find-skill-results">
+              {state.results.map((row) => {
+                const isInstalled = installedSet.has(row.skillId);
+                const isInstalling = installingId === row.skillId;
+                return (
+                  <li
+                    key={row.skillId}
+                    className={styles.resultRow}
+                    data-testid={`find-skill-row-${row.skillId}`}
+                  >
+                    <div className={styles.resultBody}>
+                      <div className={styles.resultHead}>
+                        <span className={styles.resultName} title={row.name}>
+                          {row.name}
+                        </span>
+                        {isInstalled && (
+                          <Badge variant="success">Installed</Badge>
+                        )}
+                      </div>
+                      <div className={styles.resultMeta}>
+                        <span className={styles.resultSource} title={row.source}>
+                          {row.source}
+                        </span>
+                        <span className={styles.resultDot} aria-hidden="true">·</span>
+                        <span className={styles.resultInstalls}>
+                          {formatInstalls(row.installs)} installs
+                        </span>
+                      </div>
+                    </div>
+                    <div className={styles.resultActions}>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => void handleInstall(row)}
+                        disabled={isInstalled || isInstalling || installingId !== null}
+                        data-testid={`find-skill-install-${row.skillId}`}
+                      >
+                        {isInstalled ? 'Installed' : isInstalling ? 'Installing…' : 'Install'}
+                      </Button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {/* W2 fix: sentinel is a sibling of the <ul>, not a child of it
+              (HTML5 forbids non-<li> children of <ul>). The
+              IntersectionObserver only needs `root` to be the scroll
+              container — which it is — and `target` to be the sentinel,
+              which still gets observed regardless of where it sits in
+              the DOM tree. */}
+          {hasResults && (
+            <div
+              ref={sentinelRef}
+              className={styles.sentinel}
+              data-testid="find-skill-sentinel"
+              aria-hidden="true"
+            />
+          )}
+
+          {isPaging && (
+            <div className={styles.pagingSpinner} data-testid="find-skill-paging">
+              Loading more…
+            </div>
+          )}
+
+          {hasResults && (isExhausted || isAtCap) && (
+            <div
+              className={styles.exhausted}
+              data-testid={isAtCap ? 'find-skill-cap-reached' : 'find-skill-exhausted'}
+            >
+              {isAtCap
+                ? `Showing the first ${MAX_RESULTS_CAP} results — refine your search to see more.`
+                : 'No more results.'}
             </div>
           )}
         </div>
 
-        <div className={styles.bodyFooter} data-testid="find-skill-body-footer">
-          <div className={styles.manualBlock}>
-            <div className={styles.manualHead}>Install by name</div>
-            <p className={styles.manualHint}>
-              If the recommendation you want isn't detected, paste the skill ref
-              here (e.g. <code>ef-feature</code> or <code>owner/repo</code>).
-            </p>
-            <div className={styles.manualRow}>
-              <Input
-                value={manualRef}
-                onChange={(e) => setManualRef(e.target.value)}
-                placeholder="skill-ref"
-                data-testid="find-skill-install-input"
-              />
-              <Button
-                variant="primary"
-                onClick={() => void handleInstall(manualRef)}
-                disabled={manualRef.trim() === '' || installingRef !== null}
-                data-testid="find-skill-install-manual"
-              >
-                {installingRef === manualRef.trim() ? 'Installing…' : 'Install'}
-              </Button>
-            </div>
+        {installError !== null && (
+          <div
+            className={styles.errorBanner}
+            role="alert"
+            data-testid="find-skill-install-error"
+          >
+            <strong>Install failed.</strong> {installError}
           </div>
-
-          {installError && (
-            <div className={styles.errorBanner} role="alert" data-testid="find-skill-install-error">
-              <strong>Install failed.</strong> {installError}
-            </div>
-          )}
-        </div>
+        )}
       </div>
     </Dialog>
-  );
-}
-
-interface SkillCandidateCardProps {
-  candidate: SkillCandidate;
-  installing: boolean;
-  /** Another candidate is being installed — block this card's Install. */
-  disabled: boolean;
-  onInstall: () => void;
-  onOpenSource: () => void;
-}
-
-/**
- * One row per recommended skill. Left column: name + stars + ref pill +
- * description. Right column: action cluster (View source + Install).
- * Single-column list — wider rows make space for the description
- * without truncating it on the first line.
- *
- * The View button is omitted entirely (not just disabled) when the
- * ref doesn't resolve to a known web source — `find-skills` style
- * bare-name refs have no URL we trust enough to open.
- */
-function SkillCandidateCard({
-  candidate,
-  installing,
-  disabled,
-  onInstall,
-  onOpenSource,
-}: SkillCandidateCardProps): JSX.Element {
-  const sourceUrl = getSkillSourceUrl(candidate.ref);
-  return (
-    <article className={styles.card} data-testid={`find-skill-card-${candidate.ref}`}>
-      <div className={styles.cardBody}>
-        <header className={styles.cardHead}>
-          <span className={styles.cardName} title={candidate.name}>
-            {candidate.name}
-          </span>
-          <span className={styles.cardStars} aria-label="GitHub stars">
-            <span aria-hidden="true">★</span>
-            {candidate.stars !== null ? candidate.stars.toLocaleString() : '—'}
-          </span>
-          <span className={styles.cardRef} title={candidate.ref}>
-            {candidate.ref}
-          </span>
-        </header>
-        {candidate.description && (
-          <p className={styles.cardDescription} title={candidate.description}>
-            {candidate.description}
-          </p>
-        )}
-      </div>
-      <div className={styles.cardActions}>
-        {sourceUrl !== null && (
-          <Button
-            variant="ghost"
-            size="sm"
-            leadingIcon={<IconExternal size={12} />}
-            onClick={onOpenSource}
-            data-testid={`find-skill-view-${candidate.ref}`}
-            aria-label={`View source for ${candidate.name}`}
-          >
-            View
-          </Button>
-        )}
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={onInstall}
-          disabled={installing || disabled}
-          data-testid={`find-skill-install-${candidate.ref}`}
-        >
-          {installing ? 'Installing…' : 'Install'}
-        </Button>
-      </div>
-    </article>
   );
 }

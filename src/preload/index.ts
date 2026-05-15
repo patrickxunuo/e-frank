@@ -74,11 +74,8 @@ import {
   type SkillsInstallResponse,
   type SkillsRemoveRequest,
   type SkillsRemoveResponse,
-  type SkillsFindStartRequest,
-  type SkillsFindStartResponse,
-  type SkillsFindCancelRequest,
-  type SkillsFindOutputEvent,
-  type SkillsFindExitEvent,
+  type SkillsSearchRequest,
+  type SkillsSearchResponse,
   type ShellOpenExternalRequest,
   type ShellOpenPathRequest,
   type AppConfigGetResponse,
@@ -441,47 +438,10 @@ const api: IpcApi = {
         IpcResult<SkillsRemoveResponse>
       >,
 
-    findStart: (req: SkillsFindStartRequest): Promise<IpcResult<SkillsFindStartResponse>> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SKILLS_FIND_START, req) as Promise<
-        IpcResult<SkillsFindStartResponse>
+    search: (req: SkillsSearchRequest): Promise<IpcResult<SkillsSearchResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SKILLS_SEARCH, req) as Promise<
+        IpcResult<SkillsSearchResponse>
       >,
-
-    findCancel: (
-      req: SkillsFindCancelRequest,
-    ): Promise<IpcResult<{ findId: string }>> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SKILLS_FIND_CANCEL, req) as Promise<
-        IpcResult<{ findId: string }>
-      >,
-
-    onFindOutput: (
-      listener: (e: SkillsFindOutputEvent) => void,
-    ): (() => void) => {
-      const wrapped = (
-        _event: IpcRendererEvent,
-        payload: SkillsFindOutputEvent,
-      ): void => {
-        listener(payload);
-      };
-      ipcRenderer.on(IPC_CHANNELS.SKILLS_FIND_OUTPUT, wrapped);
-      return () => {
-        ipcRenderer.removeListener(IPC_CHANNELS.SKILLS_FIND_OUTPUT, wrapped);
-      };
-    },
-
-    onFindExit: (
-      listener: (e: SkillsFindExitEvent) => void,
-    ): (() => void) => {
-      const wrapped = (
-        _event: IpcRendererEvent,
-        payload: SkillsFindExitEvent,
-      ): void => {
-        listener(payload);
-      };
-      ipcRenderer.on(IPC_CHANNELS.SKILLS_FIND_EXIT, wrapped);
-      return () => {
-        ipcRenderer.removeListener(IPC_CHANNELS.SKILLS_FIND_EXIT, wrapped);
-      };
-    },
   },
 
   shell: {

@@ -189,10 +189,7 @@ function installApi(opts?: {
       list: skillsList,
       install: vi.fn().mockResolvedValue(unusedErr()),
       remove: skillsRemove,
-      findStart: vi.fn().mockResolvedValue(unusedErr()),
-      findCancel: vi.fn().mockResolvedValue(unusedErr()),
-      onFindOutput: vi.fn(() => () => {}),
-      onFindExit: vi.fn(() => () => {}),
+      search: vi.fn().mockResolvedValue(unusedErr()),
     } as unknown as IpcApi['skills'],
     shell: {
       openPath: vi.fn().mockResolvedValue({ ok: true, data: null }),
