@@ -107,7 +107,7 @@ import type { Spawner } from './spawner';
 
 export interface ClaudeProcessManagerOptions {
   spawner: Spawner;
-  /** ms before SIGTERM is sent automatically. Default 30 * 60 * 1000 (30 min). */
+  /** ms before SIGTERM is sent automatically. Default 60 * 60 * 1000 (60 min). */
   timeoutMs?: number;
   /** ms between SIGTERM and SIGKILL escalation during cancel/timeout. Default 5000. */
   killGraceMs?: number;
@@ -274,7 +274,7 @@ File: `src/main/index.ts` — extend with:
 3. **TicketKey validation**: must match `/^[A-Z][A-Z0-9_]*-\d+$/` (e.g. `ABC-123`, `INGEST-42`). Invalid keys return `INVALID_TICKET_KEY` BEFORE any spawn happens. This prevents command injection via the ticket key argument.
 4. **CWD validation**: must be an absolute path. Existence check is the caller's responsibility (we don't `fs.statSync` to keep tests pure), but the manager MUST reject relative paths with `INVALID_CWD`.
 5. **Cancel escalation**: SIGTERM is sent first; if the process hasn't exited within `killGraceMs` (default 5s), SIGKILL is sent. The `exit` event reflects which signal actually terminated the process.
-6. **Timeout**: starts when `run()` is called. On timeout, manager calls cancel internally and the `exit` event fires with `reason: 'timeout'`. Default 30 minutes; per-run override allowed via `RunRequest.timeoutMs`.
+6. **Timeout**: starts when `run()` is called. On timeout, manager calls cancel internally and the `exit` event fires with `reason: 'timeout'`. Default 60 minutes (#GH-95 raised from 30 — non-trivial autonomous runs were exhausting the 30-min budget mid-tail, leaving the workflow runner unable to distinguish "PR shipped, cleanup got cut" from "PR never shipped"); per-run override allowed via `RunRequest.timeoutMs`.
 7. **Stdin write**: writing to a closed stdin returns `STDIN_CLOSED`. The caller appends `\n` if needed (no implicit newline) — this lets the future Approval flow (#9) send multi-line responses or raw bytes.
 8. **Spawn error handling**: if the child process emits `'error'` (e.g. ENOENT — `claude` not on PATH), the manager MUST emit an `exit` event with `reason: 'error'`, `exitCode: null`, and a `signal: null`, AND the original `run()` call must already have returned successfully (because `run()` is synchronous — the error arrives later asynchronously). The error message must surface in the OutputEvent stream as a stderr line so the UI sees it.
 9. **No `runId` reuse**: each run gets a fresh runId (use `crypto.randomUUID()` or `Date.now()-counter`). Subscribers can filter events by runId if needed.

@@ -47,7 +47,7 @@ function makeConfig(over: Partial<AppConfig> = {}): AppConfig {
     claudeCliPath: null,
     defaultWorkflowMode: 'interactive',
     defaultPollingIntervalSec: 60,
-    defaultRunTimeoutMin: 30,
+    defaultRunTimeoutMin: 60,
     ...over,
   };
 }
@@ -378,7 +378,7 @@ describe('<Settings /> — SETTINGS-DEFAULTS (#GH-86 Workflow defaults section)'
     render(<Settings />);
     const input = await screen.findByTestId('settings-defaults-timeout-input');
     await waitFor(() => {
-      expect(input).toHaveValue(30);
+      expect(input).toHaveValue(60);
     });
     // 2000 is above the max (1440) — should error inline.
     fireEvent.change(input, { target: { value: '2000' } });
@@ -652,7 +652,7 @@ describe('<Settings /> — SETTINGS-CLI (#GH-85 Claude CLI section)', () => {
             claudeCliPath: null,
             defaultWorkflowMode: 'interactive',
             defaultPollingIntervalSec: 60,
-            defaultRunTimeoutMin: 30,
+            defaultRunTimeoutMin: 60,
           },
         },
       });

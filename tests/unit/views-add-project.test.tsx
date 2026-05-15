@@ -989,7 +989,7 @@ describe('<AddProject /> — ADD-PROJ', () => {
             claudeCliPath: null,
             defaultWorkflowMode: 'yolo',
             defaultPollingIntervalSec: 60,
-            defaultRunTimeoutMin: 30,
+            defaultRunTimeoutMin: 60,
           },
         },
       });
@@ -1020,7 +1020,7 @@ describe('<AddProject /> — ADD-PROJ', () => {
             // because the project's own workflow.mode is interactive.
             defaultWorkflowMode: 'yolo',
             defaultPollingIntervalSec: 60,
-            defaultRunTimeoutMin: 30,
+            defaultRunTimeoutMin: 60,
           },
         },
       });
@@ -1074,7 +1074,7 @@ describe('<AddProject /> — ADD-PROJ', () => {
             claudeCliPath: null,
             defaultWorkflowMode: 'interactive',
             defaultPollingIntervalSec: 60,
-            defaultRunTimeoutMin: 30,
+            defaultRunTimeoutMin: 60,
           },
         },
       });

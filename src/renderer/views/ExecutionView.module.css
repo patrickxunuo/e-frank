@@ -167,6 +167,30 @@
   border-radius: 2px;
 }
 
+/*
+ * Terminal-warning chip (#GH-95) — surfaced beneath the title block when
+ * the runner reclassified a tail-end issue (today: timeout-after-PR) as
+ * completed-with-warning. Yellow/warning palette so it reads as advisory
+ * next to the otherwise-success state badge, without obscuring the PR
+ * link in the meta row below.
+ */
+.terminalWarning {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-3);
+  margin-top: var(--space-1);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+  word-break: break-word;
+}
+
 .headActions {
   display: inline-flex;
   align-items: center;

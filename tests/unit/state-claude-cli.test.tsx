@@ -83,7 +83,7 @@ function makeApi(
           claudeCliPath: null,
           defaultWorkflowMode: 'interactive',
           defaultPollingIntervalSec: 60,
-          defaultRunTimeoutMin: 30,
+          defaultRunTimeoutMin: 60,
         },
       },
     });

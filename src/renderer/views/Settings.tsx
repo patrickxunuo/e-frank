@@ -312,7 +312,7 @@ function WorkflowDefaultsSection(): JSX.Element {
     },
   });
   const timeout = useDebouncedNumberField({
-    value: config?.defaultRunTimeoutMin ?? 30,
+    value: config?.defaultRunTimeoutMin ?? 60,
     min: TIMEOUT_MIN_MIN,
     max: TIMEOUT_MAX_MIN,
     unitLabel: 'minutes',
