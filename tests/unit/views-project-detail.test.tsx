@@ -16,6 +16,8 @@ import type {
   IpcApi,
   IpcResult,
   ProjectInstanceDto,
+  Run,
+  RunsListHistoryResponse,
   TicketDto,
 } from '../../src/shared/ipc';
 
@@ -212,7 +214,7 @@ function installApi(opts?: {
         .mockResolvedValue({ ok: true, data: { run: null } }),
       listHistory: vi
         .fn<IpcApi['runs']['listHistory']>()
-        .mockResolvedValue(unusedErr()),
+        .mockResolvedValue({ ok: true, data: { runs: [] } }),
       get: vi.fn() as unknown as IpcApi['runs']['get'],
       onCurrentChanged: vi.fn<IpcApi['runs']['onCurrentChanged']>(() => () => {}),
       onStateChanged: vi.fn<IpcApi['runs']['onStateChanged']>(() => () => {}),
@@ -1272,6 +1274,114 @@ describe('<ProjectDetail /> — DET', () => {
       render(<ProjectDetail projectId="p-1" onBack={noop} />);
 
       await screen.findByTestId('ticket-row-ABC-1');
+    });
+  });
+
+  /**
+   * #GH-77 — page-level Refresh wired into the Runs tab via the new
+   * `useRunHistory` hook. Mirrors PRS-005 / PRS-016 from
+   * views-project-detail-prs.test.tsx so the two tabs' refresh behavior is
+   * checked against the same shape.
+   */
+  describe('DET-RUNS-REFRESH page-level Refresh on Runs tab', () => {
+    function makeRun(id: string, overrides: Partial<Run> = {}): Run {
+      return {
+        id,
+        projectId: 'p-1',
+        ticketKey: 'ABC-1',
+        mode: 'interactive',
+        branchName: `feat/${id}`,
+        state: 'done',
+        status: 'done',
+        steps: [],
+        pendingApproval: null,
+        startedAt: Date.parse('2026-05-12T10:00:00.000Z'),
+        finishedAt: Date.parse('2026-05-12T10:05:00.000Z'),
+        ...overrides,
+      };
+    }
+
+    async function openRunsTab(): Promise<void> {
+      const runsTab = await screen.findByRole('tab', { name: /^runs$/i });
+      await act(async () => {
+        fireEvent.click(runsTab);
+      });
+    }
+
+    it('RUN-REFRESH-001: clicking page-level Refresh on Runs tab calls runs.listHistory again', async () => {
+      const stub = installApi();
+      const listHistoryMock = stub.api.runs.listHistory as unknown as Mock;
+      listHistoryMock.mockResolvedValue({
+        ok: true,
+        data: { runs: [makeRun('r-1')] },
+      });
+
+      render(<ProjectDetail projectId="p-1" onBack={noop} />);
+      await openRunsTab();
+
+      // Initial mount-fetch settled.
+      await waitFor(() => {
+        expect(listHistoryMock).toHaveBeenCalledTimes(1);
+      });
+      expect(listHistoryMock).toHaveBeenCalledWith({
+        projectId: 'p-1',
+        limit: 50,
+      });
+
+      const refresh = await screen.findByTestId('refresh-button');
+      await act(async () => {
+        fireEvent.click(refresh);
+      });
+
+      await waitFor(() => {
+        expect(listHistoryMock).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it('RUN-REFRESH-002: clicking Refresh swaps stale rows for skeleton until the in-flight fetch resolves', async () => {
+      const stub = installApi();
+      const listHistoryMock = stub.api.runs.listHistory as unknown as Mock;
+      let resolveSecond: (r: IpcResult<RunsListHistoryResponse>) => void = () => {};
+      listHistoryMock.mockImplementationOnce(() =>
+        Promise.resolve({
+          ok: true,
+          data: { runs: [makeRun('r-stale', { ticketKey: 'STL-1' })] },
+        }),
+      );
+      listHistoryMock.mockImplementationOnce(
+        () =>
+          new Promise<IpcResult<RunsListHistoryResponse>>((res) => {
+            resolveSecond = res;
+          }),
+      );
+
+      render(<ProjectDetail projectId="p-1" onBack={noop} />);
+      await openRunsTab();
+
+      // Stale row visible after the first fetch.
+      expect(await screen.findByTestId('run-row-r-stale')).toBeInTheDocument();
+
+      // Trigger Refresh; second listHistory is in-flight.
+      const refresh = await screen.findByTestId('refresh-button');
+      await act(async () => {
+        fireEvent.click(refresh);
+      });
+
+      // Skeleton replaces the stale row. The table testid stays mounted, but
+      // the data row is gone — matches the PRS-016 stale-to-skeleton check.
+      await waitFor(() => {
+        expect(screen.queryByTestId('run-row-r-stale')).not.toBeInTheDocument();
+      });
+      expect(screen.getByTestId('runs-tab-table')).toBeInTheDocument();
+
+      // Resolve the in-flight fetch → fresh row renders.
+      await act(async () => {
+        resolveSecond({
+          ok: true,
+          data: { runs: [makeRun('r-fresh', { ticketKey: 'FRH-1' })] },
+        });
+      });
+      expect(await screen.findByTestId('run-row-r-fresh')).toBeInTheDocument();
     });
   });
 });
