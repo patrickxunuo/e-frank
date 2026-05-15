@@ -191,6 +191,19 @@ export interface WorkflowRunnerOptions {
    * before the first poll, or a ticket the poller never saw).
    */
   ticketPoller?: { list: (projectId: string) => Ticket[] };
+  /**
+   * Read-only adapter over the app-config store (#GH-86). When provided, the
+   * runner asks for the current `defaultRunTimeoutMin` immediately before
+   * spawning Claude and threads it into `ClaudeProcessManager.run` as
+   * `timeoutMs`. The read happens per-run so a user can edit the default
+   * mid-session and have the next run pick it up without a restart.
+   *
+   * Optional — when omitted (or when the read fails) the runner passes no
+   * `timeoutMs`, letting `ClaudeProcessManager` apply its built-in default
+   * (30 min). Tests can leave this out without changing the legacy timeout
+   * behavior.
+   */
+  appConfig?: { get: () => Promise<{ ok: true; data: { defaultRunTimeoutMin: number } } | { ok: false; error: unknown }> };
   /** Test injection. Defaults to `Date.now()`. */
   clock?: { now: () => number };
   /**
@@ -873,9 +886,9 @@ export class WorkflowRunner extends EventEmitter {
   // -- Claude integration with approval markers ----------------------------
 
   private async runClaudeWithApprovals(ctx: ActiveRunCtx, cwd: string): Promise<void> {
-    // Resolve the Claude CLI override from appConfig (if the adapter is
-    // wired up — it is in main, but tests can skip it). A `null` or
-    // missing override falls back to the manager's default command.
+    // #GH-85: resolve the Claude CLI override from appConfig (if the
+    // adapter is wired up — it is in main, tests can skip it). A `null`
+    // or missing override falls back to the manager's default command.
     let commandOverride: string | undefined;
     if (this.options.appConfigAdapter !== undefined) {
       const cfg = await this.options.appConfigAdapter.get();
@@ -893,10 +906,29 @@ export class WorkflowRunner extends EventEmitter {
         );
       }
     }
+
+    // #GH-86: resolve the per-run timeout from app-config. Read fresh per
+    // run so live edits to the default flow through without a restart.
+    // Omit the field entirely when there's no adapter / the read fails,
+    // letting ClaudeProcessManager fall back to its built-in default.
+    let timeoutMs: number | undefined;
+    if (this.options.appConfig !== undefined) {
+      try {
+        const res = await this.options.appConfig.get();
+        if (res.ok) {
+          timeoutMs = res.data.defaultRunTimeoutMin * 60 * 1000;
+        }
+      } catch {
+        // Swallow — leave timeoutMs undefined so the manager applies its
+        // built-in default. A bad config read shouldn't fail the run.
+      }
+    }
+
     const startRes = this.options.claudeManager.run({
       ticketKey: ctx.run.ticketKey,
       cwd,
       command: commandOverride,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     });
     if (!startRes.ok) {
       throw new Error(

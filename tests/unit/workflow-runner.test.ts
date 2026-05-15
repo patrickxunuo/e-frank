@@ -394,6 +394,16 @@ interface HarnessOptions {
       | { ok: false; error: { code: string; message: string } }
     >;
   };
+  /**
+   * #GH-86 — when supplied, the runner reads `defaultRunTimeoutMin` from
+   * this adapter per-run and threads it into `claudeManager.run` as
+   * `timeoutMs`. Omit to exercise the fallback (no timeoutMs passed).
+   */
+  appConfig?: {
+    get: () => Promise<
+      { ok: true; data: { defaultRunTimeoutMin: number } } | { ok: false; error: unknown }
+    >;
+  };
 }
 
 interface Harness {
@@ -456,6 +466,7 @@ async function buildHarness(opts: HarnessOptions = {}): Promise<Harness> {
     jiraUpdater,
     worktreeManager: fakeWorktree as unknown as WorktreeManager,
     appConfigAdapter: opts.appConfigAdapter,
+    ...(opts.appConfig !== undefined ? { appConfig: opts.appConfig } : {}),
   });
 
   const stateEvents: RunStateEvent[] = [];
@@ -2251,6 +2262,111 @@ describe('WorkflowRunner', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(h.fakeClaude.runRequests[0]?.command).toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // WFR-048 — app-config defaultRunTimeoutMin threads into claude.run (#GH-86)
+  // -------------------------------------------------------------------------
+  describe('WFR-048 appConfig.defaultRunTimeoutMin → claudeManager.run timeoutMs', () => {
+    it('WFR-048a: appConfig present → run() carries timeoutMs = defaultRunTimeoutMin * 60_000', async () => {
+      const h = await buildHarness({
+        appConfig: {
+          get: vi
+            .fn()
+            .mockResolvedValue({ ok: true, data: { defaultRunTimeoutMin: 45 } }),
+        },
+      });
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+      await waitForState(h, 'running');
+      // First (and only) run was issued with the resolved timeout.
+      expect(h.fakeClaude.runRequests).toHaveLength(1);
+      expect(h.fakeClaude.runRequests[0]?.timeoutMs).toBe(45 * 60 * 1000);
+      // Tidy up.
+      h.fakeClaude.emitExit(0, 'completed');
+      await waitForFinal(h);
+    });
+
+    it('WFR-048b: appConfig missing → run() omits timeoutMs (manager applies default)', async () => {
+      // No `appConfig` adapter passed.
+      const h = await buildHarness();
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+      await waitForState(h, 'running');
+      expect(h.fakeClaude.runRequests).toHaveLength(1);
+      expect(h.fakeClaude.runRequests[0]?.timeoutMs).toBeUndefined();
+      h.fakeClaude.emitExit(0, 'completed');
+      await waitForFinal(h);
+    });
+
+    it('WFR-048c: appConfig.get returning error → run() omits timeoutMs (legacy default applies)', async () => {
+      const h = await buildHarness({
+        appConfig: {
+          get: vi.fn().mockResolvedValue({
+            ok: false,
+            error: { code: 'IO_FAILURE', message: 'sentinel-read-fail' },
+          }),
+        },
+      });
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+      await waitForState(h, 'running');
+      expect(h.fakeClaude.runRequests).toHaveLength(1);
+      expect(h.fakeClaude.runRequests[0]?.timeoutMs).toBeUndefined();
+      h.fakeClaude.emitExit(0, 'completed');
+      await waitForFinal(h);
+    });
+
+    it('WFR-048d: appConfig.get throwing → run() omits timeoutMs, run still starts', async () => {
+      const h = await buildHarness({
+        appConfig: {
+          get: vi.fn().mockRejectedValue(new Error('boom')),
+        },
+      });
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+      await waitForState(h, 'running');
+      expect(h.fakeClaude.runRequests).toHaveLength(1);
+      expect(h.fakeClaude.runRequests[0]?.timeoutMs).toBeUndefined();
+      h.fakeClaude.emitExit(0, 'completed');
+      await waitForFinal(h);
+    });
+
+    it('WFR-048e: appConfig.get is called per run-start (read fresh, not cached)', async () => {
+      const getSpy = vi
+        .fn()
+        .mockResolvedValue({ ok: true, data: { defaultRunTimeoutMin: 15 } });
+      const h = await buildHarness({ appConfig: { get: getSpy } });
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+      await waitForState(h, 'running');
+      // The single run's pipeline read appConfig exactly once — confirms the
+      // adapter is invoked on the run-start path rather than at construction.
+      expect(getSpy).toHaveBeenCalledTimes(1);
+      expect(h.fakeClaude.runRequests[0]?.timeoutMs).toBe(15 * 60 * 1000);
+      h.fakeClaude.emitExit(0, 'completed');
+      await waitForFinal(h);
     });
   });
 });

@@ -375,6 +375,41 @@
 }
 
 /*
+ * Workflow defaults section card (#GH-86). Same shape as the theme card so
+ * finished sections feel visually parallel. Hosts the workflow-mode
+ * RadioCardGroup plus the polling-interval + run-timeout number fields.
+ */
+.defaultsCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-card);
+}
+
+.defaultsField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-width: 360px;
+}
+
+.defaultsUnit {
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+  padding-right: var(--space-2);
+}
+
+.defaultsHint {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/*
  * About section card (#GH-87). Same shape as the theme card so finished
  * sections feel visually parallel. Hosts an info-row grid (dt/dd pairs
  * laid out as a two-column grid) plus a row of secondary actions.

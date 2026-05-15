@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   validateProjectInstanceInput,
   type ProjectInstanceInput,
@@ -23,6 +23,7 @@ import {
   IconPlus,
   IconRefresh,
 } from '../components/icons';
+import { useAppConfig } from '../state/app-config';
 import { useConnections } from '../state/connections';
 import {
   useConnectionRepos,
@@ -139,6 +140,25 @@ export function AddProject({ onClose, onCreated, editing }: AddProjectProps): JS
   const [addConnectionFor, setAddConnectionFor] = useState<
     'github' | 'jira' | null
   >(null);
+
+  // #GH-86: in creation mode, pre-select the workflow-mode card from
+  // `appConfig.defaultWorkflowMode` once the config has loaded — instead of
+  // staying on the hardcoded INITIAL.workflowMode = 'interactive'. We only
+  // seed once, and only if the user hasn't already touched the field, so a
+  // click that lands during the initial load isn't clobbered. Editing mode
+  // is exempt because `formFromEditing` already pins `workflowMode` to
+  // `editing.workflow.mode`.
+  const appConfig = useAppConfig();
+  const workflowModeTouchedRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (editing !== undefined) return;
+    if (workflowModeTouchedRef.current) return;
+    const next = appConfig.config?.defaultWorkflowMode;
+    if (next === undefined) return;
+    setForm((prev) =>
+      prev.workflowMode === next ? prev : { ...prev, workflowMode: next },
+    );
+  }, [appConfig.config?.defaultWorkflowMode, editing]);
 
   const fieldErrors = useMemo(() => errorsByPath(validationErrors), [validationErrors]);
 
@@ -884,7 +904,10 @@ export function AddProject({ onClose, onCreated, editing }: AddProjectProps): JS
             label="Workflow Mode"
             required
             value={form.workflowMode}
-            onChange={(value) => set('workflowMode', value)}
+            onChange={(value) => {
+              workflowModeTouchedRef.current = true;
+              set('workflowMode', value);
+            }}
             options={[
               {
                 value: 'interactive',
