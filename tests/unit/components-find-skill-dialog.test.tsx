@@ -25,7 +25,7 @@ import type {
  *     row's skillId is in the `installedIds` prop.
  *   - Pages via an IntersectionObserver sentinel — bumping `limit` by
  *     PAGE_SIZE (20) per scroll until count or 200-cap is reached.
- *   - Debounces input-driven searches by 300ms.
+ *   - Debounces input-driven searches by 500ms.
  *   - Surfaces HTTP error codes from the search IPC in an error banner.
  *
  * IntersectionObserver isn't implemented by jsdom — tests that need to
@@ -301,8 +301,15 @@ describe('FindSkillDialog (GH-93)', () => {
   });
 
   // -- DIALOG-INSTALL-001 — install dispatches IPC + onInstalled callback
-  it('DIALOG-INSTALL-001: clicking Install calls skills.install with the skillId and fires onInstalled', async () => {
-    const r1 = row({ skillId: 'frontend-design', name: 'frontend-design' });
+  it('DIALOG-INSTALL-001: clicking Install calls skills.install with the source repo (owner/repo), not the skillId', async () => {
+    // The skills CLI clones the source repo to install — passing just
+    // `skillId` makes it try to clone a non-existent top-level repo. The
+    // source field on the API response is the owner/repo path.
+    const r1 = row({
+      skillId: 'frontend-design',
+      name: 'frontend-design',
+      source: 'vercel-labs/agent-skills',
+    });
     const stub = installApi({ searchResults: [r1] });
     const onInstalled = vi.fn();
     render(
@@ -320,7 +327,7 @@ describe('FindSkillDialog (GH-93)', () => {
     await screen.findByTestId('find-skill-install-frontend-design');
     fireEvent.click(screen.getByTestId('find-skill-install-frontend-design'));
     await waitFor(() => {
-      expect(stub.install).toHaveBeenCalledWith({ ref: 'frontend-design' });
+      expect(stub.install).toHaveBeenCalledWith({ ref: 'vercel-labs/agent-skills' });
     });
     await waitFor(() => {
       expect(onInstalled).toHaveBeenCalled();

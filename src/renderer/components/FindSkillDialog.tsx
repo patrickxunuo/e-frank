@@ -35,7 +35,7 @@ export const PAGE_SIZE = 20;
 /** Hard cap on total results to avoid runaway scrolling. Issue #GH-93 spec. */
 export const MAX_RESULTS_CAP = 200;
 /** Debounce window for input-driven searches. Submit-via-Enter is immediate. */
-const SEARCH_DEBOUNCE_MS = 300;
+const SEARCH_DEBOUNCE_MS = 500;
 
 function formatInstalls(n: number): string {
   if (!Number.isFinite(n) || n < 0) return '—';
@@ -249,7 +249,11 @@ export function FindSkillDialog({
       setInstallingId(row.skillId);
       setInstallError(null);
       try {
-        const result = await window.api.skills.install({ ref: row.skillId });
+        // The skills CLI expects `owner/repo` (the source repository), not
+        // the bare `skillId`. Without this, `skills add <skillId>` tries to
+        // clone a non-existent top-level repo and fails with
+        // "fatal: repository '<skillId>' does not exist".
+        const result = await window.api.skills.install({ ref: row.source });
         if (!result.ok) {
           setInstallError(result.error.message || result.error.code || 'Install failed');
           return;

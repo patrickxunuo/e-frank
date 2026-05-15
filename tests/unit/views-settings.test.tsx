@@ -166,11 +166,14 @@ describe('<Settings /> — SETTINGS-FOUND (#GH-69 Foundation)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('settings-error')).toBeInTheDocument();
     });
-    // Other surfaces still render — error doesn't block the shell.
+    // Other surfaces still render — error doesn't block the shell. All
+    // four sections are implemented post-#GH-86, so no placeholder
+    // remains; the shell test is now "every section's real testid
+    // appears even with the bridge missing".
     expect(screen.getByTestId('settings-theme-section')).toBeInTheDocument();
     expect(screen.getByTestId('settings-claude-cli-section')).toBeInTheDocument();
+    expect(screen.getByTestId('settings-defaults-section')).toBeInTheDocument();
     expect(screen.getByTestId('settings-about-section')).toBeInTheDocument();
-    expect(screen.getByTestId('settings-placeholder-defaults')).toBeInTheDocument();
   });
 
   it('SETTINGS-FOUND-005: appConfig.get returns error → error banner renders', async () => {

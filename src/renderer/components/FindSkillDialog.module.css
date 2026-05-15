@@ -4,12 +4,17 @@
    * install errors. `min-height: 0` on the scroll row is required so the
    * grid child actually overflows instead of pushing parents — without
    * it the result list would push the bottom error banner off-screen.
+   *
+   * Height is FIXED, not a min/max range. Earlier (min: 360, max: 70vh)
+   * caused the dialog to grow/shrink as results filled in, which felt
+   * unstable. `height: 600px` with a `max-height: 70vh` fallback gives a
+   * steady 600px on normal displays and shrinks gracefully on short ones.
    */
   display: grid;
   grid-template-rows: auto 1fr auto;
   gap: var(--space-4);
+  height: 600px;
   max-height: 70vh;
-  min-height: 360px;
 }
 
 .bodyHeader {
