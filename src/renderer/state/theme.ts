@@ -39,7 +39,9 @@ export interface UseThemeResult {
   /** Persist a new preference (writes through to localStorage cache too). */
   setTheme: (next: ThemeMode) => Promise<void>;
   /**
-   * Quick light↔dark flip used by the Sidebar's ThemeToggle.
+   * Quick light↔dark flip. Kept on the hook surface because the rule is
+   * non-trivial (system mode escapes to opposite-of-resolved) and any
+   * future quick-swap caller would otherwise re-implement the same logic.
    * - `light` → `dark`
    * - `dark` → `light`
    * - `system` → opposite of the current `resolvedTheme` (escapes system mode
