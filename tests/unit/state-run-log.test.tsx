@@ -164,6 +164,7 @@ function installApi(opts?: {
       modify: vi.fn() as unknown as IpcApi['runs']['modify'],
       current: current as unknown as IpcApi['runs']['current'],
       listHistory: vi.fn() as unknown as IpcApi['runs']['listHistory'],
+      get: vi.fn() as unknown as IpcApi['runs']['get'],
       onCurrentChanged: vi.fn(() => () => {}) as unknown as IpcApi['runs']['onCurrentChanged'],
       onStateChanged: onStateChanged as unknown as IpcApi['runs']['onStateChanged'],
       // Agent B is responsible for adding `readLog` to the typed IpcApi.

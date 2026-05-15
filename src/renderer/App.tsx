@@ -15,12 +15,17 @@ import { useNotificationDispatchers } from './state/notification-dispatchers';
 import { useProjects } from './state/projects';
 import styles from './App.module.css';
 
+/**
+ * `detail.initialTab` is plumbed through so navigating back from the
+ * past-run detail view (#GH-66) lands on the Runs tab the user clicked
+ * from. Default is unset → ProjectDetail falls back to its 'tickets' tab.
+ */
 type ViewState =
   | { kind: 'list' }
   | { kind: 'connections' }
   | { kind: 'skills' }
   | { kind: 'settings' }
-  | { kind: 'detail'; projectId: string }
+  | { kind: 'detail'; projectId: string; initialTab?: 'tickets' | 'runs' | 'prs' | 'settings' }
   | { kind: 'execution'; runId: string; projectId: string };
 
 type DetailViewState = Extract<ViewState, { kind: 'detail' }>;
@@ -28,10 +33,11 @@ type ExecutionViewState = Extract<ViewState, { kind: 'execution' }>;
 type SetView = (v: ViewState) => void;
 
 function renderDetail(view: DetailViewState, setView: SetView): JSX.Element {
-  const { projectId } = view;
+  const { projectId, initialTab } = view;
   return (
     <ProjectDetail
       projectId={projectId}
+      initialTab={initialTab}
       onBack={() => setView({ kind: 'list' })}
       onOpenExecution={(runId) => {
         setView({ kind: 'execution', runId, projectId });
@@ -48,6 +54,7 @@ function renderExecution(view: ExecutionViewState, setView: SetView): JSX.Elemen
       runId={runId}
       projectId={projectId}
       onBack={() => setView({ kind: 'detail', projectId })}
+      onBackToRuns={() => setView({ kind: 'detail', projectId, initialTab: 'runs' })}
     />
   );
 }

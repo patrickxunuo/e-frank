@@ -124,6 +124,7 @@ function makeIpcApiStub(
       listHistory: vi
         .fn<IpcApi['runs']['listHistory']>()
         .mockResolvedValue(unusedErr()),
+      get: vi.fn() as unknown as IpcApi['runs']['get'],
       onCurrentChanged: vi.fn<IpcApi['runs']['onCurrentChanged']>(() => () => {}),
       onListChanged: vi.fn<IpcApi['runs']['onListChanged']>(() => () => {}),
       onStateChanged: vi.fn<IpcApi['runs']['onStateChanged']>(() => () => {}),

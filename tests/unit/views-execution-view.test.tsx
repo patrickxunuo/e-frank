@@ -61,6 +61,8 @@ interface ApiStub {
   runsCurrent: Mock;
   runsCancel: Mock;
   runsReadLog: Mock;
+  runsGet: Mock;
+  shellOpenExternal: Mock;
   claudeStatus: Mock;
   claudeWrite: Mock;
   claudeOnOutput: Mock;
@@ -115,6 +117,11 @@ function installApi(opts?: {
   project?: ProjectInstanceDto;
   current?: IpcResult<{ run: Run | null }>;
   readLog?: IpcResult<{ entries: RunLogEntry[] }>;
+  /**
+   * Stub for `runs.get` (#GH-66). Defaults to NOT_FOUND so existing tests
+   * that explicitly hit the not-found path keep working without changes.
+   */
+  getResult?: IpcResult<{ run: Run }>;
   status?: IpcResult<{ active: { runId: string; pid: number | undefined; startedAt: number } | null }>;
   cancelResult?: IpcResult<{ runId: string }>;
   writeResult?: IpcResult<{ bytesWritten: number }>;
@@ -133,6 +140,12 @@ function installApi(opts?: {
   const runsReadLog = vi
     .fn()
     .mockResolvedValue(opts?.readLog ?? { ok: true, data: { entries: [] } });
+  const runsGet = vi
+    .fn()
+    .mockResolvedValue(
+      opts?.getResult ?? { ok: false, error: { code: 'NOT_FOUND', message: 'no run' } },
+    );
+  const shellOpenExternal = vi.fn().mockResolvedValue({ ok: true, data: null });
   const runsCancel = vi
     .fn()
     .mockResolvedValue(opts?.cancelResult ?? { ok: true, data: { runId: 'r-1' } });
@@ -210,6 +223,7 @@ function installApi(opts?: {
       modify: vi.fn() as unknown as IpcApi['runs']['modify'],
       current: runsCurrent as unknown as IpcApi['runs']['current'],
       listHistory: vi.fn() as unknown as IpcApi['runs']['listHistory'],
+      get: runsGet as unknown as IpcApi['runs']['get'],
       onCurrentChanged: vi.fn(() => () => {}) as unknown as IpcApi['runs']['onCurrentChanged'],
       onStateChanged: runsOnStateChanged as unknown as IpcApi['runs']['onStateChanged'],
       // `readLog` is patched via the unknown cast — Agent B owns the typed signature.
@@ -239,7 +253,7 @@ function installApi(opts?: {
     },
     shell: {
       openPath: vi.fn() as unknown as IpcApi['shell']['openPath'],
-      openExternal: vi.fn() as unknown as IpcApi['shell']['openExternal'],
+      openExternal: shellOpenExternal as unknown as IpcApi['shell']['openExternal'],
       openLogDirectory: vi.fn() as unknown as IpcApi['shell']['openLogDirectory'],
     },
     appConfig: {
@@ -256,6 +270,8 @@ function installApi(opts?: {
     runsCurrent,
     runsCancel,
     runsReadLog,
+    runsGet,
+    shellOpenExternal,
     claudeStatus,
     claudeWrite,
     claudeOnOutput,
@@ -769,5 +785,188 @@ describe('<ExecutionView /> — EXEC-APPROVAL', () => {
     expect(bodyOf().getAttribute('data-has-panel')).toBe('false');
     expect(errorSpy).not.toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+});
+
+/**
+ * EXEC-PAST-001..006 — past-run detail view (#GH-66).
+ *
+ * Behavior under test: when `runs.current()` doesn't match the requested
+ * runId, ExecutionView falls back to `runs.get({runId})` and renders the
+ * persisted Run as a read-only history view.
+ */
+describe('<ExecutionView /> — past-run detail (#GH-66)', () => {
+  it('EXEC-PAST-001: falls back to runs.get when current is null and renders the terminal run', async () => {
+    const stub = installApi({
+      project: makeProject('p-1', 'Alpha Project'),
+      current: { ok: true, data: { run: null } },
+      getResult: {
+        ok: true,
+        data: {
+          run: makeRun({
+            id: 'r-done',
+            projectId: 'p-1',
+            ticketKey: 'ABC-9',
+            status: 'done',
+            state: 'done',
+            branchName: 'feat/ABC-9-stuff',
+            startedAt: 1_000_000,
+            finishedAt: 1_065_000,
+            prUrl: 'https://github.com/o/r/pull/42',
+          }),
+        },
+      },
+    });
+
+    render(<ExecutionView runId="r-done" projectId="p-1" onBack={noop} />);
+
+    await waitFor(() => {
+      expect(stub.runsGet).toHaveBeenCalledWith({ runId: 'r-done' });
+      expect(screen.getByTestId('execution-title')).toHaveTextContent(/ABC-9/);
+    });
+    // Status badge says Done (terminal).
+    expect(screen.getByTestId('execution-status-badge')).toHaveTextContent(/done/i);
+    // Cancel button hidden for terminal runs.
+    expect(screen.queryByTestId('log-cancel-button')).not.toBeInTheDocument();
+    // Meta row shows branch + duration + PR link.
+    expect(screen.getByTestId('execution-meta-branch')).toHaveTextContent('feat/ABC-9-stuff');
+    expect(screen.getByTestId('execution-meta-duration')).toHaveTextContent(/1m\s*5s|65s/);
+    expect(screen.getByTestId('execution-meta-pr-link')).toBeInTheDocument();
+  });
+
+  it('EXEC-PAST-002: shows Not-Found UI when runs.get returns NOT_FOUND', async () => {
+    installApi({
+      current: { ok: true, data: { run: null } },
+      getResult: { ok: false, error: { code: 'NOT_FOUND', message: 'no such run' } },
+    });
+
+    render(<ExecutionView runId="r-missing" projectId="p-1" onBack={noop} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('execution-not-found')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/no longer exists/i)).toBeInTheDocument();
+  });
+
+  it('EXEC-PAST-003: stale running snapshot (not the active run) → Interrupted badge', async () => {
+    installApi({
+      current: { ok: true, data: { run: null } },
+      getResult: {
+        ok: true,
+        data: {
+          run: makeRun({
+            id: 'r-orphan',
+            projectId: 'p-1',
+            // On-disk says running, but runs.current() is null — runner
+            // doesn't know about it (crashed mid-run).
+            status: 'running',
+            state: 'implementing',
+          }),
+        },
+      },
+    });
+
+    render(<ExecutionView runId="r-orphan" projectId="p-1" onBack={noop} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('execution-status-badge')).toHaveTextContent(/interrupted/i);
+    });
+    // Cancel hidden because the runner has no live process to cancel.
+    expect(screen.queryByTestId('log-cancel-button')).not.toBeInTheDocument();
+  });
+
+  it('EXEC-PAST-004: PR link opens via shell.openExternal', async () => {
+    const stub = installApi({
+      current: { ok: true, data: { run: null } },
+      getResult: {
+        ok: true,
+        data: {
+          run: makeRun({
+            id: 'r-done',
+            projectId: 'p-1',
+            status: 'done',
+            state: 'done',
+            startedAt: 0,
+            finishedAt: 1,
+            prUrl: 'https://github.com/o/r/pull/7',
+          }),
+        },
+      },
+    });
+
+    render(<ExecutionView runId="r-done" projectId="p-1" onBack={noop} />);
+
+    const link = await screen.findByTestId('execution-meta-pr-link');
+    fireEvent.click(link);
+
+    await waitFor(() => {
+      expect(stub.shellOpenExternal).toHaveBeenCalledWith({
+        url: 'https://github.com/o/r/pull/7',
+      });
+    });
+  });
+
+  it('EXEC-PAST-005: Back button on a past-run uses onBackToRuns when provided', async () => {
+    const onBack = vi.fn();
+    const onBackToRuns = vi.fn();
+    installApi({
+      current: { ok: true, data: { run: null } },
+      getResult: {
+        ok: true,
+        data: {
+          run: makeRun({
+            id: 'r-done',
+            projectId: 'p-1',
+            status: 'done',
+            state: 'done',
+          }),
+        },
+      },
+    });
+
+    render(
+      <ExecutionView
+        runId="r-done"
+        projectId="p-1"
+        onBack={onBack}
+        onBackToRuns={onBackToRuns}
+      />,
+    );
+
+    // Wait for the past-run UI to settle, then click Back.
+    await screen.findByTestId('execution-meta');
+    fireEvent.click(screen.getByTestId('execution-back'));
+
+    expect(onBackToRuns).toHaveBeenCalledTimes(1);
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it('EXEC-PAST-006: Back from a live run uses onBack (not onBackToRuns)', async () => {
+    const onBack = vi.fn();
+    const onBackToRuns = vi.fn();
+    installApi({
+      current: {
+        ok: true,
+        data: {
+          run: makeRun({ id: 'r-live', projectId: 'p-1', state: 'running' }),
+        },
+      },
+    });
+
+    render(
+      <ExecutionView
+        runId="r-live"
+        projectId="p-1"
+        onBack={onBack}
+        onBackToRuns={onBackToRuns}
+      />,
+    );
+
+    // Live run resolves via runs.current() — meta row is NOT shown.
+    await screen.findByTestId('execution-title');
+    fireEvent.click(screen.getByTestId('execution-back'));
+
+    expect(onBack).toHaveBeenCalledTimes(1);
+    expect(onBackToRuns).not.toHaveBeenCalled();
   });
 });

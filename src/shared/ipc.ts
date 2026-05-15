@@ -135,6 +135,14 @@ export const IPC_CHANNELS = {
    *  back-compat (returns first-of-many). */
   RUNS_LIST_ACTIVE: 'runs:list-active',
   RUNS_LIST_HISTORY: 'runs:list-history',
+  /**
+   * Read one persisted Run snapshot by id (#GH-66). The active runner's
+   * in-memory map is consulted first via `RUNS_CURRENT` / `RUNS_LIST_ACTIVE`;
+   * this channel reads from `RunStore` on disk for terminal runs whose
+   * sidecar file remains after the runner has moved on. Returns `NOT_FOUND`
+   * when the sidecar has been deleted (e.g. via `RUNS_DELETE`).
+   */
+  RUNS_GET: 'runs:get',
   RUNS_DELETE: 'runs:delete',
   RUNS_READ_LOG: 'runs:read-log',
   // -- Paginated tickets (PR #40 expansion) --
@@ -523,6 +531,18 @@ export interface RunsListHistoryResponse {
   runs: Run[];
 }
 
+/**
+ * Fetch one persisted Run snapshot by id (#GH-66). Drives the past-run
+ * detail view when the requested run is no longer the active one.
+ */
+export interface RunsGetRequest {
+  runId: string;
+}
+
+export interface RunsGetResponse {
+  run: Run;
+}
+
 export interface RunsDeleteRequest {
   runId: string;
 }
@@ -878,6 +898,12 @@ export interface IpcApi {
     listHistory: (
       req: RunsListHistoryRequest,
     ) => Promise<IpcResult<RunsListHistoryResponse>>;
+    /**
+     * Fetch one persisted Run snapshot by id (#GH-66). Used by the
+     * past-run detail view when the run is no longer active. Returns
+     * `NOT_FOUND` when the sidecar has been deleted.
+     */
+    get: (req: RunsGetRequest) => Promise<IpcResult<RunsGetResponse>>;
     delete: (req: RunsDeleteRequest) => Promise<IpcResult<RunsDeleteResponse>>;
     readLog: (req: RunsReadLogRequest) => Promise<IpcResult<RunsReadLogResponse>>;
     /** Subscribe to current-changed events (run starts / advances / completes). Returns unsubscribe fn. */

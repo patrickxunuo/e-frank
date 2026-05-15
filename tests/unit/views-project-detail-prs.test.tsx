@@ -151,6 +151,7 @@ function installApi(opts?: {
       modify: vi.fn().mockResolvedValue(unusedErr()),
       current: vi.fn().mockResolvedValue({ ok: true, data: { run: null } }),
       listHistory: vi.fn().mockResolvedValue({ ok: true, data: { runs: [] } }),
+      get: vi.fn() as unknown as IpcApi['runs']['get'],
       delete: vi.fn().mockResolvedValue(unusedErr()),
       readLog: vi.fn().mockResolvedValue({ ok: true, data: { entries: [] } }),
       onCurrentChanged: vi.fn(() => () => {}),

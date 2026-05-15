@@ -42,6 +42,8 @@ import {
   type RunsListActiveResponse,
   type RunsListHistoryRequest,
   type RunsListHistoryResponse,
+  type RunsGetRequest,
+  type RunsGetResponse,
   type RunsDeleteRequest,
   type RunsDeleteResponse,
   type RunsReadLogRequest,
@@ -515,6 +517,16 @@ function validateRunsReadLogRequest(raw: unknown): IpcResult<RunsReadLogRequest>
     return {
       ok: false,
       error: { code: 'INVALID_REQUEST', message: 'runId must be a string' },
+    };
+  }
+  return { ok: true, data: { runId: raw['runId'] } };
+}
+
+function validateRunsGetRequest(raw: unknown): IpcResult<RunsGetRequest> {
+  if (!isPlainObject(raw) || typeof raw['runId'] !== 'string' || raw['runId'] === '') {
+    return {
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'runId must be a non-empty string' },
     };
   }
   return { ok: true, data: { runId: raw['runId'] } };
@@ -1783,6 +1795,29 @@ function registerIpcHandlers(): void {
         return { ok: false, error: { code: res.error.code, message: res.error.message } };
       }
       return { ok: true, data: { entries: res.data } };
+    },
+  );
+
+  // #GH-66: read one persisted Run snapshot by id. Falls through to
+  // RunStore.get; an in-flight run's freshest snapshot lives in the
+  // runner's active map and is reachable via `RUNS_CURRENT`, so the
+  // renderer prefers that path for live runs and uses this one for
+  // terminal / historical lookups.
+  ipcMain.handle(
+    IPC_CHANNELS.RUNS_GET,
+    async (_event, raw): Promise<IpcResult<RunsGetResponse>> => {
+      const validated = validateRunsGetRequest(raw);
+      if (!validated.ok) {
+        return validated;
+      }
+      if (runStore === null) {
+        return notInitialized('RunStore');
+      }
+      const res = await runStore.get(validated.data.runId);
+      if (!res.ok) {
+        return { ok: false, error: { code: res.error.code, message: res.error.message } };
+      }
+      return { ok: true, data: { run: res.data } };
     },
   );
 

@@ -213,6 +213,7 @@ function installApi(opts?: {
       listHistory: vi
         .fn<IpcApi['runs']['listHistory']>()
         .mockResolvedValue(unusedErr()),
+      get: vi.fn() as unknown as IpcApi['runs']['get'],
       onCurrentChanged: vi.fn<IpcApi['runs']['onCurrentChanged']>(() => () => {}),
       onStateChanged: vi.fn<IpcApi['runs']['onStateChanged']>(() => () => {}),
       // #8 adds runs.readLog. Agent B owns the typed signature; we patch it
@@ -1228,6 +1229,49 @@ describe('<ProjectDetail /> — DET', () => {
       // Cancel reference so the helper isn't flagged unused — installRunsStub
       // patches the namespace; we keep it for parity with sibling tests.
       void stub;
+    });
+  });
+
+  /**
+   * DET-INITIAL-TAB — `initialTab` prop seeds the starting tab (#GH-66).
+   * Used by App.tsx to return the user to the Runs tab after backing out
+   * of the past-run detail view.
+   */
+  describe('DET-INITIAL-TAB initialTab prop', () => {
+    it('DET-INITIAL-TAB-001: initialTab="runs" lands on the Runs tab without a click', async () => {
+      const tickets = [makeTicket('ABC-1')];
+      installApi({ tickets });
+
+      render(
+        <ProjectDetail projectId="p-1" onBack={noop} initialTab="runs" />,
+      );
+
+      // Tickets table NEVER renders because Runs is the starting tab.
+      await waitFor(() => {
+        expect(screen.getByTestId('project-tabs')).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('ticket-row-ABC-1')).not.toBeInTheDocument();
+
+      // The Runs tab is the selected one.
+      const tabsRoot = screen.getByTestId('project-tabs');
+      const runsTab = within(tabsRoot)
+        .getAllByRole('tab')
+        .find((t) => /^runs$/i.test(t.textContent ?? ''));
+      expect(runsTab).toBeDefined();
+      // aria-selected or data-state checked, depending on tabs impl.
+      const selected =
+        runsTab!.getAttribute('aria-selected') === 'true' ||
+        runsTab!.getAttribute('data-state') === 'active';
+      expect(selected).toBe(true);
+    });
+
+    it('DET-INITIAL-TAB-002: omitted initialTab defaults to Tickets', async () => {
+      const tickets = [makeTicket('ABC-1')];
+      installApi({ tickets });
+
+      render(<ProjectDetail projectId="p-1" onBack={noop} />);
+
+      await screen.findByTestId('ticket-row-ABC-1');
     });
   });
 });
