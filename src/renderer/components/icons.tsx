@@ -273,6 +273,20 @@ export function IconMoon({ size = 16, ...rest }: IconProps): JSX.Element {
   );
 }
 
+/**
+ * Monitor / display silhouette — used for the "System" theme card (#GH-84)
+ * to represent "follow the OS preference". Simple monitor with a stand.
+ */
+export function IconMonitor({ size = 16, ...rest }: IconProps): JSX.Element {
+  return (
+    <svg {...baseProps(size)} {...rest}>
+      <rect x="2" y="3" width="20" height="14" rx="2" />
+      <path d="M8 21h8" />
+      <path d="M12 17v4" />
+    </svg>
+  );
+}
+
 export function IconChevronDown({ size = 12, ...rest }: IconProps): JSX.Element {
   return (
     <svg {...baseProps(size)} {...rest}>

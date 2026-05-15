@@ -1,170 +1,119 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { ThemeToggle } from '../../src/renderer/components/ThemeToggle';
+import { useTheme } from '../../src/renderer/state/theme';
+import type { ResolvedTheme } from '../../src/renderer/state/theme';
+import type { ThemeMode } from '../../src/shared/ipc';
 
 /**
- * CMP-THEME-001..005 — <ThemeToggle /> component tests.
+ * CMP-THEME-001..008 — `<ThemeToggle />` component tests (#GH-84 rewrite).
  *
- * Stable testid: `theme-toggle` (default; overridable via prop).
- *
- * Behaviour:
- *  - Renders a moon icon when current theme is dark.
- *  - Renders a sun icon when current theme is light.
- *  - aria-label reflects the *next* state ("Switch to light theme" when
- *    currently dark; "Switch to dark theme" when currently light).
- *  - Click toggles the theme — flipping the html data-theme attribute
- *    AND persisting to localStorage.
- *  - data-testid prop overrides the default.
+ * After the #GH-84 migration, the toggle reads `resolvedTheme` (effective)
+ * from `useTheme` and calls `toggle()` on click. The underlying
+ * app-config / matchMedia machinery is exercised by `state-theme.test.tsx`;
+ * here we mock `useTheme` directly so these tests focus purely on the
+ * toggle's UI behavior.
  */
 
-const STORAGE_KEY = 'ef.theme';
+vi.mock('../../src/renderer/state/theme', () => ({
+  useTheme: vi.fn(),
+}));
 
-interface MemoryStorage {
-  store: Map<string, string>;
-  getItem: (key: string) => string | null;
-  setItem: (key: string, value: string) => void;
-  removeItem: (key: string) => void;
-  clear: () => void;
-  length: number;
-  key: (index: number) => string | null;
-}
-
-function makeMemoryStorage(seed?: Record<string, string>): MemoryStorage {
-  const store = new Map<string, string>(Object.entries(seed ?? {}));
-  return {
-    store,
-    getItem: (k) => (store.has(k) ? (store.get(k) ?? null) : null),
-    setItem: (k, v) => {
-      store.set(k, String(v));
-    },
-    removeItem: (k) => {
-      store.delete(k);
-    },
-    clear: () => {
-      store.clear();
-    },
-    get length(): number {
-      return store.size;
-    },
-    key: (i) => Array.from(store.keys())[i] ?? null,
-  };
-}
-
-function installStorage(stub: MemoryStorage | Storage): void {
-  Object.defineProperty(window, 'localStorage', {
-    configurable: true,
-    value: stub,
+function mockTheme(opts: {
+  theme: ThemeMode;
+  resolvedTheme: ResolvedTheme;
+  toggle?: Mock;
+  setTheme?: Mock;
+}): Mock {
+  const toggle = opts.toggle ?? vi.fn().mockResolvedValue(undefined);
+  const setTheme = opts.setTheme ?? vi.fn().mockResolvedValue(undefined);
+  (useTheme as unknown as Mock).mockReturnValue({
+    theme: opts.theme,
+    resolvedTheme: opts.resolvedTheme,
+    loading: false,
+    setTheme,
+    toggle,
   });
+  return toggle;
 }
-
-function resetThemeAttribute(): void {
-  document.documentElement.removeAttribute('data-theme');
-}
-
-beforeEach(() => {
-  resetThemeAttribute();
-  installStorage(makeMemoryStorage());
-});
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  resetThemeAttribute();
+  (useTheme as unknown as Mock).mockReset();
 });
 
-describe('<ThemeToggle /> — CMP-THEME', () => {
-  // ---------------------------------------------------------------------------
-  // CMP-THEME-001 — Moon icon when theme is dark
-  // ---------------------------------------------------------------------------
-  it('CMP-THEME-001: renders moon icon when current theme is dark', async () => {
-    // Default: no stored value → useTheme resolves to 'dark'.
+describe('<ThemeToggle /> — CMP-THEME (#GH-84)', () => {
+  it('CMP-THEME-001: resolvedTheme="dark" → renders the moon icon + "Switch to light theme" aria-label', () => {
+    mockTheme({ theme: 'dark', resolvedTheme: 'dark' });
     render(<ThemeToggle />);
-
-    const toggle = await screen.findByTestId('theme-toggle');
-    // The moon variant is identified by an aria-label flipping to "Switch to light theme",
-    // since aria-label reflects the NEXT state.
-    await waitFor(() => {
-      expect(toggle.getAttribute('aria-label')).toMatch(/switch to light theme/i);
-    });
+    const btn = screen.getByTestId('theme-toggle');
+    expect(btn).toHaveAttribute('aria-label', 'Switch to light theme');
+    // Moon icon path starts with `M21 12.79A9 9 0 1 1` — distinguishes from sun.
+    expect(btn.querySelector('svg path')?.getAttribute('d')).toMatch(/A9 9 0 1 1/);
   });
 
-  // ---------------------------------------------------------------------------
-  // CMP-THEME-002 — Sun icon when theme is light
-  // ---------------------------------------------------------------------------
-  it('CMP-THEME-002: renders sun icon when current theme is light', async () => {
-    installStorage(makeMemoryStorage({ [STORAGE_KEY]: 'light' }));
-
+  it('CMP-THEME-002: resolvedTheme="light" → renders the sun icon + "Switch to dark theme" aria-label', () => {
+    mockTheme({ theme: 'light', resolvedTheme: 'light' });
     render(<ThemeToggle />);
-
-    const toggle = await screen.findByTestId('theme-toggle');
-    await waitFor(() => {
-      expect(toggle.getAttribute('aria-label')).toMatch(/switch to dark theme/i);
-    });
+    const btn = screen.getByTestId('theme-toggle');
+    expect(btn).toHaveAttribute('aria-label', 'Switch to dark theme');
+    // Sun icon has a <circle> child; moon doesn't.
+    expect(btn.querySelector('svg circle')).not.toBeNull();
   });
 
-  // ---------------------------------------------------------------------------
-  // CMP-THEME-003 — aria-label reflects the next state
-  // ---------------------------------------------------------------------------
-  it('CMP-THEME-003: aria-label reflects the *next* state', async () => {
-    // Dark by default → aria says "Switch to light theme".
-    const { unmount } = render(<ThemeToggle />);
-    const toggleA = await screen.findByTestId('theme-toggle');
-    await waitFor(() => {
-      expect(toggleA.getAttribute('aria-label')).toMatch(/switch to light theme/i);
-    });
-    unmount();
-
-    // Now seed light and re-render → aria says "Switch to dark theme".
-    installStorage(makeMemoryStorage({ [STORAGE_KEY]: 'light' }));
+  it('CMP-THEME-003: click calls toggle() on the hook exactly once', () => {
+    const toggle = mockTheme({ theme: 'dark', resolvedTheme: 'dark' });
     render(<ThemeToggle />);
-    const toggleB = await screen.findByTestId('theme-toggle');
-    await waitFor(() => {
-      expect(toggleB.getAttribute('aria-label')).toMatch(/switch to dark theme/i);
-    });
+    fireEvent.click(screen.getByTestId('theme-toggle'));
+    expect(toggle).toHaveBeenCalledTimes(1);
   });
 
-  // ---------------------------------------------------------------------------
-  // CMP-THEME-004 — Click toggles theme (storage + html attribute)
-  // ---------------------------------------------------------------------------
-  it('CMP-THEME-004: click toggles theme — localStorage updated and data-theme flipped', async () => {
-    const storage = makeMemoryStorage();
-    installStorage(storage);
-
+  it('CMP-THEME-004: in system mode with resolved=dark, button still shows moon ("Switch to light")', () => {
+    mockTheme({ theme: 'system', resolvedTheme: 'dark' });
     render(<ThemeToggle />);
-
-    const toggle = await screen.findByTestId('theme-toggle');
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
-    });
-
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute('data-theme')).toBe('light');
-    });
-    expect(storage.store.get(STORAGE_KEY)).toBe('light');
-
-    // Toggle again — flips back to dark.
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
-    });
-    expect(storage.store.get(STORAGE_KEY)).toBe('dark');
+    // The toggle reflects the EFFECTIVE state, not the preference — even
+    // when preference is 'system', the user sees a toggle aligned with what
+    // they're currently looking at.
+    expect(screen.getByTestId('theme-toggle')).toHaveAttribute(
+      'aria-label',
+      'Switch to light theme',
+    );
   });
 
-  // ---------------------------------------------------------------------------
-  // CMP-THEME-005 — testid default + override
-  // ---------------------------------------------------------------------------
-  it('CMP-THEME-005: data-testid defaults to "theme-toggle" and is overridable', async () => {
-    const { unmount } = render(<ThemeToggle />);
-    expect(await screen.findByTestId('theme-toggle')).toBeInTheDocument();
-    unmount();
+  it('CMP-THEME-005: in system mode with resolved=light, button shows sun ("Switch to dark")', () => {
+    mockTheme({ theme: 'system', resolvedTheme: 'light' });
+    render(<ThemeToggle />);
+    expect(screen.getByTestId('theme-toggle')).toHaveAttribute(
+      'aria-label',
+      'Switch to dark theme',
+    );
+  });
 
+  it('CMP-THEME-006: data-testid prop overrides the default testid', () => {
+    mockTheme({ theme: 'dark', resolvedTheme: 'dark' });
     render(<ThemeToggle data-testid="custom-toggle" />);
-    expect(await screen.findByTestId('custom-toggle')).toBeInTheDocument();
-    expect(screen.queryByTestId('theme-toggle')).not.toBeInTheDocument();
+    expect(screen.getByTestId('custom-toggle')).toBeInTheDocument();
+    expect(screen.queryByTestId('theme-toggle')).toBeNull();
+  });
+
+  it('CMP-THEME-007: rapid clicks call toggle() each time (no debounce in the component)', () => {
+    const toggle = mockTheme({ theme: 'dark', resolvedTheme: 'dark' });
+    render(<ThemeToggle />);
+    const btn = screen.getByTestId('theme-toggle');
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    expect(toggle).toHaveBeenCalledTimes(3);
+  });
+
+  it('CMP-THEME-008: button is a real <button> element (focusable, keyboard-actionable)', () => {
+    mockTheme({ theme: 'dark', resolvedTheme: 'dark' });
+    render(<ThemeToggle />);
+    const btn = screen.getByTestId('theme-toggle');
+    expect(btn.tagName).toBe('BUTTON');
+    expect(btn).toHaveAttribute('type', 'button');
   });
 });
