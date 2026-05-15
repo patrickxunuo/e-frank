@@ -7,16 +7,17 @@
  * Section status:
  *   - Theme — implemented (#GH-84)
  *   - Claude CLI — implemented (#GH-85)
- *   - Workflow defaults — placeholder, #GH-86 follow-up
+ *   - Workflow defaults — implemented (#GH-86)
  *   - About — implemented (#GH-87)
  */
-import { useState, type JSX } from 'react';
-import type { ThemeMode } from '@shared/ipc';
+import { useEffect, useRef, useState, type JSX } from 'react';
+import type { ThemeMode, WorkflowModeDefault } from '@shared/ipc';
 import { useAppConfig } from '../state/app-config';
 import { useAppInfo } from '../state/app-info';
 import { useClaudeCli } from '../state/claude-cli';
 import { useTheme } from '../state/theme';
 import { Button } from '../components/Button';
+import { Input } from '../components/Input';
 import { RadioCardGroup, type RadioCardOption } from '../components/RadioCardGroup';
 import {
   IconAlert,
@@ -25,11 +26,21 @@ import {
   IconFolder,
   IconMonitor,
   IconMoon,
+  IconPlay,
   IconRefresh,
   IconSun,
 } from '../components/icons';
 import { dispatchToast } from '../state/notifications';
 import styles from './Settings.module.css';
+
+/** Debounce window for number-field persistence — matches the issue spec. */
+const DEFAULTS_PERSIST_DEBOUNCE_MS = 300;
+/** Polling-interval range (seconds) — mirrors the AppConfig validator. */
+const POLLING_MIN_SEC = 5;
+const POLLING_MAX_SEC = 86400;
+/** Run-timeout range (minutes) — mirrors the AppConfig validator. */
+const TIMEOUT_MIN_MIN = 1;
+const TIMEOUT_MAX_MIN = 1440;
 
 /** GitHub URLs the About section's link buttons open via shell.openExternal. */
 const ISSUE_URL = 'https://github.com/patrickxunuo/paperplane/issues/new';
@@ -64,7 +75,7 @@ const SECTIONS: ReadonlyArray<SettingsSection> = [
     id: 'defaults',
     label: 'Workflow defaults',
     blurb: 'Default workflow mode, polling interval, run timeout.',
-    followUp: 'GH-86',
+    followUp: null,
   },
   {
     id: 'about',
@@ -106,6 +117,9 @@ function SectionBody({ section }: { section: SettingsSection }): JSX.Element {
   }
   if (section.id === 'claude-cli') {
     return <ClaudeCliSection />;
+  }
+  if (section.id === 'defaults') {
+    return <WorkflowDefaultsSection />;
   }
   if (section.id === 'about') {
     return <AboutSection />;
@@ -150,6 +164,261 @@ function ThemeSection(): JSX.Element {
           role="status"
         >
           Loading saved preference…
+        </p>
+      )}
+    </div>
+  );
+}
+
+const WORKFLOW_MODE_OPTIONS: RadioCardOption<WorkflowModeDefault>[] = [
+  {
+    value: 'interactive',
+    title: 'Interactive',
+    description: 'Pause at plan review for approval.',
+    icon: <IconCheck size={18} />,
+  },
+  {
+    value: 'yolo',
+    title: 'YOLO',
+    description: 'Skip plan review, run fully autonomously.',
+    icon: <IconPlay size={18} />,
+  },
+];
+
+/**
+ * Number-field state machine used by both the polling-interval and the
+ * run-timeout inputs. Holds a "draft" string (what the input shows) plus an
+ * inline error, and persists a parsed integer to app-config after a
+ * `DEFAULTS_PERSIST_DEBOUNCE_MS` debounce — same shape ProjectDetail's ticket
+ * search uses for `committedSearch`. The hook resets its draft whenever
+ * `value` changes from outside (e.g. after a successful save lands the
+ * canonical number back on the config).
+ */
+function useDebouncedNumberField(opts: {
+  value: number;
+  min: number;
+  max: number;
+  unitLabel: string;
+  persist: (next: number) => void;
+}): {
+  draft: string;
+  error: string | null;
+  onChange: (next: string) => void;
+  onCommit: () => void;
+} {
+  const { value, min, max, unitLabel, persist } = opts;
+  const [draft, setDraft] = useState<string>(String(value));
+  const [error, setError] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // `editingRef` flips true on any `onChange` and back to false when a commit
+  // SUCCEEDS (validation passed → draft has been normalised to the canonical
+  // string). The canonical-value sync effect below honors this so a debounced
+  // persist landing AFTER the user resumed editing doesn't overwrite their
+  // in-progress text with the old normalized value.
+  const editingRef = useRef<boolean>(false);
+
+  // Sync the draft when the canonical value changes (e.g. after a save or a
+  // refresh from elsewhere). Skip when the user is actively editing — their
+  // pending text wins until they commit (blur / Enter).
+  useEffect(() => {
+    if (editingRef.current) return;
+    const seeded = String(value);
+    setDraft((prev) => (prev === seeded ? prev : seeded));
+  }, [value]);
+
+  // Tear down any pending debounced persist on unmount.
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, []);
+
+  function commit(raw: string): void {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    const trimmed = raw.trim();
+    if (trimmed === '') {
+      setError(`Enter a value between ${min} and ${max} ${unitLabel}.`);
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+      setError(`Must be a whole number between ${min} and ${max} ${unitLabel}.`);
+      return;
+    }
+    if (parsed < min || parsed > max) {
+      setError(`Out of range — must be between ${min} and ${max} ${unitLabel}.`);
+      return;
+    }
+    setError(null);
+    // Successful validation — the draft is now normalized to the canonical
+    // form, so further auto-syncs from the value-changed effect are safe.
+    editingRef.current = false;
+    if (parsed === value) {
+      // No change — don't fire a write, but normalize the draft text so a
+      // leading "0060" snaps back to "60".
+      setDraft(String(parsed));
+      return;
+    }
+    setDraft(String(parsed));
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      persist(parsed);
+    }, DEFAULTS_PERSIST_DEBOUNCE_MS);
+  }
+
+  function onChange(next: string): void {
+    setDraft(next);
+    // Mark mid-edit so a debounced persist landing during further typing
+    // doesn't wipe the user's text via the canonical-value sync effect.
+    editingRef.current = true;
+    // Clear any prior error as the user types — re-validate on commit.
+    if (error !== null) setError(null);
+  }
+
+  function onCommit(): void {
+    commit(draft);
+  }
+
+  return { draft, error, onChange, onCommit };
+}
+
+/**
+ * Workflow defaults section (#GH-86). Three controls over the
+ * `defaultWorkflowMode` / `defaultPollingIntervalSec` / `defaultRunTimeoutMin`
+ * fields of `AppConfig`. Per-project values still win when set; this section
+ * defines what AddProject and the runner reach for as the fallback.
+ *
+ * Persistence shape:
+ *   - Mode card → calls `update` immediately on click.
+ *   - Number inputs → debounce 300ms after blur/Enter, validate range
+ *     inline, only persist on success.
+ */
+function WorkflowDefaultsSection(): JSX.Element {
+  const { config, update, loading, error } = useAppConfig();
+
+  const polling = useDebouncedNumberField({
+    value: config?.defaultPollingIntervalSec ?? 60,
+    min: POLLING_MIN_SEC,
+    max: POLLING_MAX_SEC,
+    unitLabel: 'seconds',
+    persist: (next) => {
+      void update({ defaultPollingIntervalSec: next });
+    },
+  });
+  const timeout = useDebouncedNumberField({
+    value: config?.defaultRunTimeoutMin ?? 30,
+    min: TIMEOUT_MIN_MIN,
+    max: TIMEOUT_MAX_MIN,
+    unitLabel: 'minutes',
+    persist: (next) => {
+      void update({ defaultRunTimeoutMin: next });
+    },
+  });
+
+  // Until the first config read lands the controls render disabled — there's
+  // no canonical value to anchor the inputs against and we don't want a
+  // click on a card to fire `update({ defaultWorkflowMode })` with a stale
+  // local default.
+  const disabled = config === null;
+  const currentMode: WorkflowModeDefault = config?.defaultWorkflowMode ?? 'interactive';
+
+  function handleModeChange(next: WorkflowModeDefault): void {
+    if (disabled || next === currentMode) return;
+    void update({ defaultWorkflowMode: next });
+  }
+
+  function handleNumberKeyDown(
+    e: React.KeyboardEvent<HTMLInputElement>,
+    commit: () => void,
+  ): void {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commit();
+    }
+  }
+
+  return (
+    <div className={styles.defaultsCard} data-testid="settings-defaults-section">
+      <RadioCardGroup<WorkflowModeDefault>
+        label="Default workflow mode"
+        value={currentMode}
+        onChange={handleModeChange}
+        options={WORKFLOW_MODE_OPTIONS}
+        data-testid="settings-defaults-mode"
+      />
+
+      <div
+        className={styles.defaultsField}
+        data-testid="settings-defaults-polling-field"
+        // Surface the error to test queries on the wrapper so callers can
+        // assert presence without poking the Input's internal span id.
+        data-error={polling.error ?? undefined}
+      >
+        <Input
+          type="number"
+          inputMode="numeric"
+          label="Default polling interval"
+          value={polling.draft}
+          min={POLLING_MIN_SEC}
+          max={POLLING_MAX_SEC}
+          step={1}
+          disabled={disabled}
+          onChange={(e) => polling.onChange(e.target.value)}
+          onBlur={polling.onCommit}
+          onKeyDown={(e) => handleNumberKeyDown(e, polling.onCommit)}
+          trailing={<span className={styles.defaultsUnit}>seconds</span>}
+          hint={`Range: ${POLLING_MIN_SEC}–${POLLING_MAX_SEC} seconds. Applied to new projects; per-project overrides win.`}
+          error={polling.error ?? undefined}
+          data-testid="settings-defaults-polling-input"
+        />
+      </div>
+
+      <div
+        className={styles.defaultsField}
+        data-testid="settings-defaults-timeout-field"
+        data-error={timeout.error ?? undefined}
+      >
+        <Input
+          type="number"
+          inputMode="numeric"
+          label="Default run timeout"
+          value={timeout.draft}
+          min={TIMEOUT_MIN_MIN}
+          max={TIMEOUT_MAX_MIN}
+          step={1}
+          disabled={disabled}
+          onChange={(e) => timeout.onChange(e.target.value)}
+          onBlur={timeout.onCommit}
+          onKeyDown={(e) => handleNumberKeyDown(e, timeout.onCommit)}
+          trailing={<span className={styles.defaultsUnit}>minutes</span>}
+          hint={`Range: ${TIMEOUT_MIN_MIN}–${TIMEOUT_MAX_MIN} minutes. Workflow runs are killed past this.`}
+          error={timeout.error ?? undefined}
+          data-testid="settings-defaults-timeout-input"
+        />
+      </div>
+
+      {loading && config === null && (
+        <p
+          className={styles.defaultsHint}
+          data-testid="settings-defaults-loading"
+          role="status"
+        >
+          Loading saved defaults…
+        </p>
+      )}
+      {error !== null && (
+        <p
+          className={styles.defaultsHint}
+          data-testid="settings-defaults-save-error"
+          role="status"
+        >
+          Couldn't save — {error}
         </p>
       )}
     </div>

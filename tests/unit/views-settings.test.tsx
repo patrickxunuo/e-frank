@@ -10,6 +10,7 @@ import type { ResolvedTheme } from '../../src/renderer/state/theme';
 /**
  * SETTINGS-FOUND-001..005 — `<Settings>` page shell (#GH-69 Foundation).
  * SETTINGS-THEME-001..004 — Theme section UI (#GH-84).
+ * SETTINGS-DEFAULTS-001..009 — Workflow defaults section UI (#GH-86).
  * SETTINGS-ABOUT-001..005 — About section UI (#GH-87).
  *
  * Foundation tests assert the shell shape. Theme tests cover the
@@ -119,21 +120,21 @@ afterEach(() => {
 });
 
 describe('<Settings /> — SETTINGS-FOUND (#GH-69 Foundation)', () => {
-  it('SETTINGS-FOUND-001: renders page title + theme/cli/about sections + 1 remaining placeholder', async () => {
+  it('SETTINGS-FOUND-001: all four sections are implemented — no placeholders remain', async () => {
     installApi({ get: { ok: true, data: makeConfig() } });
     mockTheme();
     render(<Settings />);
     expect(await screen.findByTestId('settings-title')).toBeInTheDocument();
-    // Theme (#GH-84), Claude CLI (#GH-85), and About (#GH-87) are
-    // implemented — they use real testids, not the placeholder variant.
+    // All four sections (#GH-84 theme, #GH-85 claude-cli, #GH-86 defaults,
+    // #GH-87 about) are implemented — none should render the placeholder.
     expect(screen.getByTestId('settings-theme-section')).toBeInTheDocument();
     expect(screen.queryByTestId('settings-placeholder-theme')).toBeNull();
     expect(screen.getByTestId('settings-claude-cli-section')).toBeInTheDocument();
     expect(screen.queryByTestId('settings-placeholder-claude-cli')).toBeNull();
+    expect(screen.getByTestId('settings-defaults-section')).toBeInTheDocument();
+    expect(screen.queryByTestId('settings-placeholder-defaults')).toBeNull();
     expect(screen.getByTestId('settings-about-section')).toBeInTheDocument();
     expect(screen.queryByTestId('settings-placeholder-about')).toBeNull();
-    // Workflow defaults still renders the placeholder (GH-86 follow-up).
-    expect(screen.getByTestId('settings-placeholder-defaults')).toBeInTheDocument();
   });
 
   it('SETTINGS-FOUND-002: rail navigation has hash hrefs pointing at section ids', async () => {
@@ -230,6 +231,272 @@ describe('<Settings /> — SETTINGS-THEME (#GH-84 Theme section)', () => {
     render(<Settings />);
     await screen.findByTestId('settings-title');
     expect(screen.getByTestId('settings-theme-loading')).toBeInTheDocument();
+  });
+});
+
+describe('<Settings /> — SETTINGS-DEFAULTS (#GH-86 Workflow defaults section)', () => {
+  function installApiForDefaults(opts: {
+    config?: AppConfig;
+    setResult?:
+      | { ok: true; data: AppConfig }
+      | { ok: false; error: { code: string; message: string } };
+  } = {}): { configGet: Mock; configSet: Mock } {
+    const config = opts.config ?? makeConfig();
+    const configGet = vi
+      .fn()
+      .mockResolvedValue({ ok: true, data: { config } });
+    const setResult = opts.setResult ?? { ok: true, data: { ...config } };
+    const configSet = vi.fn().mockResolvedValue(
+      setResult.ok
+        ? { ok: true, data: { config: setResult.data } }
+        : setResult,
+    );
+    const api = {
+      appConfig: { get: configGet, set: configSet },
+      app: { info: vi.fn().mockResolvedValue({ ok: true, data: makeAppInfo() }) },
+      shell: {
+        openPath: vi.fn(),
+        openExternal: vi.fn().mockResolvedValue({ ok: true, data: null }),
+        openLogDirectory: vi.fn().mockResolvedValue({ ok: true, data: null }),
+      },
+    } as unknown as IpcApi;
+    (window as { api?: IpcApi }).api = api;
+    return { configGet, configSet };
+  }
+
+  it('SETTINGS-DEFAULTS-001: renders mode radio + both number inputs with current values', async () => {
+    installApiForDefaults({
+      config: makeConfig({
+        defaultWorkflowMode: 'yolo',
+        defaultPollingIntervalSec: 120,
+        defaultRunTimeoutMin: 45,
+      }),
+    });
+    mockTheme();
+    render(<Settings />);
+    await screen.findByTestId('settings-defaults-section');
+    expect(screen.getByTestId('settings-defaults-mode-option-interactive')).toBeInTheDocument();
+    expect(screen.getByTestId('settings-defaults-mode-option-yolo')).toBeInTheDocument();
+    // RadioCardGroup uses aria-checked="true" for the selected card.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('settings-defaults-mode-option-yolo'),
+      ).toHaveAttribute('aria-checked', 'true');
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('settings-defaults-polling-input')).toHaveValue(120);
+    });
+    expect(screen.getByTestId('settings-defaults-timeout-input')).toHaveValue(45);
+  });
+
+  it('SETTINGS-DEFAULTS-002: clicking a mode card persists immediately via appConfig.set', async () => {
+    const { configSet } = installApiForDefaults({
+      config: makeConfig({ defaultWorkflowMode: 'interactive' }),
+    });
+    mockTheme();
+    render(<Settings />);
+    await screen.findByTestId('settings-defaults-section');
+    // Wait for first config load so `disabled` flips off.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('settings-defaults-mode-option-interactive'),
+      ).toHaveAttribute('aria-checked', 'true');
+    });
+    fireEvent.click(screen.getByTestId('settings-defaults-mode-option-yolo'));
+    await waitFor(() => {
+      expect(configSet).toHaveBeenCalledWith({ partial: { defaultWorkflowMode: 'yolo' } });
+    });
+  });
+
+  // Helper: real-time sleep used in lieu of fake timers, since waitFor's
+  // internal setTimeout fights vi.useFakeTimers and the debounce window
+  // (300ms) is tiny enough that real sleeps don't make the suite slow.
+  const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('SETTINGS-DEFAULTS-003: polling input persists on blur after debounce', async () => {
+    const { configSet } = installApiForDefaults({
+      config: makeConfig({ defaultPollingIntervalSec: 60 }),
+    });
+    mockTheme();
+    render(<Settings />);
+    const input = await screen.findByTestId('settings-defaults-polling-input');
+    await waitFor(() => {
+      expect(input).toHaveValue(60);
+    });
+    fireEvent.change(input, { target: { value: '300' } });
+    fireEvent.blur(input);
+    // Persist is debounced 300ms — not fired immediately.
+    expect(configSet).not.toHaveBeenCalled();
+    await sleep(350);
+    expect(configSet).toHaveBeenCalledWith({ partial: { defaultPollingIntervalSec: 300 } });
+  });
+
+  it('SETTINGS-DEFAULTS-004: timeout input persists on Enter after debounce', async () => {
+    const { configSet } = installApiForDefaults({
+      config: makeConfig({ defaultRunTimeoutMin: 30 }),
+    });
+    mockTheme();
+    render(<Settings />);
+    const input = await screen.findByTestId('settings-defaults-timeout-input');
+    await waitFor(() => {
+      expect(input).toHaveValue(30);
+    });
+    fireEvent.change(input, { target: { value: '90' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(configSet).not.toHaveBeenCalled();
+    await sleep(350);
+    expect(configSet).toHaveBeenCalledWith({ partial: { defaultRunTimeoutMin: 90 } });
+  });
+
+  it('SETTINGS-DEFAULTS-005: out-of-range polling shows inline error and does not persist', async () => {
+    const { configSet } = installApiForDefaults();
+    mockTheme();
+    render(<Settings />);
+    const input = await screen.findByTestId('settings-defaults-polling-input');
+    await waitFor(() => {
+      expect(input).toHaveValue(60);
+    });
+    // 1 is below the min (5) — should error inline.
+    fireEvent.change(input, { target: { value: '1' } });
+    fireEvent.blur(input);
+    await sleep(350);
+    expect(configSet).not.toHaveBeenCalled();
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    // The wrapper exposes the error string via data-error for test scripts
+    // (the visible message lives inside the Input's internal hint span).
+    const field = screen.getByTestId('settings-defaults-polling-field');
+    expect(field).toHaveAttribute('data-error');
+  });
+
+  it('SETTINGS-DEFAULTS-006: out-of-range timeout shows inline error and does not persist', async () => {
+    const { configSet } = installApiForDefaults();
+    mockTheme();
+    render(<Settings />);
+    const input = await screen.findByTestId('settings-defaults-timeout-input');
+    await waitFor(() => {
+      expect(input).toHaveValue(30);
+    });
+    // 2000 is above the max (1440) — should error inline.
+    fireEvent.change(input, { target: { value: '2000' } });
+    fireEvent.blur(input);
+    await sleep(350);
+    expect(configSet).not.toHaveBeenCalled();
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('SETTINGS-DEFAULTS-007: rapid keystrokes coalesce into a single persist call', async () => {
+    const { configSet } = installApiForDefaults();
+    mockTheme();
+    render(<Settings />);
+    const input = await screen.findByTestId('settings-defaults-polling-input');
+    await waitFor(() => {
+      expect(input).toHaveValue(60);
+    });
+    // Three commits in quick succession — each resets the debounce timer, so
+    // only the final value should persist after 300ms of quiet.
+    fireEvent.change(input, { target: { value: '100' } });
+    fireEvent.blur(input);
+    await sleep(50);
+    fireEvent.change(input, { target: { value: '200' } });
+    fireEvent.blur(input);
+    await sleep(50);
+    fireEvent.change(input, { target: { value: '300' } });
+    fireEvent.blur(input);
+    await sleep(350);
+    expect(configSet).toHaveBeenCalledTimes(1);
+    expect(configSet).toHaveBeenCalledWith({ partial: { defaultPollingIntervalSec: 300 } });
+  });
+
+  it('SETTINGS-DEFAULTS-008: equal value commit does not fire persist', async () => {
+    const { configSet } = installApiForDefaults({
+      config: makeConfig({ defaultPollingIntervalSec: 120 }),
+    });
+    mockTheme();
+    render(<Settings />);
+    const input = await screen.findByTestId('settings-defaults-polling-input');
+    await waitFor(() => {
+      expect(input).toHaveValue(120);
+    });
+    // Same as canonical — no persist.
+    fireEvent.change(input, { target: { value: '120' } });
+    fireEvent.blur(input);
+    await sleep(350);
+    expect(configSet).not.toHaveBeenCalled();
+  });
+
+  it('SETTINGS-DEFAULTS-009b: mid-edit text is preserved when a prior debounced persist resolves', async () => {
+    // Regression for the mid-edit clobber: user commits a valid value, then
+    // before the 300ms debounce fires they resume editing. The debounced
+    // persist lands and flips the canonical config value — but the user's
+    // in-progress text must survive (the value-sync effect must respect the
+    // editing-in-progress flag).
+    let canonical: AppConfig = makeConfig({ defaultPollingIntervalSec: 60 });
+    const configGet = vi
+      .fn()
+      .mockImplementation(async () => ({ ok: true, data: { config: canonical } }));
+    const configSet = vi.fn().mockImplementation(async ({ partial }: { partial: Partial<AppConfig> }) => {
+      canonical = { ...canonical, ...partial };
+      return { ok: true, data: { config: canonical } };
+    });
+    const api = {
+      appConfig: { get: configGet, set: configSet },
+      app: { info: vi.fn().mockResolvedValue({ ok: true, data: makeAppInfo() }) },
+      shell: {
+        openPath: vi.fn(),
+        openExternal: vi.fn(),
+        openLogDirectory: vi.fn(),
+      },
+    } as unknown as IpcApi;
+    (window as { api?: IpcApi }).api = api;
+    mockTheme();
+    render(<Settings />);
+    const input = await screen.findByTestId('settings-defaults-polling-input');
+    await waitFor(() => {
+      expect(input).toHaveValue(60);
+    });
+    // Step 1: user types 300, blurs — debounced 300ms persist scheduled.
+    fireEvent.change(input, { target: { value: '300' } });
+    fireEvent.blur(input);
+    // Step 2: before 300ms elapses, user resumes editing with an in-progress
+    // value (e.g. typing "5", will be invalid below min when committed).
+    fireEvent.change(input, { target: { value: '5' } });
+    // Step 3: wait for the original debounced persist to land. The canonical
+    // config flips from 60 → 300; the editing-in-progress flag must prevent
+    // the sync effect from clobbering the input's "5" back to "300".
+    await sleep(400);
+    expect(configSet).toHaveBeenCalledTimes(1);
+    expect(configSet).toHaveBeenCalledWith({ partial: { defaultPollingIntervalSec: 300 } });
+    // Critical assertion: the in-progress edit survives.
+    expect(input).toHaveValue(5);
+  });
+
+  it('SETTINGS-DEFAULTS-009: controls disabled before first config load', async () => {
+    // Hold the get() promise open so config stays null past the initial render.
+    let resolveGet: (v: unknown) => void = () => {};
+    const configGet = vi.fn().mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveGet = res;
+        }),
+    );
+    const api = {
+      appConfig: { get: configGet, set: vi.fn() },
+      app: { info: vi.fn().mockResolvedValue({ ok: true, data: makeAppInfo() }) },
+      shell: {
+        openPath: vi.fn(),
+        openExternal: vi.fn(),
+        openLogDirectory: vi.fn(),
+      },
+    } as unknown as IpcApi;
+    (window as { api?: IpcApi }).api = api;
+    mockTheme();
+    render(<Settings />);
+    await screen.findByTestId('settings-defaults-section');
+    expect(screen.getByTestId('settings-defaults-polling-input')).toBeDisabled();
+    expect(screen.getByTestId('settings-defaults-timeout-input')).toBeDisabled();
+    // Tidy: unblock the in-flight get so cleanup doesn't dangle.
+    resolveGet({ ok: true, data: { config: makeConfig() } });
   });
 });
 

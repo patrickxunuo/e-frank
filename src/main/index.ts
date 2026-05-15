@@ -171,6 +171,20 @@ let secretsManager: SecretsManager | null = null;
 let projectStore: ProjectStore | null = null;
 let connectionStore: ConnectionStore | null = null;
 let appConfigStore: AppConfigStore | null = null;
+
+/**
+ * Resolve the current "default polling interval" from app config, in
+ * milliseconds. Falls back to the legacy hardcoded 5-minute cadence if the
+ * store isn't initialized or a read fails — keeps poller bootstrap robust
+ * against config IO glitches (#GH-86).
+ */
+async function resolveDefaultPollingIntervalMs(): Promise<number> {
+  const LEGACY_FALLBACK_MS = 5 * 60 * 1000;
+  if (appConfigStore === null) return LEGACY_FALLBACK_MS;
+  const res = await appConfigStore.get();
+  if (!res.ok) return LEGACY_FALLBACK_MS;
+  return res.data.defaultPollingIntervalSec * 1000;
+}
 let runHistory: RunHistory | null = null;
 let jiraPoller: TicketPoller | null = null;
 let runStore: RunStore | null = null;
@@ -1616,8 +1630,9 @@ function registerIpcHandlers(): void {
         return { ok: false, error: { code: list.error.code, message: list.error.message } };
       }
       const ids: string[] = [];
+      const intervalMs = await resolveDefaultPollingIntervalMs();
       for (const p of list.data) {
-        await jiraPoller.start(p, 5 * 60 * 1000);
+        await jiraPoller.start(p, intervalMs);
         ids.push(p.id);
       }
       return { ok: true, data: { projectIds: ids } };
@@ -2523,11 +2538,15 @@ async function initStores(): Promise<void> {
     });
     jiraPoller = poller;
 
-    // Bootstrap: kick off a poller for every currently-known project.
+    // Bootstrap: kick off a poller for every currently-known project. The
+    // cadence comes from `appConfig.defaultPollingIntervalSec` when set
+    // (#GH-86); legacy 5-minute fallback covers the case where the config
+    // store didn't initialize successfully above.
     const initialList = await store.list();
     if (initialList.ok) {
+      const intervalMs = await resolveDefaultPollingIntervalMs();
       for (const p of initialList.data) {
-        await poller.start(p, 5 * 60 * 1000);
+        await poller.start(p, intervalMs);
       }
     }
 
@@ -2634,6 +2653,22 @@ async function initStores(): Promise<void> {
             return { ok: false, error: { code: r.error.code, message: r.error.message } };
           }
           return { ok: true, data: { claudeCliPath: r.data.claudeCliPath } };
+        },
+      },
+      // #GH-86: hand the runner a read-only view of app-config so it can
+      // pull `defaultRunTimeoutMin` per-run and pass it as the Claude
+      // process timeout. Separate adapter from #GH-85's appConfigAdapter
+      // so the two PRs' concerns stay independent.
+      appConfig: {
+        get: async () => {
+          if (appConfigStore === null) {
+            return { ok: false, error: { code: 'IO_FAILURE', message: 'AppConfigStore not initialized' } };
+          }
+          const res = await appConfigStore.get();
+          if (!res.ok) {
+            return { ok: false, error: res.error };
+          }
+          return { ok: true, data: { defaultRunTimeoutMin: res.data.defaultRunTimeoutMin } };
         },
       },
     });

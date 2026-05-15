@@ -974,4 +974,119 @@ describe('<AddProject /> — ADD-PROJ', () => {
       }
     });
   });
+
+  // -------------------------------------------------------------------------
+  // ADD-PROJ-013 — Workflow-mode default from app config (#GH-86)
+  // -------------------------------------------------------------------------
+  describe('ADD-PROJ-013 workflow-mode default from app config', () => {
+    it('ADD-PROJ-013a: creation mode pre-selects appConfig.defaultWorkflowMode after first load', async () => {
+      const stub = installApi();
+      // Override appConfig.get to return yolo as the default. Cast because
+      // the IpcApi['appConfig']['get'] union returns a specific shape.
+      (stub.api.appConfig.get as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        data: {
+          config: {
+            theme: 'dark',
+            claudeCliPath: null,
+            defaultWorkflowMode: 'yolo',
+            defaultPollingIntervalSec: 60,
+            defaultRunTimeoutMin: 30,
+          },
+        },
+      });
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+      // YOLO card should land as the selected option once the appConfig
+      // read resolves and the seeding effect fires.
+      await waitFor(() => {
+        expect(screen.getByTestId('field-workflow-mode-option-yolo')).toHaveAttribute(
+          'aria-checked',
+          'true',
+        );
+      });
+      expect(screen.getByTestId('field-workflow-mode-option-interactive')).toHaveAttribute(
+        'aria-checked',
+        'false',
+      );
+    });
+
+    it('ADD-PROJ-013b: editing mode ignores appConfig default and uses editing.workflow.mode', async () => {
+      const stub = installApi();
+      (stub.api.appConfig.get as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        data: {
+          config: {
+            theme: 'dark',
+            claudeCliPath: null,
+            // Default would say yolo — editing should still pin interactive
+            // because the project's own workflow.mode is interactive.
+            defaultWorkflowMode: 'yolo',
+            defaultPollingIntervalSec: 60,
+            defaultRunTimeoutMin: 30,
+          },
+        },
+      });
+      const editing = makeProject('p-1', 'Existing Project');
+      // makeProject defaults workflow.mode to interactive — make it explicit.
+      editing.workflow = { mode: 'interactive', branchFormat: 'feature/{ticketKey}-{slug}' };
+      render(
+        <AddProject
+          onClose={() => {}}
+          onCreated={async () => {}}
+          editing={editing}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId('field-workflow-mode-option-interactive')).toHaveAttribute(
+          'aria-checked',
+          'true',
+        );
+      });
+      // Wait an extra tick to make sure the effect didn't override.
+      await new Promise((r) => setTimeout(r, 30));
+      expect(screen.getByTestId('field-workflow-mode-option-interactive')).toHaveAttribute(
+        'aria-checked',
+        'true',
+      );
+    });
+
+    it('ADD-PROJ-013c: user-touched mode is not clobbered by a later appConfig load', async () => {
+      const stub = installApi();
+      // Hold the appConfig.get() promise so the load lands AFTER the click.
+      let resolveGet: (value: unknown) => void = () => {};
+      (stub.api.appConfig.get as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+        () =>
+          new Promise((res) => {
+            resolveGet = res;
+          }),
+      );
+      render(<AddProject onClose={() => {}} onCreated={async () => {}} />);
+      await waitFor(() => {
+        expect(screen.queryByTestId('field-workflow-mode-option-interactive')).toBeInTheDocument();
+      });
+      // User clicks YOLO BEFORE the appConfig load resolves.
+      fireEvent.click(screen.getByTestId('field-workflow-mode-option-yolo'));
+      // Now resolve the load with a default that would otherwise flip the
+      // card back to interactive.
+      resolveGet({
+        ok: true,
+        data: {
+          config: {
+            theme: 'dark',
+            claudeCliPath: null,
+            defaultWorkflowMode: 'interactive',
+            defaultPollingIntervalSec: 60,
+            defaultRunTimeoutMin: 30,
+          },
+        },
+      });
+      // After the load lands, the user's pick should still win — the touched
+      // ref guards against a clobber.
+      await new Promise((r) => setTimeout(r, 30));
+      expect(screen.getByTestId('field-workflow-mode-option-yolo')).toHaveAttribute(
+        'aria-checked',
+        'true',
+      );
+    });
+  });
 });
