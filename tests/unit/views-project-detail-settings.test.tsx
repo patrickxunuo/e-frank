@@ -127,6 +127,10 @@ function installApi(opts?: {
     app: {
       info: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
     },
+    claudeCli: {
+      probe: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
+      probeOverride: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
+    },
     claude: {
       run: vi.fn().mockResolvedValue(unusedErr()),
       cancel: vi.fn().mockResolvedValue(unusedErr()),

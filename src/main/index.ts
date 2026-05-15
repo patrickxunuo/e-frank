@@ -26,6 +26,9 @@ import {
   type AppConfigSetResponse,
   type AppConfig,
   type AppInfoResponse,
+  type ClaudeCliProbeResponse,
+  type ClaudeCliProbeOverrideResponse,
+  type ClaudeCliProbeOverrideRequest,
   type JiraListResponse,
   type JiraRefreshResponse,
   type JiraTestConnectionRequest,
@@ -87,6 +90,10 @@ import {
   type ExitEvent,
 } from './modules/claude-process-manager.js';
 import { NodeSpawner } from './modules/spawner.js';
+import {
+  probe as claudeCliProbe,
+  validateOverride as claudeCliValidateOverride,
+} from './modules/claude-cli-probe.js';
 import { ProjectStore } from './modules/project-store.js';
 import { ConnectionStore } from './modules/connection-store.js';
 import { AppConfigStore } from './modules/app-config-store.js';
@@ -2280,6 +2287,49 @@ function registerIpcHandlers(): void {
       return { ok: true, data: { config: res.data } };
     },
   );
+
+  // -- Claude CLI probe (#GH-85 Settings → Claude CLI section) --
+  // `probe` returns the path the runner would actually spawn (override
+  // beats PATH). `probe-override` validates a candidate without
+  // persisting — the Settings UI gates the Save button on its response.
+  ipcMain.handle(
+    IPC_CHANNELS.CLAUDE_CLI_PROBE,
+    async (): Promise<IpcResult<ClaudeCliProbeResponse>> => {
+      if (appConfigStore === null) {
+        return notInitialized('AppConfigStore');
+      }
+      const cfgRes = await appConfigStore.get();
+      if (!cfgRes.ok) {
+        return { ok: false, error: { code: cfgRes.error.code, message: cfgRes.error.message } };
+      }
+      const result = await claudeCliProbe(new NodeSpawner(), cfgRes.data.claudeCliPath);
+      return { ok: true, data: result };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.CLAUDE_CLI_PROBE_OVERRIDE,
+    async (_event, raw): Promise<IpcResult<ClaudeCliProbeOverrideResponse>> => {
+      const path =
+        typeof raw === 'object' && raw !== null && 'path' in raw
+          ? (raw as ClaudeCliProbeOverrideRequest).path
+          : undefined;
+      if (typeof path !== 'string') {
+        return {
+          ok: false,
+          error: {
+            code: 'INVALID_REQUEST',
+            message: 'claude-cli:probe-override request must carry { path: string }',
+          },
+        };
+      }
+      const result = await claudeCliValidateOverride(new NodeSpawner(), path);
+      if (!result.ok) {
+        return { ok: false, error: result.error };
+      }
+      return { ok: true, data: result.data };
+    },
+  );
 }
 
 function toIpcCurrentChangedEvent(e: { run: Run | null }): RunsCurrentChangedEvent {
@@ -2570,6 +2620,22 @@ async function initStores(): Promise<void> {
       // summary by key for branch/commit derivation. Returns mutable copy
       // since the poller's internal cache is ReadonlyArray.
       ticketPoller: { list: (id) => [...poller.list(id)] },
+      // #GH-85: feed the configured Claude CLI override (if any) into the
+      // runner so per-run command substitution works without app restart.
+      // Adapter normalizes the AppConfigStore result into the runner's
+      // narrow shape (only `claudeCliPath` is read).
+      appConfigAdapter: {
+        get: async () => {
+          if (appConfigStore === null) {
+            return { ok: false, error: { code: 'IO_FAILURE', message: 'AppConfigStore not initialized' } };
+          }
+          const r = await appConfigStore.get();
+          if (!r.ok) {
+            return { ok: false, error: { code: r.error.code, message: r.error.message } };
+          }
+          return { ok: true, data: { claudeCliPath: r.data.claudeCliPath } };
+        },
+      },
     });
     runner.on('state-changed', (e: RunStateEvent) => {
       broadcastToWindows(IPC_CHANNELS.RUNS_STATE_CHANGED, e);

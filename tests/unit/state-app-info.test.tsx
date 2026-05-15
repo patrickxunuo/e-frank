@@ -36,6 +36,10 @@ function installApi(appInfo: IpcResult<AppInfoResponse>): { info: Mock } {
   const info = vi.fn().mockResolvedValue(appInfo);
   const api = {
     app: { info },
+    claudeCli: {
+      probe: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
+      probeOverride: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
+    },
     shell: {
       openExternal: vi.fn(),
       openPath: vi.fn(),
@@ -98,6 +102,10 @@ describe('useAppInfo() — APP-INFO (#GH-87)', () => {
     const info = vi.fn().mockRejectedValue(new Error('bridge-crash'));
     const api = {
       app: { info },
+      claudeCli: {
+        probe: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
+        probeOverride: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
+      },
       shell: {
         openExternal: vi.fn(),
         openPath: vi.fn(),

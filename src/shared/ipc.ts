@@ -179,6 +179,14 @@ export const IPC_CHANNELS = {
   // -- App config (issue #GH-69 Foundation) --
   APP_CONFIG_GET: 'app-config:get',
   APP_CONFIG_SET: 'app-config:set',
+  // -- Claude CLI probe (issue #GH-85 Settings → Claude CLI section) --
+  /** Probe the resolved Claude CLI path + version. Uses `appConfig.
+   *  claudeCliPath` if set, else PATH lookup via `where`/`which`. */
+  CLAUDE_CLI_PROBE: 'claude-cli:probe',
+  /** Validate an override path without persisting. Returns the same
+   *  shape as `probe`; failed validation surfaces a specific error code
+   *  (`PATH_NOT_FOUND` / `NOT_EXECUTABLE` / `NOT_CLAUDE`). */
+  CLAUDE_CLI_PROBE_OVERRIDE: 'claude-cli:probe-override',
 } as const;
 
 export type PingRequest = { message: string };
@@ -433,6 +441,31 @@ export interface AppConfigSetRequest {
 export interface AppConfigSetResponse {
   /** Post-merge full config. */
   config: import('./schema/app-config.js').AppConfig;
+}
+
+// -- Claude CLI probe IPC payloads (#GH-85 Settings → Claude CLI section) --
+
+/** Where the resolved Claude CLI path came from. */
+export type ClaudeCliSource = 'override' | 'path' | 'not-found';
+
+export interface ClaudeCliProbeResponse {
+  /** Absolute path to the Claude binary; `null` only when source = 'not-found'. */
+  resolvedPath: string | null;
+  /** Trimmed `--version` stdout. `null` if probe failed or output was empty. */
+  version: string | null;
+  /** `override` if the user has set `appConfig.claudeCliPath`; `path` if
+   *  discovered via the OS PATH lookup; `not-found` if neither succeeded. */
+  source: ClaudeCliSource;
+}
+
+export interface ClaudeCliProbeOverrideRequest {
+  /** Candidate override path to validate. Not persisted. */
+  path: string;
+}
+
+export interface ClaudeCliProbeOverrideResponse {
+  resolvedPath: string;
+  version: string;
 }
 
 // -- Workflow Runner IPC payloads --------------------------------------------
@@ -879,5 +912,18 @@ export interface IpcApi {
   appConfig: {
     get: () => Promise<IpcResult<AppConfigGetResponse>>;
     set: (req: AppConfigSetRequest) => Promise<IpcResult<AppConfigSetResponse>>;
+  };
+  /**
+   * Claude CLI discovery + override validation (#GH-85). `probe` returns
+   * whichever path the runner would actually spawn (override > PATH); the
+   * Settings page calls it on mount. `probeOverride` runs the validation
+   * gate against a candidate path WITHOUT persisting — the renderer uses
+   * the response to gate the Save button.
+   */
+  claudeCli: {
+    probe: () => Promise<IpcResult<ClaudeCliProbeResponse>>;
+    probeOverride: (
+      req: ClaudeCliProbeOverrideRequest,
+    ) => Promise<IpcResult<ClaudeCliProbeOverrideResponse>>;
   };
 }

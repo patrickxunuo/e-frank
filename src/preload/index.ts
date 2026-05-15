@@ -83,6 +83,9 @@ import {
   type ShellOpenPathRequest,
   type AppConfigGetResponse,
   type AppConfigSetRequest,
+  type ClaudeCliProbeResponse,
+  type ClaudeCliProbeOverrideRequest,
+  type ClaudeCliProbeOverrideResponse,
   type AppConfigSetResponse,
 } from '../shared/ipc.js';
 
@@ -498,6 +501,19 @@ const api: IpcApi = {
     set: (req: AppConfigSetRequest): Promise<IpcResult<AppConfigSetResponse>> =>
       ipcRenderer.invoke(IPC_CHANNELS.APP_CONFIG_SET, req) as Promise<
         IpcResult<AppConfigSetResponse>
+      >,
+  },
+
+  claudeCli: {
+    probe: (): Promise<IpcResult<ClaudeCliProbeResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_CLI_PROBE) as Promise<
+        IpcResult<ClaudeCliProbeResponse>
+      >,
+    probeOverride: (
+      req: ClaudeCliProbeOverrideRequest,
+    ): Promise<IpcResult<ClaudeCliProbeOverrideResponse>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_CLI_PROBE_OVERRIDE, req) as Promise<
+        IpcResult<ClaudeCliProbeOverrideResponse>
       >,
   },
 };

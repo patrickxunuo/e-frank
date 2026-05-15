@@ -192,4 +192,40 @@ describe('AppConfigStore — AC-STORE (#GH-69)', () => {
     expect(get1.error.code).toBe('IO_FAILURE');
     expect(get1.error.message).toMatch(/init/i);
   });
+
+  describe('AC-STORE-CLI-SAFE-001..003 — claudeCliPath shell-metacharacter rejection (#GH-85)', () => {
+    it('AC-STORE-CLI-SAFE-001: ampersand in path is rejected with VALIDATION_FAILED', async () => {
+      const fs = makeMemFs();
+      const store = new AppConfigStore({ filePath: FILE_PATH, fs });
+      await store.init();
+      const res = await store.set({ claudeCliPath: '/path/claude.exe & calc.exe' });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe('VALIDATION_FAILED');
+    });
+
+    it('AC-STORE-CLI-SAFE-002: backtick + dollar + semicolon are rejected', async () => {
+      const fs = makeMemFs();
+      const store = new AppConfigStore({ filePath: FILE_PATH, fs });
+      await store.init();
+      for (const bad of ['`evil`', '$(id)', '/path/claude; rm -rf']) {
+        const res = await store.set({ claudeCliPath: bad });
+        expect(res.ok).toBe(false);
+      }
+    });
+
+    it('AC-STORE-CLI-SAFE-003: plain absolute paths pass validation', async () => {
+      const fs = makeMemFs();
+      const store = new AppConfigStore({ filePath: FILE_PATH, fs });
+      await store.init();
+      for (const good of [
+        '/usr/local/bin/claude',
+        'C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd',
+        '/opt/anthropic/claude-1.0.96',
+      ]) {
+        const res = await store.set({ claudeCliPath: good });
+        expect(res.ok).toBe(true);
+      }
+    });
+  });
 });

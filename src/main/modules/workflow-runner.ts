@@ -193,6 +193,19 @@ export interface WorkflowRunnerOptions {
   ticketPoller?: { list: (projectId: string) => Ticket[] };
   /** Test injection. Defaults to `Date.now()`. */
   clock?: { now: () => number };
+  /**
+   * Optional global config adapter (#GH-85). When provided, the runner
+   * reads `claudeCliPath` from it on each Claude spawn and passes it as
+   * the per-run `command` override — so a Settings → Claude CLI override
+   * takes effect on the next run without app restart. Optional so test
+   * setups that don't care about the override path stay terse.
+   */
+  appConfigAdapter?: {
+    get: () => Promise<
+      | { ok: true; data: { claudeCliPath: string | null } }
+      | { ok: false; error: { code: string; message: string } }
+    >;
+  };
 }
 
 /**
@@ -860,9 +873,30 @@ export class WorkflowRunner extends EventEmitter {
   // -- Claude integration with approval markers ----------------------------
 
   private async runClaudeWithApprovals(ctx: ActiveRunCtx, cwd: string): Promise<void> {
+    // Resolve the Claude CLI override from appConfig (if the adapter is
+    // wired up — it is in main, but tests can skip it). A `null` or
+    // missing override falls back to the manager's default command.
+    let commandOverride: string | undefined;
+    if (this.options.appConfigAdapter !== undefined) {
+      const cfg = await this.options.appConfigAdapter.get();
+      if (cfg.ok) {
+        if (cfg.data.claudeCliPath !== null && cfg.data.claudeCliPath.trim() !== '') {
+          commandOverride = cfg.data.claudeCliPath;
+        }
+      } else {
+        // Don't fail the run — log loud and fall back to PATH. A corrupt
+        // config shouldn't stop work, but a silent fallback would make
+        // "my Claude override isn't being used" impossible to debug.
+        console.warn(
+          `[workflow-runner] appConfigAdapter.get failed: ${cfg.error.code} - ${cfg.error.message}; ` +
+            'falling back to default claude command',
+        );
+      }
+    }
     const startRes = this.options.claudeManager.run({
       ticketKey: ctx.run.ticketKey,
       cwd,
+      command: commandOverride,
     });
     if (!startRes.ok) {
       throw new Error(
