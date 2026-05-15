@@ -52,6 +52,7 @@ import {
   type TicketPagesQuery,
 } from '../state/ticket-pages';
 import { useProjectPulls } from '../state/project-pulls';
+import { useRunHistory } from '../state/run-history';
 import styles from './ProjectDetail.module.css';
 
 export interface ProjectDetailProps {
@@ -511,11 +512,7 @@ export function ProjectDetail({
   const [ticketSearchInput, setTicketSearchInput] = useState<string>('');
   const [committedSearch, setCommittedSearch] = useState<string>('');
   const [sortState, setSortState] = useState<DataTableSortState | null>(null);
-  const [runHistory, setRunHistory] = useState<{
-    runs: Run[];
-    loading: boolean;
-    error: string | null;
-  }>({ runs: [], loading: false, error: null });
+  const runHistory = useRunHistory(projectId);
   const [runBanner, setRunBanner] = useState<
     { kind: 'error'; message: string } | null
   >(null);
@@ -730,17 +727,14 @@ export function ProjectDetail({
         setDeletingRunId(null);
         return;
       }
-      setRunHistory((prev) => ({
-        ...prev,
-        runs: prev.runs.filter((r) => r.id !== runId),
-      }));
+      runHistory.removeRun(runId);
       setConfirmRunId(null);
       setDeletingRunId(null);
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : String(err));
       setDeletingRunId(null);
     }
-  }, [confirmRunId]);
+  }, [confirmRunId, runHistory]);
 
   // -- Fetch the project on mount --
   useEffect(() => {
@@ -778,46 +772,6 @@ export function ProjectDetail({
       cancelled = true;
     };
   }, [projectId]);
-
-  // Fetch run history for the Runs tab. Refetches whenever the user
-  // switches to the Runs tab so a freshly-completed run shows up without
-  // a manual refresh. The poller / WorkflowRunner doesn't push completed
-  // runs over the IPC bus today; this lazy fetch is the lightest path
-  // to fix #33.
-  useEffect(() => {
-    if (tab !== 'runs') return;
-    if (state.kind !== 'ready') return;
-    if (typeof window === 'undefined' || !window.api) return;
-    const api = window.api;
-    const projectId = state.project.id;
-    let cancelled = false;
-    setRunHistory((prev) => ({ ...prev, loading: true, error: null }));
-    void (async () => {
-      try {
-        const result = await api.runs.listHistory({
-          projectId,
-          limit: 50,
-        });
-        if (cancelled) return;
-        if (result.ok) {
-          setRunHistory({ runs: result.data.runs, loading: false, error: null });
-        } else {
-          setRunHistory({
-            runs: [],
-            loading: false,
-            error: result.error.message || result.error.code,
-          });
-        }
-      } catch (err) {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        setRunHistory({ runs: [], loading: false, error: message });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [tab, state]);
 
   // -- Loading + error + not-found shells (no header / tabs in these states) --
   if (state.kind === 'loading') {
@@ -903,10 +857,9 @@ export function ProjectDetail({
    * silently refreshed tickets even from the PRs tab.
    *
    * `refresh: null` disables the button. Settings has no list to refresh
-   * (the form's state IS the data; Save is the commit), and Runs lacks
-   * a hook-level refresh() today — the runs `useEffect` re-fetches on
-   * every tab visit so users have a built-in workaround. Adding a real
-   * Runs refresh is filed as a follow-up.
+   * (the form's state IS the data; Save is the commit). Tickets / PRs /
+   * Runs each delegate to their own hook so a fresh fetch only hits the
+   * data the user is actually looking at.
    */
   const tabRefreshAction: Record<
     TabId,
@@ -926,7 +879,13 @@ export function ProjectDetail({
       },
       refreshing: projectPulls.refreshing,
     },
-    runs: { label: 'Refresh runs', refresh: null, refreshing: false },
+    runs: {
+      label: 'Refresh runs',
+      refresh: () => {
+        void runHistory.refresh();
+      },
+      refreshing: runHistory.refreshing,
+    },
     settings: { label: 'Refresh', refresh: null, refreshing: false },
   };
   const activeRefresh = tabRefreshAction[tab];
@@ -1160,10 +1119,10 @@ export function ProjectDetail({
     ];
 
   const runsBody = ((): JSX.Element => {
-    const isReloading = runHistory.loading;
+    const isReloading = runHistory.loading || runHistory.refreshing;
     const hasRuns = runHistory.runs.length > 0;
-    // Show skeleton during any in-flight fetch (initial mount OR tab-flip
-    // re-fetch from a previously-loaded state) so the user doesn't stare
+    // Show skeleton during any in-flight fetch (initial mount OR manual
+    // Refresh from a previously-loaded state) so the user doesn't stare
     // at stale rows while waiting for fresh data.
     if (isReloading) {
       return (
