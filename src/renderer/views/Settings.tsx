@@ -8,15 +8,29 @@
  *   - Theme — implemented (#GH-84)
  *   - Claude CLI — placeholder, #GH-85 follow-up
  *   - Workflow defaults — placeholder, #GH-86 follow-up
- *   - About — placeholder, #GH-87 follow-up
+ *   - About — implemented (#GH-87)
  */
 import type { JSX } from 'react';
 import type { ThemeMode } from '@shared/ipc';
 import { useAppConfig } from '../state/app-config';
+import { useAppInfo } from '../state/app-info';
 import { useTheme } from '../state/theme';
+import { Button } from '../components/Button';
 import { RadioCardGroup, type RadioCardOption } from '../components/RadioCardGroup';
-import { IconMonitor, IconMoon, IconSun } from '../components/icons';
+import {
+  IconExternal,
+  IconFolder,
+  IconMonitor,
+  IconMoon,
+  IconRefresh,
+  IconSun,
+} from '../components/icons';
+import { dispatchToast } from '../state/notifications';
 import styles from './Settings.module.css';
+
+/** GitHub URLs the About section's link buttons open via shell.openExternal. */
+const ISSUE_URL = 'https://github.com/patrickxunuo/paperplane/issues/new';
+const RELEASES_URL = 'https://github.com/patrickxunuo/paperplane/releases';
 
 interface SettingsSection {
   /** Section anchor (used as `#hash` in the rail and as DOM id). */
@@ -51,7 +65,7 @@ const SECTIONS: ReadonlyArray<SettingsSection> = [
     id: 'about',
     label: 'About',
     blurb: 'Version, build info, log directory, report an issue.',
-    followUp: 'GH-87',
+    followUp: null,
   },
 ];
 
@@ -84,6 +98,9 @@ const THEME_OPTIONS: RadioCardOption<ThemeMode>[] = [
 function SectionBody({ section }: { section: SettingsSection }): JSX.Element {
   if (section.id === 'theme') {
     return <ThemeSection />;
+  }
+  if (section.id === 'about') {
+    return <AboutSection />;
   }
   return (
     <div
@@ -127,6 +144,175 @@ function ThemeSection(): JSX.Element {
           Loading saved preference…
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * Info-row label/value pair used in the About section. Kept as its own
+ * component so the row uses a consistent dt/dd shape — important because
+ * the values are monospaced (versions, commit shas) while labels are not.
+ */
+function AboutInfoRow({
+  label,
+  value,
+  testId,
+}: {
+  label: string;
+  value: string;
+  testId: string;
+}): JSX.Element {
+  return (
+    <>
+      <dt className={styles.aboutInfoLabel}>{label}</dt>
+      <dd className={styles.aboutInfoValue} data-testid={testId}>
+        {value}
+      </dd>
+    </>
+  );
+}
+
+/**
+ * About section (#GH-87). Surfaces version/build/runtime diagnostics and
+ * three small actions: open the log directory, report an issue, check
+ * for releases. Diagnostic values come from `useAppInfo()` — which falls
+ * back to build-time defines if the IPC bridge is missing — so the
+ * section always renders something sensible even in degraded environments.
+ */
+function AboutSection(): JSX.Element {
+  const { info, loading, error } = useAppInfo();
+
+  async function onOpenLogDir(): Promise<void> {
+    if (typeof window === 'undefined' || !window.api) {
+      dispatchToast({
+        type: 'error',
+        title: 'Cannot open log directory',
+        body: 'IPC bridge is unavailable.',
+      });
+      return;
+    }
+    const result = await window.api.shell.openLogDirectory();
+    if (!result.ok) {
+      dispatchToast({
+        type: 'error',
+        title: 'Could not open log directory',
+        body: result.error.message || result.error.code,
+      });
+    }
+  }
+
+  function onOpenExternal(url: string, failTitle: string): () => Promise<void> {
+    return async () => {
+      if (typeof window === 'undefined' || !window.api) {
+        dispatchToast({
+          type: 'error',
+          title: failTitle,
+          body: 'IPC bridge is unavailable.',
+        });
+        return;
+      }
+      const result = await window.api.shell.openExternal({ url });
+      if (!result.ok) {
+        dispatchToast({
+          type: 'error',
+          title: failTitle,
+          body: result.error.message || result.error.code,
+        });
+      }
+    };
+  }
+
+  return (
+    <div className={styles.aboutCard} data-testid="settings-about-section">
+      {loading && (
+        <p
+          className={styles.aboutHint}
+          data-testid="settings-about-loading"
+          role="status"
+        >
+          Loading diagnostics…
+        </p>
+      )}
+      {info !== null && (
+        <dl className={styles.aboutInfoGrid}>
+          <AboutInfoRow
+            label="App version"
+            value={info.appVersion}
+            testId="settings-about-app-version"
+          />
+          <AboutInfoRow
+            label="Build"
+            value={info.buildCommit}
+            testId="settings-about-build-commit"
+          />
+          <AboutInfoRow
+            label="Platform"
+            value={info.platform}
+            testId="settings-about-platform"
+          />
+          <AboutInfoRow
+            label="Release"
+            value={info.release}
+            testId="settings-about-release"
+          />
+          <AboutInfoRow
+            label="Electron"
+            value={info.electronVersion}
+            testId="settings-about-electron"
+          />
+          <AboutInfoRow
+            label="Node"
+            value={info.nodeVersion}
+            testId="settings-about-node"
+          />
+          <AboutInfoRow
+            label="Chrome"
+            value={info.chromeVersion}
+            testId="settings-about-chrome"
+          />
+        </dl>
+      )}
+      {error !== null && (
+        <p
+          className={styles.aboutHint}
+          data-testid="settings-about-error"
+          role="status"
+        >
+          Showing fallback values — {error}
+        </p>
+      )}
+      <div className={styles.aboutActions}>
+        <Button
+          variant="ghost"
+          leadingIcon={<IconFolder size={14} />}
+          onClick={() => {
+            void onOpenLogDir();
+          }}
+          data-testid="settings-about-open-logs"
+        >
+          Open log directory
+        </Button>
+        <Button
+          variant="ghost"
+          leadingIcon={<IconExternal size={14} />}
+          onClick={() => {
+            void onOpenExternal(ISSUE_URL, 'Could not open issue tracker')();
+          }}
+          data-testid="settings-about-report-issue"
+        >
+          Report an issue
+        </Button>
+        <Button
+          variant="ghost"
+          leadingIcon={<IconRefresh size={14} />}
+          onClick={() => {
+            void onOpenExternal(RELEASES_URL, 'Could not open releases page')();
+          }}
+          data-testid="settings-about-check-updates"
+        >
+          Check for updates
+        </Button>
+      </div>
     </div>
   );
 }

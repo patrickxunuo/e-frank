@@ -106,6 +106,9 @@ function installApi(opts?: {
   // test failure rather than a silent pass.
   const api: IpcApi = {
     ping: vi.fn<IpcApi['ping']>().mockResolvedValue({ reply: 'pong', receivedAt: 0 }),
+    app: {
+      info: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),
+    },
     claude: {
       run: vi.fn<IpcApi['claude']['run']>().mockResolvedValue(unusedErr()),
       cancel: vi.fn<IpcApi['claude']['cancel']>().mockResolvedValue(unusedErr()),
@@ -190,6 +193,7 @@ function installApi(opts?: {
     shell: {
       openPath: vi.fn().mockResolvedValue({ ok: true, data: null }),
       openExternal: vi.fn().mockResolvedValue({ ok: true, data: null }),
+      openLogDirectory: vi.fn().mockResolvedValue({ ok: true, data: null }),
     } as unknown as IpcApi['shell'],
     appConfig: {
       get: vi.fn().mockResolvedValue({ ok: false, error: { code: 'NOT_USED_IN_FE_TESTS', message: '' } }),

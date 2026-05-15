@@ -25,6 +25,7 @@ import {
   type AppConfigGetResponse,
   type AppConfigSetResponse,
   type AppConfig,
+  type AppInfoResponse,
   type JiraListResponse,
   type JiraRefreshResponse,
   type JiraTestConnectionRequest,
@@ -104,6 +105,7 @@ import { RunLogStore } from './modules/run-log-store.js';
 import { NodeGitManager } from './modules/git-manager.js';
 import { WorktreeManager } from './modules/worktree-manager.js';
 import { mkdir, readdir, access } from 'node:fs/promises';
+import { release as osRelease } from 'node:os';
 import { StubPrCreator } from './modules/pr-creator.js';
 import { StubJiraUpdater } from './modules/jira-updater.js';
 import { WorkflowRunner } from './modules/workflow-runner.js';
@@ -1016,6 +1018,27 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.PING, (_event, req) => {
     return handlePing(req);
   });
+
+  // -- App info (#GH-87 About section) --
+  // One-shot diagnostic snapshot. Read-only; never throws.
+  ipcMain.handle(
+    IPC_CHANNELS.APP_INFO,
+    (): IpcResult<AppInfoResponse> => {
+      const versions = process.versions;
+      return {
+        ok: true,
+        data: {
+          appVersion: app.getVersion(),
+          buildCommit: process.env.BUILD_COMMIT ?? 'dev',
+          platform: process.platform,
+          release: osRelease(),
+          electronVersion: versions.electron ?? 'unknown',
+          nodeVersion: versions.node ?? 'unknown',
+          chromeVersion: versions.chrome ?? 'unknown',
+        },
+      };
+    },
+  );
 
   // -- Claude Process Manager ------------------------------------------------
 
@@ -2178,6 +2201,34 @@ function registerIpcHandlers(): void {
       }
       try {
         await shell.openExternal(validated.url);
+        return { ok: true, data: null };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: { code: 'OPEN_FAILED', message } };
+      }
+    },
+  );
+
+  // -- Shell open-log-directory (#GH-87 About section) --
+  // Opens the per-user run-log directory (`<userData>/runs/`) in the OS
+  // file manager. No path argument — main resolves the fixed path itself
+  // so a compromised renderer can't pivot this into "open any path I want".
+  // Narrower blast radius than extending the existing SHELL_OPEN_PATH
+  // allow-list, which only accepts paths under `.claude/skills/`.
+  ipcMain.handle(
+    IPC_CHANNELS.SHELL_OPEN_LOG_DIRECTORY,
+    async (): Promise<IpcResult<null>> => {
+      const target = join(app.getPath('userData'), 'runs');
+      try {
+        // On a fresh install the runs dir doesn't exist yet (RunStore
+        // also creates it lazily on first write). Without this, openPath
+        // returns a "Failed to open path" string on the most common
+        // first-use path and the user sees an unhelpful error toast.
+        await mkdir(target, { recursive: true });
+        const errMsg = await shell.openPath(target);
+        if (errMsg !== '') {
+          return { ok: false, error: { code: 'OPEN_FAILED', message: errMsg } };
+        }
         return { ok: true, data: null };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

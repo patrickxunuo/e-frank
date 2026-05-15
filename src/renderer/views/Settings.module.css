@@ -213,6 +213,56 @@
 }
 
 /*
+ * About section card (#GH-87). Same shape as the theme card so finished
+ * sections feel visually parallel. Hosts an info-row grid (dt/dd pairs
+ * laid out as a two-column grid) plus a row of secondary actions.
+ */
+.aboutCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-card);
+}
+
+.aboutHint {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.aboutInfoGrid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: var(--space-5);
+  row-gap: 6px;
+  margin: 0;
+}
+
+.aboutInfoLabel {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.aboutInfoValue {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.aboutActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/*
  * Placeholder card — what every section renders until its follow-up PR
  * lands. Visually deferred (dashed border + muted text) so a glance is
  * enough to convey "not implemented yet, don't try to interact."

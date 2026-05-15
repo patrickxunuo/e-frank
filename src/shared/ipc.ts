@@ -79,6 +79,8 @@ export type {
 
 export const IPC_CHANNELS = {
   PING: 'app:ping',
+  /** Diagnostic info: app version, build commit, platform, runtime versions (#GH-87 About). */
+  APP_INFO: 'app:info',
   CLAUDE_RUN: 'claude:run',
   CLAUDE_CANCEL: 'claude:cancel',
   CLAUDE_WRITE: 'claude:write',
@@ -167,6 +169,13 @@ export const IPC_CHANNELS = {
   SHELL_OPEN_PATH: 'shell:open-path',
   /** Open a URL in the default browser. Host allow-list enforced in main. */
   SHELL_OPEN_EXTERNAL: 'shell:open-external',
+  /**
+   * Open the per-user run-log directory (`<userData>/runs/`) in the OS
+   * file manager (#GH-87 About). No path argument — main resolves the
+   * fixed path itself, so the blast radius stays smaller than extending
+   * the `SHELL_OPEN_PATH` allow-list.
+   */
+  SHELL_OPEN_LOG_DIRECTORY: 'shell:open-log-directory',
   // -- App config (issue #GH-69 Foundation) --
   APP_CONFIG_GET: 'app-config:get',
   APP_CONFIG_SET: 'app-config:set',
@@ -174,6 +183,25 @@ export const IPC_CHANNELS = {
 
 export type PingRequest = { message: string };
 export type PingResponse = { reply: string; receivedAt: number };
+
+/**
+ * Diagnostic snapshot returned by `app:info` (#GH-87 About section).
+ * Read-only at runtime — version + buildCommit are baked at build time
+ * via Vite `define`; the rest are resolved by main from `os` + `process.versions`.
+ */
+export interface AppInfoResponse {
+  /** From `package.json.version`, baked into the binary at build time. */
+  appVersion: string;
+  /** Short git SHA from `BUILD_COMMIT` env var; `'dev'` for local builds. */
+  buildCommit: string;
+  /** `process.platform` — e.g. `'darwin'`, `'win32'`, `'linux'`. */
+  platform: string;
+  /** `os.release()` — e.g. `'23.6.0'` (Darwin), `'10.0.19045'` (Windows). */
+  release: string;
+  electronVersion: string;
+  nodeVersion: string;
+  chromeVersion: string;
+}
 
 // -- Claude Process Manager IPC payloads --------------------------------------
 //
@@ -712,6 +740,13 @@ export type IpcResult<T> =
 
 export interface IpcApi {
   ping: (req: PingRequest) => Promise<PingResponse>;
+  /**
+   * `app.info()` — diagnostic snapshot for the Settings About section
+   * (#GH-87). Read-only; no params; one round-trip returns everything.
+   */
+  app: {
+    info: () => Promise<IpcResult<AppInfoResponse>>;
+  };
   claude: {
     run: (req: ClaudeRunRequest) => Promise<IpcResult<ClaudeRunResponse>>;
     cancel: (req: ClaudeCancelRequest) => Promise<IpcResult<{ runId: string }>>;
@@ -827,6 +862,13 @@ export interface IpcApi {
      * process allow-list; rejected URLs return `FORBIDDEN_URL`.
      */
     openExternal: (req: ShellOpenExternalRequest) => Promise<IpcResult<null>>;
+    /**
+     * Open the per-user run-log directory (`<userData>/runs/`) in the OS
+     * file manager (#GH-87 About). No path argument — main resolves the
+     * fixed path itself, so a compromised renderer can't pivot this into
+     * "open any path I want".
+     */
+    openLogDirectory: () => Promise<IpcResult<null>>;
   };
   /**
    * Global app config (#GH-69 Foundation). The four content sections of

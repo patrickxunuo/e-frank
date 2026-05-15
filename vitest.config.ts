@@ -9,6 +9,13 @@ export default defineConfig({
       '@shared': resolve(__dirname, 'src/shared'),
     },
   },
+  // Renderer code (`useAppInfo`, etc.) references build-time defines that
+  // the production build injects via `electron.vite.config.ts`. Match them
+  // here so the symbols resolve in unit tests.
+  define: {
+    __APP_VERSION__: JSON.stringify('0.0.0-test'),
+    __BUILD_COMMIT__: JSON.stringify('test-commit'),
+  },
   test: {
     globals: true,
     environment: 'node',
