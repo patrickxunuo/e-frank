@@ -119,6 +119,10 @@ import { installEfAutoFeatureSkill } from './modules/skill-installer.js';
 import { migrateUserData } from './modules/migrate-userdata.js';
 import { scanInstalledSkills } from './modules/skills-scanner.js';
 import {
+  loadInstalledSkillSources,
+  setInstalledSkillSource,
+} from './modules/installed-skill-sources.js';
+import {
   installSkillViaNpx,
   InvalidSkillRefError,
   uninstallSkillViaNpx,
@@ -1976,8 +1980,15 @@ function registerIpcHandlers(): void {
         // directory — the repo root in dev, the install dir in dist:win
         // (where there's no `.claude/skills/`, so the project lane is a
         // graceful no-op).
+        // #GH-93 polish: read our source-tracker so the listing surfaces
+        // `sourceRepo` for skills installed via the dialog. Skills
+        // installed before this tracker existed return `null`.
+        const sourceLookup = await loadInstalledSkillSources(
+          join(app.getPath('userData'), 'installed-skill-sources.json'),
+        );
         const skills = await scanInstalledSkills({
           projectRoot: process.cwd(),
+          sourceLookup,
         });
         return { ok: true, data: { skills } };
       } catch (err) {
@@ -2000,13 +2011,32 @@ function registerIpcHandlers(): void {
           error: { code: 'INVALID_REQUEST', message: 'ref must be a non-empty string' },
         };
       }
-      const req: SkillsInstallRequest = { ref: refRaw };
+      const skillIdRaw =
+        typeof raw === 'object' && raw !== null && 'skillId' in raw
+          ? (raw as { skillId?: unknown }).skillId
+          : undefined;
+      const skillId =
+        typeof skillIdRaw === 'string' && skillIdRaw.trim() !== '' ? skillIdRaw : undefined;
+      const req: SkillsInstallRequest = skillId === undefined
+        ? { ref: refRaw }
+        : { ref: refRaw, skillId };
       try {
         const result = await installSkillViaNpx({
           spawner: new NodeSpawner(),
           ref: req.ref,
           cwd: app.getPath('userData'),
         });
+        // #GH-93 polish: record the source repo on success so
+        // SKILLS_LIST can surface it on the SkillSummary for accurate
+        // dedupe in the FindSkillDialog. Best-effort — a failed marker
+        // write degrades the dialog's dedupe to name-only, not broken.
+        if (result.status === 'installed' && skillId !== undefined) {
+          await setInstalledSkillSource(
+            join(app.getPath('userData'), 'installed-skill-sources.json'),
+            skillId,
+            req.ref,
+          );
+        }
         return { ok: true, data: result };
       } catch (err) {
         if (err instanceof InvalidSkillRefError) {

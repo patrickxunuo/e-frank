@@ -200,7 +200,7 @@ describe('FindSkillDialog (GH-93)', () => {
   it('DIALOG-001: open dialog renders search input + submit button + hint', () => {
     installApi();
     render(
-      <FindSkillDialog open={true} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={true} installedSkills={[]} onClose={() => {}} />,
     );
     expect(screen.getByTestId('find-skill-dialog')).toBeInTheDocument();
     expect(screen.getByTestId('find-skill-search')).toBeInTheDocument();
@@ -211,7 +211,7 @@ describe('FindSkillDialog (GH-93)', () => {
   it('DIALOG-002: closed dialog does not render', () => {
     installApi();
     render(
-      <FindSkillDialog open={false} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={false} installedSkills={[]} onClose={() => {}} />,
     );
     expect(screen.queryByTestId('find-skill-dialog')).not.toBeInTheDocument();
   });
@@ -222,7 +222,7 @@ describe('FindSkillDialog (GH-93)', () => {
       <FindSkillDialog
         open={true}
         initialQuery="ef-feature"
-        installedIds={[]}
+        installedSkills={[]}
         onClose={() => {}}
       />,
     );
@@ -239,7 +239,7 @@ describe('FindSkillDialog (GH-93)', () => {
     });
     const stub = installApi({ searchResults: [r1] });
     render(
-      <FindSkillDialog open={true} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={true} installedSkills={[]} onClose={() => {}} />,
     );
     fireEvent.change(screen.getByTestId('find-skill-search'), {
       target: { value: 'ui' },
@@ -257,7 +257,7 @@ describe('FindSkillDialog (GH-93)', () => {
   it('DIALOG-SUBMIT-002: submit button is disabled when query is empty', async () => {
     const stub = installApi();
     render(
-      <FindSkillDialog open={true} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={true} installedSkills={[]} onClose={() => {}} />,
     );
     const submit = screen.getByTestId('find-skill-submit') as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
@@ -267,14 +267,18 @@ describe('FindSkillDialog (GH-93)', () => {
   });
 
   // -- DIALOG-INSTALLED-001 — installed dedupe --------------------------
-  it('DIALOG-INSTALLED-001: rows whose skillId is in installedIds render Installed badge + disabled button', async () => {
+  it('DIALOG-INSTALLED-001: a legacy install (sourceRepo: null) matches by name only — Installed badge + disabled button', async () => {
+    // sourceRepo: null is the pre-tracker fallback. Anything with the
+    // same skillId locally counts as installed, regardless of the API's
+    // source field. New installs (sourceRepo set) get exact-match
+    // dedupe — exercised by DIALOG-INSTALLED-SOURCE-001..003 below.
     const r1 = row({ skillId: 'ef-feature', name: 'ef-feature' });
     const r2 = row({ skillId: 'frontend-design', name: 'frontend-design' });
     installApi({ searchResults: [r1, r2] });
     render(
       <FindSkillDialog
         open={true}
-        installedIds={['ef-feature']}
+        installedSkills={[{ id: 'ef-feature', sourceRepo: null }]}
         onClose={() => {}}
       />,
     );
@@ -300,6 +304,83 @@ describe('FindSkillDialog (GH-93)', () => {
     expect(freshBtn.disabled).toBe(false);
   });
 
+  // -- DIALOG-INSTALLED-SOURCE-001..003 — source-aware dedupe ---------------
+  it('DIALOG-INSTALLED-SOURCE-001: same skillId AND same sourceRepo → Installed', async () => {
+    const r1 = row({
+      skillId: 'frontend-design',
+      name: 'frontend-design',
+      source: 'vercel-labs/agent-skills',
+    });
+    installApi({ searchResults: [r1] });
+    render(
+      <FindSkillDialog
+        open={true}
+        installedSkills={[{ id: 'frontend-design', sourceRepo: 'vercel-labs/agent-skills' }]}
+        onClose={() => {}}
+      />,
+    );
+    fireEvent.change(screen.getByTestId('find-skill-search'), {
+      target: { value: 'design' },
+    });
+    fireEvent.click(screen.getByTestId('find-skill-submit'));
+    const row1 = await screen.findByTestId('find-skill-row-frontend-design');
+    expect(row1).toHaveTextContent('Installed');
+    const btn = screen.getByTestId('find-skill-install-frontend-design') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  it('DIALOG-INSTALLED-SOURCE-002: same skillId but DIFFERENT sourceRepo → NOT installed', async () => {
+    // The API returns a frontend-design from one source; locally we have
+    // a frontend-design from a different source. The local clobber-risk
+    // is real but that's a separate UX problem — for dedupe purposes,
+    // different source = different skill, so Install stays enabled.
+    const r1 = row({
+      skillId: 'frontend-design',
+      name: 'frontend-design',
+      source: 'unknown-author/some-other-repo',
+    });
+    installApi({ searchResults: [r1] });
+    render(
+      <FindSkillDialog
+        open={true}
+        installedSkills={[{ id: 'frontend-design', sourceRepo: 'vercel-labs/agent-skills' }]}
+        onClose={() => {}}
+      />,
+    );
+    fireEvent.change(screen.getByTestId('find-skill-search'), {
+      target: { value: 'design' },
+    });
+    fireEvent.click(screen.getByTestId('find-skill-submit'));
+    const row1 = await screen.findByTestId('find-skill-row-frontend-design');
+    expect(row1).not.toHaveTextContent(/Installed$/);
+    const btn = screen.getByTestId('find-skill-install-frontend-design') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+  });
+
+  it('DIALOG-INSTALLED-SOURCE-003: skillId NOT in installedSkills → NOT installed (no false positive)', async () => {
+    const r1 = row({
+      skillId: 'unrelated-skill',
+      name: 'unrelated-skill',
+      source: 'vercel-labs/agent-skills',
+    });
+    installApi({ searchResults: [r1] });
+    render(
+      <FindSkillDialog
+        open={true}
+        installedSkills={[{ id: 'frontend-design', sourceRepo: 'vercel-labs/agent-skills' }]}
+        onClose={() => {}}
+      />,
+    );
+    fireEvent.change(screen.getByTestId('find-skill-search'), {
+      target: { value: 'unrelated' },
+    });
+    fireEvent.click(screen.getByTestId('find-skill-submit'));
+    const row1 = await screen.findByTestId('find-skill-row-unrelated-skill');
+    expect(row1).not.toHaveTextContent(/Installed$/);
+    const btn = screen.getByTestId('find-skill-install-unrelated-skill') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+  });
+
   // -- DIALOG-INSTALL-001 — install dispatches IPC + onInstalled callback
   it('DIALOG-INSTALL-001: clicking Install calls skills.install with the source repo (owner/repo), not the skillId', async () => {
     // The skills CLI clones the source repo to install — passing just
@@ -315,7 +396,7 @@ describe('FindSkillDialog (GH-93)', () => {
     render(
       <FindSkillDialog
         open={true}
-        installedIds={[]}
+        installedSkills={[]}
         onClose={() => {}}
         onInstalled={onInstalled}
       />,
@@ -327,7 +408,13 @@ describe('FindSkillDialog (GH-93)', () => {
     await screen.findByTestId('find-skill-install-frontend-design');
     fireEvent.click(screen.getByTestId('find-skill-install-frontend-design'));
     await waitFor(() => {
-      expect(stub.install).toHaveBeenCalledWith({ ref: 'vercel-labs/agent-skills' });
+      // The install dispatches `ref` (owner/repo for `skills add`) plus
+      // `skillId` (folder name) so main can write the source-tracker
+      // entry on success — that's what powers source-aware dedupe.
+      expect(stub.install).toHaveBeenCalledWith({
+        ref: 'vercel-labs/agent-skills',
+        skillId: 'frontend-design',
+      });
     });
     await waitFor(() => {
       expect(onInstalled).toHaveBeenCalled();
@@ -344,7 +431,7 @@ describe('FindSkillDialog (GH-93)', () => {
       },
     });
     render(
-      <FindSkillDialog open={true} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={true} installedSkills={[]} onClose={() => {}} />,
     );
     fireEvent.change(screen.getByTestId('find-skill-search'), {
       target: { value: 'design' },
@@ -360,7 +447,7 @@ describe('FindSkillDialog (GH-93)', () => {
   it('DIALOG-ERROR-001: search HTTP error renders the error banner', async () => {
     installApi({ searchError: { code: 'RATE_LIMITED', message: 'too many requests' } });
     render(
-      <FindSkillDialog open={true} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={true} installedSkills={[]} onClose={() => {}} />,
     );
     fireEvent.change(screen.getByTestId('find-skill-search'), {
       target: { value: 'ui' },
@@ -388,7 +475,7 @@ describe('FindSkillDialog (GH-93)', () => {
       ],
     });
     render(
-      <FindSkillDialog open={true} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={true} installedSkills={[]} onClose={() => {}} />,
     );
     fireEvent.change(screen.getByTestId('find-skill-search'), {
       target: { value: 'ui' },
@@ -410,7 +497,7 @@ describe('FindSkillDialog (GH-93)', () => {
     const onePage = [row({ skillId: 'only-one', name: 'only-one' })];
     const stub = installApi({ searchResults: onePage, searchTotal: 1 });
     render(
-      <FindSkillDialog open={true} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={true} installedSkills={[]} onClose={() => {}} />,
     );
     fireEvent.change(screen.getByTestId('find-skill-search'), {
       target: { value: 'ui' },
@@ -443,7 +530,7 @@ describe('FindSkillDialog (GH-93)', () => {
       ],
     });
     render(
-      <FindSkillDialog open={true} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={true} installedSkills={[]} onClose={() => {}} />,
     );
     fireEvent.change(screen.getByTestId('find-skill-search'), {
       target: { value: 'ui' },
@@ -467,7 +554,7 @@ describe('FindSkillDialog (GH-93)', () => {
   it('DIALOG-EMPTY-001: empty result set shows the empty-result hint', async () => {
     installApi({ searchResults: [], searchTotal: 0 });
     render(
-      <FindSkillDialog open={true} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={true} installedSkills={[]} onClose={() => {}} />,
     );
     fireEvent.change(screen.getByTestId('find-skill-search'), {
       target: { value: 'nonexistent' },
@@ -481,7 +568,7 @@ describe('FindSkillDialog (GH-93)', () => {
     const r1 = row({ skillId: 'cached-one' });
     const stub = installApi({ searchResults: [r1] });
     const { rerender } = render(
-      <FindSkillDialog open={true} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={true} installedSkills={[]} onClose={() => {}} />,
     );
     fireEvent.change(screen.getByTestId('find-skill-search'), {
       target: { value: 'foo' },
@@ -490,10 +577,10 @@ describe('FindSkillDialog (GH-93)', () => {
     await screen.findByTestId('find-skill-row-cached-one');
 
     rerender(
-      <FindSkillDialog open={false} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={false} installedSkills={[]} onClose={() => {}} />,
     );
     rerender(
-      <FindSkillDialog open={true} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={true} installedSkills={[]} onClose={() => {}} />,
     );
     expect(
       screen.queryByTestId('find-skill-row-cached-one'),
@@ -513,7 +600,7 @@ describe('FindSkillDialog (GH-93)', () => {
       },
     });
     render(
-      <FindSkillDialog open={true} installedIds={[]} onClose={() => {}} />,
+      <FindSkillDialog open={true} installedSkills={[]} onClose={() => {}} />,
     );
     fireEvent.change(screen.getByTestId('find-skill-search'), {
       target: { value: 'design' },

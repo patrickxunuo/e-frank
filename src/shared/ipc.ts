@@ -661,6 +661,14 @@ export interface SkillSummary {
   dirPath: string;
   /** Absolute path to the SKILL.md file itself. */
   skillMdPath: string;
+  /**
+   * The `owner/repo` the skill was installed from (#GH-93 polish). Set
+   * by the main-process install handler from the API's `source` field
+   * and stored alongside the install. `null` for skills installed
+   * before this tracker existed — callers should fall back to name-only
+   * matching in that case (backward compat).
+   */
+  sourceRepo: string | null;
 }
 
 export interface SkillsListResponse {
@@ -676,6 +684,15 @@ export interface SkillsInstallRequest {
    * leading `@` opens the door to scoped-npm-package refs the way `npx
    * skills add @org/skill` expects them. */
   ref: string;
+  /**
+   * The expected folder name (#GH-93 polish). When supplied, main writes
+   * a `{skillId: ref}` entry into the source tracker on successful
+   * install so subsequent listings can dedupe by (skillId, sourceRepo)
+   * tuple. Optional so non-dialog install callers (e.g. tests) stay
+   * terse — without it, the install still works but the resulting
+   * skill listing will fall back to name-only dedupe.
+   */
+  skillId?: string;
 }
 
 export interface SkillsInstallResponse {

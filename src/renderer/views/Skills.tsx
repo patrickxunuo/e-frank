@@ -32,7 +32,13 @@ export function Skills(): JSX.Element {
   // is why the previous build felt like the Refresh button did nothing.)
   const refreshing = loading && skills.length > 0;
 
-  const installedIds = useMemo(() => skills.map((s) => s.id), [skills]);
+  // (id, sourceRepo) tuples for the FindSkillDialog's dedupe logic (#GH-93
+  // polish). When `sourceRepo` is null (legacy install — pre-tracker), the
+  // dialog falls back to name-only match for backward compat.
+  const installedSkills = useMemo(
+    () => skills.map((s) => ({ id: s.id, sourceRepo: s.sourceRepo })),
+    [skills],
+  );
 
   const openFindDialog = useCallback((prefill: string): void => {
     setFindPrefill(prefill);
@@ -246,7 +252,7 @@ export function Skills(): JSX.Element {
       <FindSkillDialog
         open={findOpen}
         initialQuery={findPrefill}
-        installedIds={installedIds}
+        installedSkills={installedSkills}
         onClose={() => setFindOpen(false)}
         onInstalled={handleAfterInstall}
       />

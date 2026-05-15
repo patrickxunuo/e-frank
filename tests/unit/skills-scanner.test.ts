@@ -254,4 +254,37 @@ describe('scanInstalledSkills', () => {
     expect(skills).toHaveLength(1);
     expect(skills[0]?.source).toBe('project');
   });
+
+  it('SCAN-009: sourceLookup injects sourceRepo onto matching skills; missing entries get null (#GH-93)', async () => {
+    const fs = makeFs({
+      [join(USER_ROOT, 'tracked')]: { isDirectory: true },
+      [join(USER_ROOT, 'tracked', 'SKILL.md')]: {
+        content: '---\nname: Tracked\n---\n',
+      },
+      [join(USER_ROOT, 'untracked')]: { isDirectory: true },
+      [join(USER_ROOT, 'untracked', 'SKILL.md')]: {
+        content: '---\nname: Untracked\n---\n',
+      },
+    });
+    const skills = await scanInstalledSkills({
+      userRoot: USER_ROOT,
+      fs,
+      sourceLookup: { tracked: 'vercel-labs/agent-skills' },
+    });
+    const tracked = skills.find((s) => s.id === 'tracked');
+    const untracked = skills.find((s) => s.id === 'untracked');
+    expect(tracked?.sourceRepo).toBe('vercel-labs/agent-skills');
+    expect(untracked?.sourceRepo).toBeNull();
+  });
+
+  it('SCAN-010: omitting sourceLookup defaults every sourceRepo to null (pre-tracker baseline)', async () => {
+    const fs = makeFs({
+      [join(USER_ROOT, 'foo')]: { isDirectory: true },
+      [join(USER_ROOT, 'foo', 'SKILL.md')]: {
+        content: '---\nname: Foo\n---\n',
+      },
+    });
+    const skills = await scanInstalledSkills({ userRoot: USER_ROOT, fs });
+    expect(skills[0]?.sourceRepo).toBeNull();
+  });
 });

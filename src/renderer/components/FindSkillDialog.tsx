@@ -15,16 +15,30 @@ import { IconSearch, IconSkills } from './icons';
 import { dispatchToast } from '../state/notifications';
 import styles from './FindSkillDialog.module.css';
 
+/**
+ * One locally-installed skill, with the source-repo we recorded at
+ * install time (#GH-93 polish). `sourceRepo: null` marks a legacy
+ * install (pre-tracker) — the dedupe falls back to name-only match for
+ * those entries so existing installs keep being correctly flagged.
+ */
+export interface InstalledSkillEntry {
+  id: string;
+  sourceRepo: string | null;
+}
+
 export interface FindSkillDialogProps {
   open: boolean;
   /** Pre-fills the search input when the dialog opens. */
   initialQuery?: string;
   /**
-   * Locally-installed skill ids (folder basenames). Used to dedupe API
-   * results: rows whose `skillId` matches one of these render with an
-   * "Installed" badge and a disabled Install button.
+   * Locally-installed skills. Used to dedupe API results: a row is
+   * "Installed" if its `skillId` matches a local id AND either (a) the
+   * recorded sourceRepo matches the API's `source`, or (b) the local
+   * entry has no recorded sourceRepo (legacy install, backward compat).
+   * Different `source` with same name = NOT installed — the user can
+   * still try, even though the underlying CLI will clobber on collision.
    */
-  installedIds: ReadonlyArray<string>;
+  installedSkills: ReadonlyArray<InstalledSkillEntry>;
   onClose: () => void;
   /** Called after a successful install so the parent can refresh the list. */
   onInstalled?: () => void;
@@ -69,7 +83,7 @@ const EMPTY_STATE: SearchState = {
 export function FindSkillDialog({
   open,
   initialQuery = '',
-  installedIds,
+  installedSkills,
   onClose,
   onInstalled,
 }: FindSkillDialogProps): JSX.Element {
@@ -95,7 +109,25 @@ export function FindSkillDialog({
     requestSeqRef.current = 0;
   }, [open, initialQuery]);
 
-  const installedSet = useMemo(() => new Set(installedIds), [installedIds]);
+  // Source-aware dedupe (#GH-93 polish). Map from skill folder name to
+  // the source repo we recorded at install time. `undefined` = not
+  // installed locally. `null` = installed but recorded before the
+  // tracker existed (legacy) — falls back to name-only match.
+  const installedSourceById = useMemo(() => {
+    const m = new Map<string, string | null>();
+    for (const entry of installedSkills) m.set(entry.id, entry.sourceRepo);
+    return m;
+  }, [installedSkills]);
+  const isRowInstalled = useCallback(
+    (row: ApiSkill): boolean => {
+      if (!installedSourceById.has(row.skillId)) return false;
+      const recordedSource = installedSourceById.get(row.skillId);
+      // Legacy install with no source recorded — name-only fallback.
+      if (recordedSource === null || recordedSource === undefined) return true;
+      return recordedSource === row.source;
+    },
+    [installedSourceById],
+  );
 
   /**
    * Run the skills.sh search. When `appendTo` is non-null, the new rows
@@ -253,7 +285,14 @@ export function FindSkillDialog({
         // the bare `skillId`. Without this, `skills add <skillId>` tries to
         // clone a non-existent top-level repo and fails with
         // "fatal: repository '<skillId>' does not exist".
-        const result = await window.api.skills.install({ ref: row.source });
+        //
+        // `skillId` is passed alongside so main can record the
+        // (skillId, source) pair into the source tracker on success
+        // (#GH-93 polish) — that's what powers source-aware dedupe.
+        const result = await window.api.skills.install({
+          ref: row.source,
+          skillId: row.skillId,
+        });
         if (!result.ok) {
           setInstallError(result.error.message || result.error.code || 'Install failed');
           return;
@@ -353,7 +392,7 @@ export function FindSkillDialog({
           {hasResults && (
             <ul className={styles.resultsList} data-testid="find-skill-results">
               {state.results.map((row) => {
-                const isInstalled = installedSet.has(row.skillId);
+                const isInstalled = isRowInstalled(row);
                 const isInstalling = installingId === row.skillId;
                 return (
                   <li

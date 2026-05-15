@@ -72,6 +72,7 @@ const userSkill: SkillSummary = {
   source: 'user',
   dirPath: 'C:\\Users\\me\\.claude\\skills\\ef-feature',
   skillMdPath: 'C:\\Users\\me\\.claude\\skills\\ef-feature\\SKILL.md',
+  sourceRepo: null,
 };
 
 const projectSkill: SkillSummary = {
@@ -81,6 +82,7 @@ const projectSkill: SkillSummary = {
   source: 'project',
   dirPath: 'D:\\e-frank\\.claude\\skills\\frontend-design',
   skillMdPath: 'D:\\e-frank\\.claude\\skills\\frontend-design\\SKILL.md',
+  sourceRepo: null,
 };
 
 function installApi(opts?: {
