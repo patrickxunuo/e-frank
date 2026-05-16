@@ -72,6 +72,8 @@ When running inside e-frank, the runner pauses, surfaces an ApprovalPanel, and w
 
 This is the **only sanctioned interactive checkpoint**. Don't invent free-text "Shall I proceed?" prompts elsewhere — within e-frank they cause subtle UX problems (Claude's stdin-silence timeout fires after 3 seconds of no input, before the user can navigate to the textarea).
 
+**Prose-question contract (#GH-88).** If at any point you would naturally ask the user a question — for ANY reason, including resolving ambiguity in the ticket, choosing between approaches, confirming a non-obvious decision, or saying "I'm not sure which X you want" — you MUST emit `<<<EF_APPROVAL_REQUEST>>>` with the question as the `plan` field and the choices as the `options` field. **Asking in prose is forbidden** and will trip the runner's `UnstructuredQuestionError` detector: the run terminates `failed` with the question text surfaced in the run log, instead of silently completing as `done` with no changes. When the ticket is too ambiguous to proceed without input, that IS what the approval marker is for — use it rather than streaming an unstructured question.
+
 ### Failure handling
 
 On any hard error (malformed `$ARGUMENTS`, ticket fetch failed, working tree dirty, etc.), **print a one-line error and exit non-zero**. Don't ask the developer to fix it interactively — the runner surfaces the error in the UI; the developer fixes it and re-runs.

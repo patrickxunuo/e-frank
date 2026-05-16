@@ -66,6 +66,7 @@ import type { JiraUpdater } from './jira-updater.js';
 import type { RunStore } from './run-store.js';
 import type { Ticket } from '../../shared/schema/ticket.js';
 import type { WorktreeManager } from './worktree-manager.js';
+import { detectProseQuestion } from './prose-question-detector.js';
 
 const TICKET_KEY_REGEX = /^[A-Z][A-Z0-9_]*-\d+$/;
 
@@ -293,6 +294,26 @@ class ApprovalAbandonedError extends Error {
         'see GH-73 follow-up for the approval-flow re-architecture.',
     );
     this.name = 'ApprovalAbandonedError';
+  }
+}
+
+/**
+ * Sibling to ApprovalAbandonedError (#GH-88). Thrown when Claude exits
+ * cleanly without an EF_APPROVAL_REQUEST marker but its trailing
+ * output looks like an unstructured question — the v0 heuristic catch
+ * for "I see two ways to do this, which would you prefer?" prose. The
+ * proper structural fix (PTY-based interactive Claude) lives in #GH-76.
+ */
+class UnstructuredQuestionError extends Error {
+  constructor(excerpt: string, trigger: string) {
+    super(
+      'Claude ended the run with what looks like an unstructured question ' +
+        '(no `<<<EF_APPROVAL_REQUEST>>>` marker). Re-run with clearer ticket ' +
+        `context, or check the run log for the question text. Trigger: ${trigger}.\n` +
+        '--- Excerpt (last lines of run output) ---\n' +
+        excerpt,
+    );
+    this.name = 'UnstructuredQuestionError';
   }
 }
 
@@ -1022,6 +1043,24 @@ export class WorkflowRunner extends EventEmitter {
         const err = new ApprovalAbandonedError();
         deferred.reject(err);
         throw err;
+      }
+
+      // GH-88: sibling failure mode — Claude exited cleanly but its
+      // trailing output looks like a prose question that was never
+      // emitted as a structured EF_APPROVAL_REQUEST marker. The GH-73
+      // guard above can't catch this case (approvalDeferred is null
+      // since no marker arrived). Heuristic detector scans the last
+      // ~10 lines of the buffer and throws if it sniffs a question, so
+      // the run lands in `failed` with a clear error instead of a
+      // silent `done`. False-positive escape: if the run already
+      // produced a PR (ctx.run.prUrl is set — the `creatingPr` marker
+      // arrived earlier in the run and bumped the field), trailing
+      // prose can't be a blocker; suppress.
+      const prAlreadyCreated =
+        ctx.run.prUrl !== null && ctx.run.prUrl !== undefined && ctx.run.prUrl !== '';
+      const probe = detectProseQuestion(ctx.outputBuffer, { prAlreadyCreated });
+      if (probe.match) {
+        throw new UnstructuredQuestionError(probe.excerpt, probe.trigger);
       }
     } catch (err) {
       if (ctx.detachOutputListener !== null) {
