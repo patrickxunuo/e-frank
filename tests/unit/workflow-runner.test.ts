@@ -2436,4 +2436,93 @@ describe('WorkflowRunner', () => {
       expect(final.error).toMatch(/timeout/i);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // WFR-PROSE — prose-question detector (#GH-88)
+  // -------------------------------------------------------------------------
+  describe('WFR-PROSE (#GH-88) — unstructured prose-question detector', () => {
+    it('WFR-PROSE-001: clean exit + prose question in buffer → state=failed with "question" in error', async () => {
+      const h = await buildHarness();
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+
+      await waitForState(h, 'running');
+      // Claude streamed an unstructured "I see two ways" prose question
+      // instead of emitting a structured EF_APPROVAL_REQUEST marker. Pre-
+      // fix: pipeline marched to `done` with no commits (silent fail).
+      // Post-fix: detector trips at exit, run → `failed`.
+      h.fakeClaude.emitOutput(
+        'Read through the ticket and the codebase.\n' +
+          'I see two ways to handle the validation:\n' +
+          'A) Strict RFC 5322 match\n' +
+          'B) Loose @ + dot pattern\n' +
+          'Which would you like?\n',
+      );
+      h.fakeClaude.emitExit(0, 'completed');
+
+      const final = await waitForFinal(h);
+      expect(final.state).toBe('failed');
+      expect(final.error ?? '').toMatch(/question/i);
+    });
+
+    it('WFR-PROSE-002: clean exit + creatingPr marker + trailing question text → state=done (escape hatch)', async () => {
+      // The real false-positive shape: Claude finished the workflow,
+      // emitted creatingPr (so ctx.run.prUrl gets set + the marker is
+      // stripped from outputBuffer), then printed some chatter that
+      // happens to LOOK like a question ("would you like me to also
+      // tag the release?"). The detector must NOT fire — prUrl gives
+      // us the explicit "PR already created, ignore trailing chatter"
+      // signal.
+      const h = await buildHarness();
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+
+      await waitForState(h, 'running');
+      h.fakeClaude.emitOutput(
+        'Committed and pushed.\n' +
+          '<<<EF_PHASE>>>{"phase":"creatingPr","prUrl":"https://github.com/x/y/pull/1"}<<<END_EF_PHASE>>>\n' +
+          'PR opened.\n' +
+          'Would you like me to also tag the release?\n',
+      );
+      h.fakeClaude.emitExit(0, 'completed');
+
+      const final = await waitForFinal(h);
+      expect(final.state).toBe('done');
+      expect(final.prUrl).toBe('https://github.com/x/y/pull/1');
+    });
+
+    it('WFR-PROSE-003: clean exit + normal narrative WITHOUT a question → state=done (broad regression guard)', async () => {
+      const h = await buildHarness();
+      const start = await h.runner.start({
+        projectId: 'p-1',
+        ticketKey: VALID_TICKET,
+      });
+      expect(start.ok).toBe(true);
+      if (!start.ok) return;
+
+      await waitForState(h, 'running');
+      // No `?` anywhere, no lettered/numbered options — pure prose.
+      h.fakeClaude.emitOutput(
+        'Reviewed the candidate solutions and picked option b.\n' +
+          '<<<EF_PHASE>>>{"phase":"committing"}<<<END_EF_PHASE>>>\n' +
+          'Committed the change.\n' +
+          '<<<EF_PHASE>>>{"phase":"pushing"}<<<END_EF_PHASE>>>\n' +
+          'Pushed.\n' +
+          '<<<EF_PHASE>>>{"phase":"creatingPr","prUrl":"https://github.com/x/y/pull/2"}<<<END_EF_PHASE>>>\n' +
+          'Done.\n',
+      );
+      h.fakeClaude.emitExit(0, 'completed');
+
+      const final = await waitForFinal(h);
+      expect(final.state).toBe('done');
+    });
+  });
 });
